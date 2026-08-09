@@ -1,0 +1,58 @@
+[tools]
+# Node 20+ is supported by the app; use the current LTS line locally.
+node = "22"
+
+[tasks.bootstrap]
+description = "Install JavaScript dependencies"
+run = "npm install"
+
+[tasks.dev]
+description = "Start the mock server with isolated local state"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PI_WEB_HOME="${PI_WEB_HOME:-$PWD/.mise/state/mock}"
+exec npm run dev
+'''
+
+[tasks.start]
+description = "Start the real server against Pi"
+run = "npm start"
+
+[tasks.test]
+description = "Run the test suite"
+run = "npm test"
+
+[tasks.check]
+description = "Run tests and check for whitespace errors"
+depends = ["test"]
+run = "git diff --check"
+
+[tasks."dev-project"]
+description = "Register this checkout as a project in a running local server"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+port="${PORT:-3141}"
+base="${PI_WEB_URL:-http://127.0.0.1:$port}"
+payload="$(node -e 'process.stdout.write(JSON.stringify({ repoPath: process.cwd() }))')"
+
+curl -fsS -X POST "$base/api/projects" \
+  -H 'content-type: application/json' \
+  --data "$payload"
+printf '\\n'
+'''
+
+[tasks."verify-real"]
+description = "Run the credentialed real-Pi smoke test"
+run = "npm run verify:real"
+
+[tasks.reset]
+description = "Reset the isolated state used by the dev task"
+run = "rm -rf -- .mise/state/mock"
+
+[tasks."preview-design"]
+description = "Open the latest standalone design prototype (macOS)"
+run = "open design/revision-2/design/pi-app-standalone.html"

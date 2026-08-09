@@ -4,6 +4,7 @@ node_modules/
 .env.*
 !.env.example
 *.log
+.mise/
 
 # Local pi-web-ui state
 .pi-web-ui/

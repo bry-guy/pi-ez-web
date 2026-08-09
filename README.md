@@ -47,4 +47,21 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
 
 Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change the application state directory. Pi owns session transcripts; pi-ez-web stores only its small configuration and workspace bindings.
 
+## Mise tasks
+
+[`mise.toml`](mise.toml) requires Node 22 and wraps the common local commands:
+
+```sh
+mise install       # install the declared Node version
+mise bootstrap     # install npm dependencies
+mise dev           # mock server; isolated state under .mise/state/mock
+mise test          # run tests
+mise check         # tests plus whitespace validation
+mise start         # real server
+mise verify-real   # credentialed real-Pi smoke test
+mise reset         # clear mock state
+```
+
+With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults.
+
 See [PLAN.md](PLAN.md) for the implementation plan and [design/](design/) for both design handoffs.
