@@ -11,11 +11,25 @@ test("pi SDK exposes the surface the real supervisor uses", async () => {
   for (const m of ["create", "open", "list", "forkFrom", "inMemory"]) {
     assert.equal(typeof SM[m], "function", `SessionManager.${m}`);
   }
+  const smProto = SM.prototype;
+  for (const m of ["getCwd", "getEntries", "getBranch", "getEntry", "appendCustomEntry", "getLeafId", "resetLeaf", "_rewriteFile"]) {
+    assert.equal(typeof smProto[m], "function", `SessionManager.${m}`);
+  }
   const proto = sdk.AgentSession.prototype;
   for (const m of ["prompt", "steer", "followUp", "abort", "subscribe", "setModel", "setSessionName", "dispose", "navigateTree"]) {
     assert.equal(typeof proto[m], "function", `AgentSession.${m}`);
   }
-  for (const g of ["sessionId", "sessionFile", "messages", "isStreaming", "isIdle", "sessionName", "model"]) {
+  for (const g of ["sessionId", "sessionFile", "messages", "isStreaming", "isIdle", "sessionName", "model", "modelRuntime"]) {
     assert.ok(Object.getOwnPropertyDescriptor(proto, g)?.get, `AgentSession getter ${g}`);
+  }
+  const { session: surfaceSession } = await sdk.createAgentSession({
+    cwd: process.cwd(), sessionManager: SM.inMemory(process.cwd()), noTools: "all",
+  });
+  assert.ok(surfaceSession.sessionManager);
+  surfaceSession.dispose();
+  assert.equal(typeof sdk.ModelRuntime, "function");
+  assert.equal(typeof sdk.ModelRuntime.create, "function");
+  for (const m of ["getAvailableSnapshot", "getAvailable", "getModel", "getProviders"]) {
+    assert.equal(typeof sdk.ModelRuntime.prototype[m], "function", `ModelRuntime.${m}`);
   }
 });

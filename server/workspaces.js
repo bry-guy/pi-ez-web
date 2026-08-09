@@ -99,30 +99,49 @@ export function removeWorkspace({ repoPath, workspacePath, force = false }) {
   git(repoPath, ...args, workspacePath.replace(/\/$/, ""));
 }
 
-// Fork: new branch + worktree from the parent workspace's HEAD, carrying the
-// parent's dirty state (tracked modifications + untracked files) via stash
-// transfer. Parent ends up exactly as it started.
+// Fork: new branch + worktree from the parent workspace's HEAD. Dirty state
+// may be transferred from an app-owned worktree, but the user's checkout is
+// sacred and is rejected before any stash mutation.
 export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches }) {
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
   let n = 1, branch;
   do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));
 
   const dirty = isDirty(parentWorkspace);
-  let stashed = false;
+  const isCheckout = path.resolve(parentWorkspace) === path.resolve(repoPath);
+  if (dirty && isCheckout) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
+
+  let stashRef = null;
   if (dirty) {
-    git(parentWorkspace, "stash", "push", "-u", "-m", "pi-web-ui fork transfer");
-    stashed = true;
+    const marker = `pi-web-ui fork transfer ${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    git(parentWorkspace, "stash", "push", "-u", "-m", marker);
+    stashRef = git(parentWorkspace, "rev-parse", "refs/stash").trim();
   }
   try {
     const parentHead = git(parentWorkspace, "rev-parse", "HEAD").trim();
     const wt = worktreePathFor(worktreeRoot, projectId, branch);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     git(repoPath, "worktree", "add", "-b", branch, wt, parentHead);
-    if (stashed) git(wt, "stash", "apply");
+    if (stashRef) git(wt, "stash", "apply", stashRef);
     return { branch, workspacePath: wt };
   } finally {
-    if (stashed) git(parentWorkspace, "stash", "pop");
+    if (stashRef) {
+      // Restore the exact stash object to the parent, then drop only that
+      // object. This avoids assuming another stash has not been created.
+      try { git(parentWorkspace, "stash", "apply", stashRef); }
+      finally { try { git(parentWorkspace, "stash", "drop", stashRef); } catch { /* surface via diagnostics */ } }
+    }
   }
+}
+
+// Startup diagnostics can surface app-owned transfer stashes left behind by a
+// crash. The caller decides where to present the warning.
+export function piWebStashes(repoPath) {
+  try {
+    return git(repoPath, "stash", "list", "--format=%H%x09%s")
+      .split("\n").map(s => s.trim()).filter(Boolean)
+      .filter(s => s.includes("\tpi-web-ui fork transfer "));
+  } catch { return []; }
 }
 
 // Repo picker: shallow scan for git repos under a root dir.

@@ -89,6 +89,20 @@ test("clean-parent fork works (no stash cycle)", () => {
   assert.ok(fs.existsSync(path.join(workspacePath, "a.txt")));
 });
 
+test("dirty checkout fork is refused before stash mutation", () => {
+  const marker = path.join(repo, "checkout-local.txt");
+  fs.writeFileSync(marker, "local\n");
+  assert.throws(
+    () => ws.forkWorkspace({
+      repoPath: repo, worktreeRoot: wtRoot, projectId: "p1",
+      parentWorkspace: repo, parentBranch: "main", existingBranches: ws.listBranches(repo),
+    }),
+    err => err?.code === "checkout_dirty",
+  );
+  assert.equal(fs.readFileSync(marker, "utf8"), "local\n");
+  fs.rmSync(marker);
+});
+
 test("removeWorkspace refuses dirty, force removes", () => {
   const dirtyWt = ws.listWorktrees(repo)["branch/x-1"];
   assert.throws(() => ws.removeWorkspace({ repoPath: repo, workspacePath: dirtyWt }), /workspace_dirty/);

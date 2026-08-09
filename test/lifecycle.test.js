@@ -171,6 +171,15 @@ test("merge from a checkout session is nothing_to_merge", async () => {
   await post(`/api/sessions/${id}/close`);
 });
 
+test("closing a parent re-attaches its child at the visible tree position", async () => {
+  const parent = await checkoutSession();
+  const fork = await (await post(`/api/sessions/${parent}/fork`, {})).json();
+  await post(`/api/sessions/${parent}/close`);
+  const p = await proj();
+  assert.ok(p.sessions.some(node => node.id === fork.id), JSON.stringify(p.sessions));
+  await post(`/api/sessions/${fork.id}/close`);
+});
+
 test("merge sweep still reaps CLI-side merges (merged+clean+idle)", async () => {
   const id = await checkoutSession();
   await post(`/api/sessions/${id}/branch`, { branch: "feat/cli-merged", create: true });

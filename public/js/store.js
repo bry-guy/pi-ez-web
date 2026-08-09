@@ -22,15 +22,21 @@ export const store = {
     repoQuery: "",
     newBranch: "",
     draft: "",
-    model: null,
+    model: null,             // active session model reference
+    defaultModel: null,      // setting used for new sessions
+    models: [],              // registry-backed { id, provider, label }
     animIdx: 0,
+    error: null,             // transient composer/action error
+    fatalError: null,        // unrecoverable wire-contract error
+    fileError: null,
     // server data
     projects: [],
     chats: [],
     mode: "real",
     repos: [],
     files: [],
-    transcripts: {},         // sessionId -> { records, streaming }
+    filesContext: null,
+    transcripts: {},         // sessionId -> { records, streaming, seq }
     busy: {},                // sessionId -> bySessionId (workspace_busy)
   },
   listeners: new Set(),
@@ -40,6 +46,14 @@ export const store = {
   },
   notify(what) {
     for (const fn of this.listeners) fn(what);
+  },
+  setError(message, ms = 5000) {
+    const token = Symbol("error");
+    this._errorToken = token;
+    this.set({ error: message });
+    if (ms > 0) setTimeout(() => {
+      if (this._errorToken === token) this.set({ error: null });
+    }, ms);
   },
   subscribe(fn) {
     this.listeners.add(fn);

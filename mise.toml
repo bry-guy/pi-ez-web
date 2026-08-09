@@ -24,6 +24,10 @@ run = "npm start"
 description = "Run the test suite"
 run = "npm test"
 
+[tasks."test:dom"]
+description = "Run the DOM interaction gate"
+run = "npm run test:dom"
+
 [tasks.check]
 description = "Run tests and check for whitespace errors"
 depends = ["test"]
@@ -47,6 +51,10 @@ printf '\\n'
 
 [tasks."verify-real"]
 description = "Run the credentialed real-Pi smoke test"
+run = "npm run verify:real"
+
+[tasks.verify]
+description = "Run the credentialed real-Pi acceptance gate"
 run = "npm run verify:real"
 
 [tasks.reset]

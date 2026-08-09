@@ -8,7 +8,7 @@ import { hub } from "./events.js";
 import { buildApi } from "./routes.js";
 import { startSweeper } from "./lifecycle.js";
 import { createSupervisor } from "./supervisor/index.js";
-import { prune } from "./workspaces.js";
+import { piWebStashes, prune } from "./workspaces.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,7 +23,11 @@ export function createApp() {
 
 export function startServer(port) {
   const cfg = loadConfig();
-  for (const p of cfg.projects) prune(p.repoPath); // startup cleanup, no daemon
+  for (const p of cfg.projects) {
+    prune(p.repoPath); // startup cleanup, no daemon
+    const stranded = piWebStashes(p.repoPath);
+    if (stranded.length) console.warn(`pi-web-ui: stranded fork stash(es) in ${p.repoPath}: ${stranded.join(", ")}`);
+  }
   const { app, sup } = createApp();
   const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg.port) });
   startSweeper(sup, hub);

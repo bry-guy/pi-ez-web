@@ -6,19 +6,27 @@ import { esc, mobile, selectSession } from "./shell.js";
 class PiProjects extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
-    this.addEventListener("click", e => {
-      const card = e.target.closest("[data-project]");
-      if (card) {
-        const p = store.state.projects.find(x => x.id === card.dataset.project);
-        store.state.openTree[p.id] = true;
-        if (p.sessions[0]) selectSession(p.id, p.sessions[0].id);
-        return;
+    this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-project]")) {
+        e.preventDefault(); e.target.closest("[data-project]").click();
       }
-      if (e.target.closest("[data-act='repo-picker']")) store.set({ repoPickerOpen: true });
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
+
+  onClick(e) {
+    const card = e.target.closest("[data-project]");
+    if (card) {
+      const p = store.state.projects.find(x => x.id === card.dataset.project);
+      if (!p) return;
+      store.state.openTree[p.id] = true;
+      if (p.sessions[0]) selectSession(p.id, p.sessions[0].id);
+      return;
+    }
+    if (e.target.closest("[data-act='repo-picker']")) store.set({ repoPickerOpen: true });
+  }
 
   count(nodes) { return nodes.reduce((n, x) => n + 1 + this.count(x.children), 0); }
   branches(nodes, set = new Set()) {
@@ -28,7 +36,7 @@ class PiProjects extends HTMLElement {
 
   render() {
     const cards = store.state.projects.map(p => `
-      <div class="card" data-project="${esc(p.id)}">
+      <div class="card" role="button" tabindex="0" data-project="${esc(p.id)}">
         <div class="card-top">
           <div class="card-initial">${esc(p.name.slice(0, 2))}</div>
           <div class="card-mid">
@@ -61,23 +69,30 @@ class PiSettings extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => {
-      if (e.target.closest("[data-act='cycle-model']")) {
-        const list = ["claude-sonnet-4-6", "gpt-5.2-codex", "gemini-3-pro", "kimi-k2-thinking"];
-        const next = list[(list.indexOf(store.state.model) + 1) % list.length];
-        store.set({ model: next });
-        fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultModel: next }) });
-      }
+      if (e.target.closest("[data-act='cycle-model']")) this.cycleModel();
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
+  async cycleModel() {
+    const list = store.state.models;
+    if (!list.length) { store.setError("No models are available."); return; }
+    const current = store.state.defaultModel;
+    const index = list.findIndex(model => model.id === current);
+    const next = list[index < 0 ? 0 : (index + 1) % list.length];
+    const previous = current;
+    store.set({ defaultModel: next.id });
+    try { await api.settings(next.id); }
+    catch (err) { store.set({ defaultModel: previous }); store.setError(err.error === "model_unavailable" ? "That model is unavailable." : String(err.error || err)); }
+  }
   render() {
+    const model = store.state.models.find(m => m.id === store.state.defaultModel);
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
       <div class="settings-card">
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Model</div><div class="sr-sub">Used for new sessions.</div></div>
-          <button class="settings-chip" data-act="cycle-model">${esc(store.state.model || "default")}</button>
+          <button class="settings-chip" data-act="cycle-model">${esc(model?.label || store.state.defaultModel || "default")}</button>
         </div>
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Agent endpoint</div><div class="sr-sub">Pi SDK in-process, streaming over SSE.</div></div>
@@ -101,6 +116,11 @@ class PiFiles extends HTMLElement {
       const row = e.target.closest("[data-dir]");
       if (row) { store.state.openDirs[row.dataset.dir] = !store.state.openDirs[row.dataset.dir]; this.render(); }
     });
+    this.addEventListener("keydown", e => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-dir]")) {
+        e.preventDefault(); e.target.closest("[data-dir]").click();
+      }
+    });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
@@ -111,7 +131,7 @@ class PiFiles extends HTMLElement {
       const path = prefix + "/" + n.n;
       const dir = !!n.c;
       const open = !!store.state.openDirs[path];
-      out.push(`<div class="file-row ${dir ? "dir" : ""}" ${dir ? `data-dir="${esc(path)}"` : ""} style="margin-left:${depth * 13}px">
+      out.push(`<div class="file-row ${dir ? "dir" : ""}" ${dir ? `role="button" tabindex="0" aria-expanded="${open}" data-dir="${esc(path)}"` : ""} style="margin-left:${depth * 13}px">
         <span class="fcaret">${dir ? (open ? "▾" : "▸") : "·"}</span>
         <span class="fname">${esc(n.n)}</span>
       </div>`);
@@ -128,6 +148,7 @@ class PiFiles extends HTMLElement {
         <div class="sec-label">Files</div>
         <button class="ghost-btn" data-act="close" title="Collapse">×</button>
       </div>
+      ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
       <div class="files-scroll">${out.join("")}</div>
     </aside>`;
   }
@@ -137,30 +158,37 @@ class PiFiles extends HTMLElement {
 class PiRepoPicker extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
-    this.addEventListener("click", async e => {
-      if (e.target === this.querySelector(".scrim") || e.target.closest("[data-act='close']")) {
-        store.set({ repoPickerOpen: false }); return;
-      }
-      const row = e.target.closest("[data-repo]");
-      if (row) {
-        try {
-          const { id, sessionId } = await api.newProject(row.dataset.repo);
-          store.set({ repoPickerOpen: false });
-          await refreshState();
-          store.state.openTree[id] = true;
-          selectSession(id, sessionId);
-        } catch (err) {
-          this.errorMsg = err.error === "project_exists" ? "Already connected." : err.error === "not_a_git_repo" ? "Not a git repository." : String(err.error || err);
-          this.render();
-        }
+    this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-repo]")) {
+        e.preventDefault(); e.target.closest("[data-repo]").click();
       }
     });
     this.addEventListener("input", e => {
-      if (e.target.matches(".modal-filter")) { store.state.repoQuery = e.target.value; this.render(); }
+      if (e.target.matches(".modal-filter")) { store.state.repoQuery = e.target.value; this.renderResults(); }
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
+
+  async onClick(e) {
+    const scrim = this.querySelector(".scrim");
+    if (e.target === scrim || e.target.closest("[data-act='close']")) {
+      store.set({ repoPickerOpen: false }); return;
+    }
+    const row = e.target.closest("[data-repo]");
+    if (!row) return;
+    try {
+      const { id, sessionId } = await api.newProject(row.dataset.repo);
+      store.set({ repoPickerOpen: false });
+      await refreshState();
+      store.state.openTree[id] = true;
+      selectSession(id, sessionId);
+    } catch (err) {
+      this.errorMsg = err.error === "project_exists" ? "Already connected." : err.error === "not_a_git_repo" ? "Not a git repository." : String(err.error || err);
+      this.renderResults();
+    }
+  }
 
   async load() {
     if (this.loaded) return;
@@ -168,42 +196,51 @@ class PiRepoPicker extends HTMLElement {
     try {
       const { repos } = await api.repos();
       store.set({ repos });
-    } catch { store.set({ repos: [] }); }
+    } catch (err) {
+      this.errorMsg = `Could not load repositories: ${err.error || err.message || err}`;
+      store.set({ repos: [] });
+    }
   }
 
   render() {
     if (!store.state.repoPickerOpen) { this.innerHTML = ""; this.loaded = false; this.errorMsg = null; return; }
+    if (!this.querySelector(".scrim")) {
+      this.innerHTML = `<div class="scrim">
+        <div class="modal">
+          <div class="modal-head">
+            <div class="modal-title-row">
+              <div class="modal-title">Select a repository</div>
+              <button class="ghost-btn" data-act="close" style="font-size:15px">×</button>
+            </div>
+            <div class="modal-filter-row">
+              <span class="account-chip">local ▾</span>
+              <input class="modal-filter" placeholder="Find a repository" aria-label="Find a repository">
+            </div>
+          </div>
+          <div class="modal-list"></div>
+        </div>
+      </div>`;
+    }
+    const inp = this.querySelector(".modal-filter");
+    if (inp && inp.value !== store.state.repoQuery && document.activeElement !== inp) inp.value = store.state.repoQuery;
+    this.renderResults();
     this.load();
+  }
+
+  renderResults() {
+    const list = this.querySelector(".modal-list");
+    if (!list) return;
     const q = store.state.repoQuery.trim().toLowerCase();
     const results = store.state.repos.filter(r => !q || r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q));
     const rows = results.map(r => `
-      <div class="repo-row" data-repo="${esc(r.path)}">
+      <div class="repo-row" role="button" tabindex="0" data-repo="${esc(r.path)}">
         <div class="rr-main">
           <div class="rr-name">${esc(r.name)}</div>
           <div class="rr-meta"><span>${esc(r.path)}</span></div>
         </div>
         <span class="rr-vis">local</span>
       </div>`).join("");
-    this.innerHTML = `<div class="scrim">
-      <div class="modal" onclick="event.stopPropagation()">
-        <div class="modal-head">
-          <div class="modal-title-row">
-            <div class="modal-title">Select a repository</div>
-            <button class="ghost-btn" data-act="close" style="font-size:15px">×</button>
-          </div>
-          <div class="modal-filter-row">
-            <span class="account-chip">local ▾</span>
-            <input class="modal-filter" placeholder="Find a repository" value="${esc(store.state.repoQuery)}">
-          </div>
-        </div>
-        <div class="modal-list">
-          ${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}
-          ${rows || `<div class="modal-empty">No repositories match.</div>`}
-        </div>
-      </div>
-    </div>`;
-    const inp = this.querySelector(".modal-filter");
-    if (document.activeElement?.className === "modal-filter") { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    list.innerHTML = `${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${rows || `<div class="modal-empty">No repositories match.</div>`}`;
   }
 }
 
@@ -212,7 +249,8 @@ class PiConfirm extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => {
-      if (e.target.closest("[data-act='cancel']") || e.target.classList.contains("confirm-scrim")) {
+      const scrim = this.querySelector(".confirm-scrim");
+      if (e.target === scrim || e.target.closest("[data-act='cancel']")) {
         store.set({ confirm: null });
       } else if (e.target.closest("[data-act='go']")) {
         this.go();
@@ -229,7 +267,6 @@ class PiConfirm extends HTMLElement {
       if (c.type === "merge") await api.merge(c.id);
       else await api.close(c.id);
       store.set({ confirm: null });
-      // state/selection updates arrive via session_merged / session_closed events
     } catch (err) {
       const msgs = {
         merge_conflict: "merge conflict — the checkout was restored; resolve by hand or keep working",
@@ -255,7 +292,7 @@ class PiConfirm extends HTMLElement {
       ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
     const cta = isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
     this.innerHTML = `<div class="confirm-scrim">
-      <div class="confirm-modal" onclick="event.stopPropagation()">
+      <div class="confirm-modal">
         <div class="confirm-title">${title}</div>
         <div class="confirm-body">${body}</div>
         ${warn ? `<div class="confirm-warn">${warn}</div>` : ""}
@@ -288,31 +325,68 @@ class PiApp extends HTMLElement {
         <div class="drawer-scrim hidden"></div>
         <pi-repo-picker></pi-repo-picker>
         <pi-confirm></pi-confirm>
+        <div class="reload-prompt hidden" data-reload-prompt>
+          <div class="reload-card"><div class="screen-title">Reload required</div><div class="proj-sub" data-reload-message></div><button class="primary-btn" data-act="reload">Reload</button></div>
+        </div>
       </div></div>`;
     this.scrim = this.querySelector(".drawer-scrim");
     this.scrim.addEventListener("click", () => store.set({ drawerOpen: false }));
-    this.addEventListener("toggle-files", async () => {
+    this.addEventListener("click", e => {
+      if (e.target.closest("[data-act='reload']")) location.reload();
+    });
+    this.addEventListener("toggle-files", () => {
       const open = !store.state.filesOpen;
-      store.set({ filesOpen: open });
-      if (open && store.state.projectId) {
-        const branch = store.findSession(store.state.sessionId)?.branch;
-        try {
-          const { tree } = await api.files(store.state.projectId, branch);
-          store.state.files = tree;
-          store.notify("files");
-        } catch { /* panel stays empty */ }
-      }
+      store.set({ filesOpen: open, fileError: null });
+      if (!open) return;
+      this.ensureFiles(true);
     });
     this.unsub = store.subscribe(w => { if (w === "state") this.sync(); });
     this.sync();
   }
   disconnectedCallback() { this.unsub?.(); }
+
+  filesKey() {
+    const p = store.project();
+    if (!p || !store.inProject()) return null;
+    const node = store.findSession(store.state.sessionId);
+    return `${p.id}:${node?.workspacePath || node?.branch || p.branch || ""}`;
+  }
+
+  async ensureFiles(force = false) {
+    if (!(store.inProject() && store.state.filesOpen)) return;
+    const key = this.filesKey();
+    if (!key || (!force && (key === this.loadedFilesKey || key === this.loadingFilesKey))) return;
+    this.loadingFilesKey = key;
+    store.state.files = [];
+    store.state.fileError = null;
+    store.notify("files");
+    const node = store.findSession(store.state.sessionId);
+    try {
+      const { tree } = await api.files(store.state.projectId, node?.branch);
+      if (this.filesKey() === key) {
+        store.state.files = tree;
+        store.state.filesContext = key;
+        this.loadedFilesKey = key;
+        store.notify("files");
+      }
+    } catch (err) {
+      if (this.filesKey() === key) {
+        store.state.fileError = `Could not load files: ${err.error || err.message || err}`;
+        store.notify("files");
+      }
+    } finally {
+      if (this.loadingFilesKey === key) this.loadingFilesKey = null;
+    }
+  }
+
   sync() {
     const v = store.state.view;
-    for (const el of this.querySelectorAll("[data-screen]")) {
-      el.classList.toggle("hidden", el.dataset.screen !== v);
-    }
+    for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
+    const prompt = this.querySelector("[data-reload-prompt]");
+    prompt.classList.toggle("hidden", !store.state.fatalError);
+    if (store.state.fatalError) this.querySelector("[data-reload-message]").textContent = store.state.fatalError;
+    if (store.state.filesOpen && store.inProject()) void this.ensureFiles();
   }
 }
 

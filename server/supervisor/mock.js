@@ -4,7 +4,12 @@
 // home so snapshot/reconnect and discovery are tested for real.
 import fs from "node:fs";
 import path from "node:path";
-import { appHome, newId } from "../config.js";
+import { appHome, loadConfig, newId } from "../config.js";
+
+const MOCK_MODELS = [
+  { id: "mock/fast", provider: "mock", label: "Mock Fast" },
+  { id: "mock/smart", provider: "mock", label: "Mock Smart" },
+];
 
 const THINK_MS = () => Number(process.env.PI_WEB_MOCK_THINK_MS ?? 900);
 const DELTA_MS = () => Number(process.env.PI_WEB_MOCK_DELTA_MS ?? 18);
@@ -39,12 +44,19 @@ export class MockSupervisor {
         parentSessionId: s.parentSessionId || null,
         created: s.created, modified: s.modified,
         firstMessage: (s.records.find(r => r.role === "user") || {}).text || "",
+        model: s.model || this.defaultModel(),
       }));
+  }
+
+  listModels() { return MOCK_MODELS.map(m => ({ ...m })); }
+  defaultModel() {
+    const configured = loadConfig().defaultModel;
+    return MOCK_MODELS.some(m => m.id === configured) ? configured : MOCK_MODELS[0].id;
   }
 
   async createSession({ cwd, name, model }) {
     const s = {
-      id: newId("s"), cwd, name: name || null, model: model || "mock-model",
+      id: newId("s"), cwd, name: name || null, model: model || this.defaultModel(),
       parentSessionId: null, created: new Date().toISOString(), records: [],
     };
     this._save(s);
@@ -78,6 +90,9 @@ export class MockSupervisor {
 
   async setModel(id, model) {
     const s = this._load(id);
+    if (!s || !MOCK_MODELS.some(m => m.id === model)) {
+      throw Object.assign(new Error("model_unavailable"), { code: "model_unavailable" });
+    }
     s.model = model;
     this._save(s);
     this.hub.emit(id, "session_meta", { model });
@@ -108,7 +123,7 @@ export class MockSupervisor {
     const st = this.live.get(id) || { timers: [], queue: [], streaming: false };
     this.live.set(id, st);
     if (st.streaming) {
-      if (mode === "followUp") { st.queue.push(text); this.hub.emit(id, "queue_update", { followUp: st.queue.length }); return; }
+      if (mode === "followUp") { st.queue.push(text); this.hub.emit(id, "queue_update", { steering: 0, followUp: st.queue.length }); return; }
       // steer: cut the current stream, answer the steer next.
       this._finishTurn(id, "done", `\n\n(steered)`);
       this._startTurn(id, text, true);
@@ -154,7 +169,8 @@ export class MockSupervisor {
     st.streaming = true;
     st.turnId = newId("t");
     st.msgId = msgId;
-    this.hub.emit(id, "turn_start", { turnId: st.turnId, userRecord: userRec });
+    this.hub.emit(id, "user_record", { record: userRec });
+    this.hub.emit(id, "turn_start", { turnId: st.turnId });
     this.hub.emit(id, "message_start", { messageId: msgId, role: "assistant" });
 
     const wantsDiff = /edit|diff|fix|change/i.test(userText);

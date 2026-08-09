@@ -8,6 +8,7 @@ export class EventHub {
     this.clients = new Set();
     this.seq = 0;
   }
+  currentSeq() { return this.seq; }
   emit(sessionId, type, data = {}) {
     const evt = { v: CONTRACT_VERSION, seq: ++this.seq, sessionId, type, ...data };
     const frame = `id: ${evt.seq}\ndata: ${JSON.stringify(evt)}\n\n`;

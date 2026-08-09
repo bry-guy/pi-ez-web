@@ -92,10 +92,15 @@ test("plain chat: full turn lifecycle over SSE (thinking -> deltas -> done)", as
   const sse = new SSE(base + "/api/events");
   const { id } = await (await post("/api/chats")).json();
   assert.ok(id);
+  const models = await (await get("/api/models")).json();
+  assert.deepEqual(models.models.map(m => m.id), ["mock/fast", "mock/smart"]);
 
   await post(`/api/sessions/${id}/message`, { text: "hello there" });
+  const ur = await sse.wait(e => e.sessionId === id && e.type === "user_record");
+  assert.equal(ur.record.text, "hello there");
   const ts = await sse.wait(e => e.sessionId === id && e.type === "turn_start");
-  assert.ok(ts.turnId && ts.userRecord.text === "hello there");
+  assert.ok(ts.turnId);
+  assert.equal(sse.events.filter(e => e.sessionId === id && e.type === "user_record").length, 1);
   const ms = await sse.wait(e => e.sessionId === id && e.type === "message_start");
   assert.equal(ms.role, "assistant");
   // thinking gap: no text_delta may precede message_start
@@ -107,6 +112,7 @@ test("plain chat: full turn lifecycle over SSE (thinking -> deltas -> done)", as
   // snapshot equals streamed result
   const snap = await (await get(`/api/sessions/${id}/transcript`)).json();
   assert.equal(snap.streaming, false);
+  assert.equal(typeof snap.seq, "number");
   const roles = snap.records.map(r => r.role);
   assert.deepEqual(roles, ["user", "assistant"]);
   const streamedText = sse.events.filter(e => e.sessionId === id && e.type === "text_delta").map(e => e.delta).join("");
@@ -148,13 +154,15 @@ test("followUp queues; steer interrupts", async () => {
   await sse.wait(e => e.sessionId === id && e.type === "queue_update");
   // first turn ends, queued follow-up starts a second turn automatically
   await sse.wait(e => e.sessionId === id && e.type === "turn_end");
-  const ts2 = await sse.wait(e => e.sessionId === id && e.type === "turn_start" && e.userRecord?.text === "queued follow-up");
-  assert.ok(ts2);
+  const ur2 = await sse.wait(e => e.sessionId === id && e.type === "user_record" && e.record?.text === "queued follow-up");
+  assert.ok(ur2);
+  const ts2 = await sse.wait(e => e.sessionId === id && e.type === "turn_start" && e.seq > ur2.seq);
   // steer the second turn
   await sse.wait(e => e.sessionId === id && e.type === "text_delta" && e.seq > ts2.seq);
   await post(`/api/sessions/${id}/message`, { text: "actually do this", mode: "steer" });
-  const ts3 = await sse.wait(e => e.sessionId === id && e.type === "turn_start" && e.userRecord?.text === "actually do this");
-  assert.ok(ts3);
+  const ur3 = await sse.wait(e => e.sessionId === id && e.type === "user_record" && e.record?.text === "actually do this");
+  assert.ok(ur3);
+  const ts3 = await sse.wait(e => e.sessionId === id && e.type === "turn_start" && e.seq > ur3.seq);
   await sse.wait(e => e.sessionId === id && e.type === "turn_end" && e.seq > ts3.seq);
 });
 
@@ -182,6 +190,17 @@ test("project creation: first session on the checkout branch", async () => {
   assert.equal(p.occupied.main.sessionId, firstSessionId);
   assert.equal(p.sessions[0].id, firstSessionId);
   assert.equal(p.sessions[0].branch, "main");
+  assert.equal(p.sessions[0].model, "mock/fast");
+});
+
+test("dirty checkout fork is refused without stashing the checkout", async () => {
+  const marker = path.join(repo, "local-only.txt");
+  fs.writeFileSync(marker, "keep me\n");
+  const r = await post(`/api/sessions/${firstSessionId}/fork`, {});
+  assert.equal(r.status, 409);
+  assert.equal((await r.json()).error, "checkout_dirty");
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep me\n");
+  fs.rmSync(marker);
 });
 
 test("branch create re-homes the session to a new worktree", async () => {

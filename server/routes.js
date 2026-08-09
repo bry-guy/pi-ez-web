@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   chatsDir, loadBindings, loadConfig, newId, saveBindings, saveConfig, slug, worktreeRoot,
@@ -11,6 +11,7 @@ import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
+const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
 
 export function buildApi(sup) {
   const api = new Hono();
@@ -18,6 +19,8 @@ export function buildApi(sup) {
   // ---------- state ----------
   api.get("/state", async c => {
     const cfg = loadConfig();
+    const models = await safe(() => sup.listModels(), []);
+    const configuredDefault = await safe(() => sup.defaultModel(), cfg.defaultModel || null);
     const projects = [];
     for (const p of cfg.projects) {
       try { projects.push(await projectState(p, sup)); }
@@ -25,11 +28,14 @@ export function buildApi(sup) {
     }
     return c.json({
       mode: process.env.PI_WEB_MODE || "real",
-      defaultModel: cfg.defaultModel,
+      defaultModel: configuredDefault,
+      models,
       projects,
       chats: await chatsState(sup),
     });
   });
+
+  api.get("/models", async c => c.json({ models: await sup.listModels() }));
 
   // ---------- SSE ----------
   api.get("/events", c =>
@@ -48,7 +54,7 @@ export function buildApi(sup) {
 
   // ---------- chats & projects ----------
   api.post("/chats", async c => {
-    const { id } = await sup.createSession({ cwd: chatsDir() });
+    const { id } = await sup.createSession({ cwd: chatsDir(), model: await sup.defaultModel() });
     hub.emit(id, "session_created", { session: { id, title: "New session" } });
     return c.json({ id });
   });
@@ -68,7 +74,7 @@ export function buildApi(sup) {
     saveConfig(cfg);
     ws.prune(repoPath);
     // First session lives on the checkout's branch — the checkout is its workspace.
-    const { id: sessionId } = await sup.createSession({ cwd: repoPath });
+    const { id: sessionId } = await sup.createSession({ cwd: repoPath, model: await sup.defaultModel() });
     hub.emit(sessionId, "session_created", { session: { id: sessionId } });
     return c.json({ id: project.id, sessionId });
   });
@@ -105,17 +111,31 @@ export function buildApi(sup) {
 
   api.get("/sessions/:id/transcript", async c => {
     const id = c.req.param("id");
+    // Capture the sequence before reading the snapshot. Events emitted after
+    // this point remain in the client's buffer and are replayed by seq.
+    const seq = hub.currentSeq();
     return c.json({
       sessionId: id,
+      seq,
       streaming: sup.isStreaming(id),
       records: await sup.transcript(id),
     });
   });
 
+  api.get("/sessions/:id/meta", async c => {
+    const meta = await sup.meta(c.req.param("id"));
+    return meta ? c.json(meta) : err(c, 404, "no_such_session");
+  });
+
   api.post("/sessions/:id/model", async c => {
     const { model } = await c.req.json();
-    await sup.setModel(c.req.param("id"), model);
-    return c.json({ ok: true });
+    try {
+      await sup.setModel(c.req.param("id"), model);
+      return c.json({ ok: true, model });
+    } catch (e) {
+      if (e.code === "model_unavailable") return err(c, 400, "model_unavailable");
+      throw e;
+    }
   });
 
   api.post("/sessions/:id/name", async c => {
@@ -176,14 +196,28 @@ export function buildApi(sup) {
     const cfg = loadConfig();
     const parentBranch = Object.entries(worktrees).find(([, p]) => p === cwd)?.[0] || ws.currentBranch(cwd);
 
-    const { branch, workspacePath } = ws.forkWorkspace({
-      repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
-      parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath),
-    });
+    let branch, workspacePath;
+    try {
+      ({ branch, workspacePath } = ws.forkWorkspace({
+        repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
+        parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath),
+      }));
+    } catch (e) {
+      if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
+      throw e;
+    }
     if (project.setup) {
       await new Promise(res => execFile("/bin/sh", ["-c", project.setup], { cwd: workspacePath }, () => res()));
     }
-    const { id: childId } = await sup.fork(id, atRecordId, { cwd: workspacePath });
+    let childId;
+    try {
+      ({ id: childId } = await sup.fork(id, atRecordId, { cwd: workspacePath }));
+    } catch (e) {
+      try { ws.removeWorkspace({ repoPath: project.repoPath, workspacePath, force: true }); } catch { /* best effort cleanup */ }
+      try { execFileSync("git", ["branch", "-D", branch], { cwd: project.repoPath, stdio: "ignore" }); } catch { /* best effort cleanup */ }
+      if (e.code === "bad_fork_record") return err(c, 400, "bad_fork_record");
+      throw e;
+    }
     hub.emit(childId, "session_forked", {
       session: { id: childId, branch }, parentSessionId: id, atEntryId: atRecordId,
     });
@@ -267,9 +301,14 @@ export function buildApi(sup) {
   api.post("/settings", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
-    if (body.defaultModel !== undefined) cfg.defaultModel = body.defaultModel;
+    if (body.defaultModel === null) cfg.defaultModel = null;
+    else if (body.defaultModel !== undefined) {
+      const models = await sup.listModels();
+      if (!models.some(model => model.id === body.defaultModel)) return err(c, 400, "model_unavailable");
+      cfg.defaultModel = body.defaultModel;
+    }
     saveConfig(cfg);
-    return c.json({ ok: true });
+    return c.json({ ok: true, defaultModel: await sup.defaultModel() });
   });
 
   return api;

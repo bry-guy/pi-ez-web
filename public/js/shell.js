@@ -5,11 +5,23 @@ export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;"
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
 
 export function selectSession(projectId, sessionId) {
-  store.set({ view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, filesOpen: store.state.filesOpen, branchMenuOpen: false });
+  const project = store.state.projects.find(p => p.id === projectId);
+  const node = findNode(project?.sessions, sessionId);
+  store.set({
+    view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
+    filesOpen: store.state.filesOpen, files: [], fileError: null,
+    filesContext: node ? `${projectId}:${node.workspacePath || node.branch || ""}` : null,
+    branchMenuOpen: false, model: node?.model || store.state.defaultModel || null,
+  });
   openTranscript(sessionId);
 }
 export function selectChat(chatId) {
-  store.set({ view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, branchMenuOpen: false, filesOpen: false });
+  const chat = store.state.chats.find(c => c.id === chatId);
+  store.set({
+    view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
+    branchMenuOpen: false, filesOpen: false, files: [], fileError: null,
+    filesContext: null, model: chat?.model || store.state.defaultModel || null,
+  });
   openTranscript(chatId);
 }
 export async function newChat() {
@@ -18,17 +30,42 @@ export async function newChat() {
   selectChat(id);
 }
 
+function findNode(nodes, id) {
+  for (const n of nodes || []) {
+    if (n.id === id) return n;
+    const hit = findNode(n.children, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+function nodeMatches(n, q) {
+  if (!q) return true;
+  return n.title.toLowerCase().includes(q) || (n.children || []).some(child => nodeMatches(child, q));
+}
+
 /* ---------------- sidebar ---------------- */
 class PiSidebar extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.render(); });
     this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => this.onKeyDown(e));
     this.addEventListener("input", e => {
-      if (e.target.matches(".rail-search")) { store.state.query = e.target.value; this.render(); }
+      if (e.target.matches(".rail-search")) {
+        store.state.query = e.target.value;
+        this.renderResults();
+      }
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
+
+  onKeyDown(e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const target = e.target.closest("[data-act]");
+    if (!target || target.matches("button,input")) return;
+    e.preventDefault();
+    target.click();
+  }
 
   onClick(e) {
     const t = e.target.closest("[data-act]");
@@ -40,16 +77,17 @@ class PiSidebar extends HTMLElement {
       return;
     }
     if (act === "collapse") store.set(s => (mobile() ? { drawerOpen: false } : { railOpen: !s.railOpen }));
-    else if (act === "new-chat") newChat();
+    else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
     else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
     else if (act === "projects") store.set({ view: "projects", drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
     else if (act === "project-row") {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
+      if (!p) return;
       store.state.openTree[p.id] = !store.state.openTree[p.id];
       const first = p.sessions[0];
       if (first) selectSession(p.id, first.id);
-      else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null });
+      else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false });
     } else if (act === "session-row") {
       if (t.dataset.kids === "1") store.state.openTree[t.dataset.id] = !store.state.openTree[t.dataset.id];
       selectSession(t.dataset.pid, t.dataset.id);
@@ -58,20 +96,22 @@ class PiSidebar extends HTMLElement {
 
   count(nodes) { return nodes.reduce((n, x) => n + 1 + this.count(x.children), 0); }
 
-  sessionRows(p, nodes, depth, q, out) {
+  sessionRows(p, nodes, depth, q, out, forceAll = false) {
     for (const n of nodes) {
-      if (q && !n.title.toLowerCase().includes(q)) { this.sessionRows(p, n.children, depth + 1, q, out); continue; }
+      const direct = !q || n.title.toLowerCase().includes(q);
+      const descendant = q && (n.children || []).some(child => nodeMatches(child, q));
+      if (q && !forceAll && !direct && !descendant) continue;
       const kids = n.children.length > 0;
       const open = !!store.state.openTree[n.id];
       const sel = store.state.sessionId === n.id && !store.state.chatId && store.state.view === "chat";
-      out.push(`<div class="row-wrap nested" style="margin-left:${14 + depth * 12}px">
-        <div class="row ${sel ? "active" : ""}" data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
-          <span class="caret">${kids ? (open ? "▾" : "▸") : "·"}</span>
+      out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
+        <div class="row ${sel ? "active" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
+          <span class="caret">${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
           <button class="row-close" data-act="close-row" data-kind="session" data-id="${esc(n.id)}"
             data-label="${esc(n.title)}" data-branch="${esc(n.branch || "")}" title="Close session">×</button>
         </div></div>`);
-      if (kids && open) this.sessionRows(p, n.children, depth + 1, q, out);
+      if (kids && (open || q || forceAll)) this.sessionRows(p, n.children, depth + 1, forceAll ? "" : q, out, forceAll);
     }
   }
 
@@ -79,64 +119,77 @@ class PiSidebar extends HTMLElement {
     const s = store.state;
     const isMobile = mobile();
     const expanded = isMobile ? s.drawerOpen : s.railOpen;
-    const q = s.query.trim().toLowerCase();
-
-    if (!expanded && !isMobile) {
-      this.innerHTML = `<aside class="mini">
-        <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
-        <div class="mini-gap"></div>
-        <button class="mini-btn" data-act="new-chat" title="New chat">+</button>
-        <button class="mini-btn quiet" data-act="projects" title="Projects">▤</button>
-        <div class="mini-flex"></div>
-        <button class="mini-btn quiet" data-act="settings" title="Settings">⚙</button>
+    const layout = !expanded && !isMobile ? "mini" : !expanded ? "empty" : "rail";
+    if (this.dataset.layout !== layout) {
+      this.dataset.layout = layout;
+      if (layout === "mini") {
+        this.innerHTML = `<aside class="mini">
+          <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
+          <div class="mini-gap"></div>
+          <button class="mini-btn" data-act="new-chat" title="New chat">+</button>
+          <button class="mini-btn quiet" data-act="projects" title="Projects">▤</button>
+          <div class="mini-flex"></div>
+          <button class="mini-btn quiet" data-act="settings" title="Settings">⚙</button>
+        </aside>`;
+        return;
+      }
+      if (layout === "empty") { this.innerHTML = ""; return; }
+      this.innerHTML = `<aside class="rail">
+        <div class="rail-head">
+          <div class="rail-logo">π</div><div class="rail-word">pi</div>
+          <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
+        </div>
+        <div class="rail-actions">
+          <button class="primary-btn" data-act="new-chat"><span class="plus">+</span><span>New chat</span></button>
+          <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
+        </div>
+        <div class="rail-scroll">
+          <div class="sec-head"><div class="sec-label">Projects</div>
+            <button class="ghost-btn" data-act="repo-picker" title="New project" style="padding:3px 6px">+</button></div>
+          <div class="projects-list"></div>
+          <div class="sec-label pad">Chats</div>
+          <div class="chats-list"></div>
+        </div>
+        <div class="rail-foot">
+          <div class="avatar">π</div><div class="rail-user">pi-web</div>
+          <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">⚙</button>
+        </div>
       </aside>`;
-      return;
     }
-    if (!expanded && isMobile) { this.innerHTML = ""; return; }
+    if (layout === "rail") {
+      const inp = this.querySelector(".rail-search");
+      if (inp && inp.value !== s.query && document.activeElement !== inp) inp.value = s.query;
+      this.renderResults();
+    }
+  }
 
+  renderResults() {
+    if (this.dataset.layout !== "rail") return;
+    const s = store.state;
+    const q = s.query.trim().toLowerCase();
     const projRows = [];
     for (const p of s.projects) {
-      const open = !!s.openTree[p.id];
+      const nameMatch = !q || p.name.toLowerCase().includes(q);
+      if (q && !nameMatch && !p.sessions.some(n => nodeMatches(n, q))) continue;
+      const open = !!s.openTree[p.id] || !!q;
       const active = s.view === "chat" && s.projectId === p.id && !s.chatId;
       projRows.push(`<div class="row-wrap" style="margin-top:1px">
-        <div class="row mono ${active && !open ? "active" : ""}" data-act="project-row" data-id="${esc(p.id)}">
+        <div class="row mono ${active && !open ? "active" : ""}" role="button" tabindex="0" aria-expanded="${open}" data-act="project-row" data-id="${esc(p.id)}">
           <span class="caret">${open ? "▾" : "▸"}</span>
           <span class="lbl">${esc(p.name)}</span>
           <span class="count">${this.count(p.sessions)}</span>
         </div></div>`);
-      if (open) this.sessionRows(p, p.sessions, 0, q, projRows);
+      if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, nameMatch);
     }
     const chatRows = s.chats
       .filter(cRow => !q || cRow.title.toLowerCase().includes(q))
-      .map(cRow => `<div class="row ${s.chatId === cRow.id ? "active" : ""}" data-act="chat-row" data-id="${esc(cRow.id)}">
+      .map(cRow => `<div class="row ${s.chatId === cRow.id ? "active" : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
         <span class="lbl">${esc(cRow.title)}</span><span class="when">${esc(cRow.when)}</span>
         <button class="row-close" data-act="close-row" data-kind="chat" data-id="${esc(cRow.id)}"
           data-label="${esc(cRow.title)}" data-branch="" title="Close chat">×</button>
       </div>`).join("");
-
-    this.innerHTML = `<aside class="rail">
-      <div class="rail-head">
-        <div class="rail-logo">π</div><div class="rail-word">pi</div>
-        <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
-      </div>
-      <div class="rail-actions">
-        <button class="primary-btn" data-act="new-chat"><span class="plus">+</span><span>New chat</span></button>
-        <input class="rail-search" placeholder="Search sessions" value="${esc(s.query)}">
-      </div>
-      <div class="rail-scroll">
-        <div class="sec-head"><div class="sec-label">Projects</div>
-          <button class="ghost-btn" data-act="repo-picker" title="New project" style="padding:3px 6px">+</button></div>
-        ${projRows.join("")}
-        <div class="sec-label pad">Chats</div>
-        ${chatRows}
-      </div>
-      <div class="rail-foot">
-        <div class="avatar">π</div><div class="rail-user">pi-web</div>
-        <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">⚙</button>
-      </div>
-    </aside>`;
-    const inp = this.querySelector(".rail-search");
-    if (document.activeElement?.className === "rail-search") { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    this.querySelector(".projects-list").innerHTML = projRows.join("");
+    this.querySelector(".chats-list").innerHTML = chatRows;
   }
 }
 
@@ -146,7 +199,11 @@ class PiHeader extends HTMLElement {
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.render(); });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
-      if (e.target.matches(".new-branch-input") && e.key === "Enter") { e.preventDefault(); this.createBranch(); }
+      if (e.target.matches(".new-branch-input") && e.key === "Enter") { e.preventDefault(); this.createBranch(); return; }
+      if ((e.key === "Enter" || e.key === " ") && !e.target.matches("button,input")) {
+        const t = e.target.closest("[data-act]");
+        if (t) { e.preventDefault(); t.click(); }
+      }
     });
     this.addEventListener("input", e => {
       if (e.target.matches(".new-branch-input")) store.state.newBranch = e.target.value;
@@ -186,7 +243,7 @@ class PiHeader extends HTMLElement {
   }
   async createBranch() {
     const name = store.state.newBranch.trim().replace(/\s+/g, "-");
-    if (!name) return;
+    if (!name) { store.set({ branchError: "enter a branch name" }); return; }
     const id = store.state.sessionId;
     try {
       await api.branch(id, name, true);
@@ -205,6 +262,9 @@ class PiHeader extends HTMLElement {
   }
 
   render() {
+    const active = document.activeElement;
+    const preserveBranchInput = active?.matches?.(".new-branch-input");
+    const branchSelection = preserveBranchInput ? [active.selectionStart, active.selectionEnd] : null;
     const s = store.state;
     const p = store.project();
     const inProject = store.inProject() && p;
@@ -241,8 +301,13 @@ class PiHeader extends HTMLElement {
       ${filesBtn}
       ${pop}
     </header>`;
-    const inp = this.querySelector(".new-branch-input");
-    if (inp && this._focusBranchInput) { inp.focus(); this._focusBranchInput = false; }
+    if (preserveBranchInput) {
+      const input = this.querySelector(".new-branch-input");
+      if (input) {
+        input.focus();
+        if (branchSelection) input.setSelectionRange(...branchSelection);
+      }
+    }
   }
 
   popover(p, current) {
@@ -250,7 +315,7 @@ class PiHeader extends HTMLElement {
       const occ = p.occupied[b];
       const occupiedByOther = occ && occ.sessionId !== store.state.sessionId;
       const cls = ["branch-row", b === current ? "current" : "", occupiedByOther ? "occupied" : ""].join(" ");
-      return `<div class="${cls}" ${occupiedByOther ? "" : `data-act="switch-branch" data-branch="${esc(b)}"`}
+      return `<div class="${cls}" ${occupiedByOther ? "" : `role="button" tabindex="0" data-act="switch-branch" data-branch="${esc(b)}"`}
         title="${occupiedByOther ? "in use by " + esc(occ.title) : ""}">
         <span class="check">${b === current ? "✓" : ""}</span>
         <span class="bn">${esc(b)}</span>
@@ -264,7 +329,7 @@ class PiHeader extends HTMLElement {
         <div class="pop-list">${rows}</div>
         ${store.state.branchError ? `<div class="pop-error">${esc(store.state.branchError)}</div>` : ""}
         <div class="pop-foot">
-          <input class="new-branch-input" placeholder="new-branch-name" value="${esc(store.state.newBranch)}">
+          <input class="new-branch-input" placeholder="new-branch-name" aria-label="New branch name" value="${esc(store.state.newBranch)}">
           <button class="create-btn" data-act="create-branch">Create</button>
         </div>
       </div>`;

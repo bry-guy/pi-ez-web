@@ -17,6 +17,11 @@ class PiThread extends HTMLElement {
       else if (w === "anim") this.swapAnim();
     });
     this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-toggle]")) {
+        e.preventDefault(); e.target.closest("[data-toggle]").click();
+      }
+    });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
@@ -43,7 +48,7 @@ class PiThread extends HTMLElement {
       selectSession(store.state.projectId, childId);
       store.set({ draft: rec?.text || "" });
     } catch (err) {
-      console.warn("fork failed", err);
+      store.setError(`Fork failed: ${err.error || err.message || err}`);
     }
   }
 
@@ -103,7 +108,7 @@ class PiThread extends HTMLElement {
     if (m.role === "tool") {
       const open = this.isOpen(m.id);
       return `<div class="msg"><div class="block">
-        <div class="block-head" data-toggle="${esc(m.id)}">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
           <span class="bh-caret">${open ? "▾" : "▸"}</span>
           <span class="bh-name">${esc(m.tool)}</span>
           <span class="bh-arg">${esc(m.arg)}</span>
@@ -119,7 +124,7 @@ class PiThread extends HTMLElement {
         return `<div class="diff-line ${cls}"><span class="sign">${esc(l.sign)}</span>${esc(l.text)}</div>`;
       }).join("");
       return `<div class="msg"><div class="block">
-        <div class="block-head" data-toggle="${esc(m.id)}">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
           <span class="bh-caret">${open ? "▾" : "▸"}</span>
           <span class="bh-name">edit</span>
           <span class="bh-arg rtl">${esc(m.file)}</span>
@@ -169,7 +174,7 @@ class PiComposer extends HTMLElement {
       }
     });
     this.sendBtn.addEventListener("click", () => this.send());
-    this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()));
+    this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
     this.chip.addEventListener("click", () => this.cycleModel());
 
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.sync(); });
@@ -184,7 +189,8 @@ class PiComposer extends HTMLElement {
     this.ta.value = "";
     store.state.draft = "";
     if (text.startsWith("!")) {
-      try { await api.bang(id, text.slice(1).trim()); } catch (err) { console.warn(err); }
+      try { await api.bang(id, text.slice(1).trim()); }
+      catch (err) { store.setError(`Command failed: ${err.error || err.message || err}`); }
       return;
     }
     const streaming = store.transcript(id).streaming;
@@ -194,17 +200,23 @@ class PiComposer extends HTMLElement {
       delete store.state.busy[id];
     } catch (err) {
       if (err.error === "workspace_busy") { store.state.busy[id] = err.bySessionId; store.notify("transcript"); }
-      else console.warn(err);
+      else store.setError(`Send failed: ${err.error || err.message || err}`);
     }
   }
 
   cycleModel() {
-    const list = ["claude-sonnet-4-6", "gpt-5.2-codex", "gemini-3-pro", "kimi-k2-thinking"];
-    const cur = store.state.model || list[0];
-    const next = list[(list.indexOf(cur) + 1) % list.length];
-    store.set({ model: next });
+    const list = store.state.models;
+    if (!list.length) { store.setError("No models are available."); return; }
+    const cur = store.state.model;
+    const index = list.findIndex(model => model.id === cur);
+    const next = list[index < 0 ? 0 : (index + 1) % list.length];
     const id = store.activeKey();
-    if (id) api.setModel(id, next).catch(() => {});
+    const previous = cur;
+    store.set({ model: next.id });
+    if (id) api.setModel(id, next.id).catch(err => {
+      store.set({ model: previous });
+      store.setError(err.error === "model_unavailable" ? "That model is unavailable." : `Model change failed: ${err.message || err}`);
+    });
   }
 
   sync() {
@@ -214,15 +226,27 @@ class PiComposer extends HTMLElement {
     const busyBy = store.state.busy[id];
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
+    const error = store.state.error;
+    const owner = busyBy && findSessionTitle(busyBy);
     this.hint.classList.toggle("busy", !!busyBy);
-    this.hint.textContent = busyBy
-      ? `branch busy in another session`
-      : t.streaming ? "Enter steers · Alt+Enter queues a follow-up" : "Enter to send · Shift+Enter for a new line";
-    this.chip.textContent = store.state.model || "default";
+    this.hint.classList.toggle("error", !!error);
+    this.hint.textContent = error || (busyBy
+      ? `branch busy in ${owner || "another session"}`
+      : t.streaming ? "Enter steers · Alt+Enter queues a follow-up" : "Enter to send · Shift+Enter for a new line");
+    const model = store.state.models.find(m => m.id === store.state.model);
+    this.chip.textContent = model?.label || store.state.model || "default";
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     this.sendBtn.classList.toggle("hidden", t.streaming);
     this.sendBtn.disabled = !!busyBy;
   }
+}
+
+function findSessionTitle(id) {
+  for (const p of store.state.projects) {
+    const node = store.findSession(id, p.sessions);
+    if (node) return node.title;
+  }
+  return store.state.chats.find(chat => chat.id === id)?.title || null;
 }
 
 customElements.define("pi-thread", PiThread);
