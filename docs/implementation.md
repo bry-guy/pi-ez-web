@@ -1,0 +1,75 @@
+# pi-web-ui
+
+Self-hostable web UI for [pi](https://github.com/earendil-works/pi) coding-agent
+sessions. One Node process: pi SDK in-process, REST + SSE out, zero-build web
+components in front. Projects map to git repos; sessions map to branch
+worktrees; fork ⑂ branches both the conversation and the code.
+
+## Run
+
+```sh
+npm install
+npm install @earendil-works/pi-coding-agent   # peer dep; needs ~/.pi/agent configured (run `pi` once)
+npm start                                     # http://localhost:3141
+```
+
+No credentials handy? Full UI against a scripted agent:
+
+```sh
+npm run dev            # PI_WEB_MODE=mock
+```
+
+## Layout
+
+```
+server/
+  index.js            entry: Hono app, static UI, startup worktree prune
+  routes.js           REST + SSE + bang execution
+  workspaces.js       git: worktree-per-branch, occupied rules, stash-transfer fork
+  domain.js           /api/state assembly (projects, session trees, occupied map)
+  events.js           SSE hub (event contract v1)
+  lifecycle.js        close session + merge sweep (in-server job, no daemon)
+  supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
+public/               index.html + app.css + ES modules; no build step
+test/                 workspaces (real git) · server integration (mock+SSE) · SDK surface
+scripts/verify-real.js  credentialed end-to-end smoke
+```
+
+State lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`, `chats/`,
+`worktrees/`); pi owns transcripts and auth under `~/.pi/agent`. Override the
+app home with `PI_WEB_HOME`.
+
+## Invariants
+
+- Workspace = worktree, one per branch (git's own constraint). The app never
+  mutates your checkout — it only adds worktrees under `worktreeRoot`.
+- One session per workspace by convention: moving a session onto a branch
+  occupied by another session is a 409; the branch popover disables those rows.
+  A one-active-turn-per-workspace lock backstops externally created sessions.
+- Fork carries dirty state (stash transfer): tracked modifications + untracked
+  files land in the fork and survive in the parent. Code forks at *present*
+  state; the conversation forks at the chosen message.
+- Lifecycle is explicit and git-only (PRs deferred). **Merge** (header button):
+  `git merge --no-ff` into the checkout's branch — the one sanctioned checkout
+  mutation; preflight requires worktree + checkout clean; conflicts abort
+  cleanly and leave everything untouched. Success removes the worktree,
+  deletes the branch, and the session continues on the default branch.
+  **Close ×** (sidebar): worktree sessions are destroyed — worktree removed,
+  branch force-deleted, changes lost (the confirm dialog is the guard);
+  checkout sessions and chats are archived, nothing in git touched.
+  Transcripts always survive. A merge sweep (every `sweepMinutes`, default 10)
+  still reaps CLI-side merges; `autoCleanup: false` disables it.
+
+## Verification
+
+```sh
+npm test               # no credentials: git workspace mechanics, full mock-mode
+                       # server integration over HTTP+SSE, SDK surface smoke
+npm run verify:real    # with ~/.pi/agent: real turn + real edit end-to-end
+```
+
+The design (tokens, screens, event contract) is specified in the accompanying
+PLAN.md and design README; the UI is a direct port of the approved prototype.
+Note: the interface is served and syntax-verified in CI but has not been
+pixel-checked in a browser here — the mock mode dev server is the fastest way
+to eyeball it.

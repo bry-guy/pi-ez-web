@@ -1,0 +1,157 @@
+// Git workspace operations. Invariants:
+// - Workspace = worktree, one per branch (git enforces one checkout per branch).
+// - The app NEVER mutates the user's checkout (no `git switch` there); it only
+//   adds worktrees under worktreeRoot.
+// - Fork carries dirty state via stash transfer (stashes share the object store).
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { slug } from "./config.js";
+
+function git(cwd, ...args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+export function isGitRepo(dir) {
+  try { return git(dir, "rev-parse", "--is-inside-work-tree").trim() === "true"; } catch { return false; }
+}
+
+export function currentBranch(dir) {
+  try { return git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim(); } catch { return null; }
+}
+
+export function isDirty(dir) {
+  try { return git(dir, "status", "--porcelain").trim().length > 0; } catch { return false; }
+}
+
+export function listBranches(repoPath) {
+  try {
+    return git(repoPath, "branch", "--format=%(refname:short)").split("\n").map(s => s.trim()).filter(Boolean);
+  } catch { return []; }
+}
+
+// Git reports canonical paths on macOS (for example /private/var/... even when
+// the caller used /var/...). Keep the path spelling supplied by the caller so
+// configured project paths, session cwd values, and discovered worktrees still
+// compare equal across platforms.
+function logicalWorktreePath(repoPath, discoveredPath) {
+  const logicalParent = path.dirname(path.resolve(repoPath));
+  try {
+    const realParent = fs.realpathSync(logicalParent);
+    const realPath = fs.realpathSync(discoveredPath);
+    const relative = path.relative(realParent, realPath);
+    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      return path.join(logicalParent, relative);
+    }
+  } catch { /* keep Git's path when it cannot be resolved */ }
+  return discoveredPath;
+}
+
+// Live discovery, pi-web style: { branch -> worktreePath } incl. the checkout itself.
+export function listWorktrees(repoPath) {
+  const out = git(repoPath, "worktree", "list", "--porcelain");
+  const map = {};
+  let wt = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) wt = line.slice(9).trim();
+    else if (line.startsWith("branch ") && wt) {
+      map[line.slice(7).trim().replace(/^refs\/heads\//, "")] = logicalWorktreePath(repoPath, wt);
+      wt = null;
+    } else if (line === "detached") wt = null;
+  }
+  return map;
+}
+
+export function prune(repoPath) {
+  try { git(repoPath, "worktree", "prune"); } catch { /* non-fatal */ }
+}
+
+function worktreePathFor(root, projectId, branch) {
+  return path.join(root, projectId, slug(branch).replace(/\//g, "__"));
+}
+
+// Ensure a workspace (worktree) exists for `branch`; create branch from
+// `fromRef` (default: repo HEAD) if it doesn't exist. Returns its path.
+// Never touches the user's checkout: if the branch is checked out there,
+// that IS the workspace.
+export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef }) {
+  const existing = listWorktrees(repoPath);
+  if (existing[branch]) return existing[branch];
+  const wt = worktreePathFor(worktreeRoot, projectId, branch);
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  const branches = listBranches(repoPath);
+  if (branches.includes(branch)) {
+    git(repoPath, "worktree", "add", wt, branch);
+  } else {
+    git(repoPath, "worktree", "add", "-b", branch, wt, fromRef || "HEAD");
+  }
+  return wt;
+}
+
+export function removeWorkspace({ repoPath, workspacePath, force = false }) {
+  if (!force && isDirty(workspacePath)) {
+    const err = new Error("workspace_dirty");
+    err.code = "workspace_dirty";
+    throw err;
+  }
+  const args = ["worktree", "remove"];
+  if (force) args.push("--force");
+  git(repoPath, ...args, workspacePath.replace(/\/$/, ""));
+}
+
+// Fork: new branch + worktree from the parent workspace's HEAD, carrying the
+// parent's dirty state (tracked modifications + untracked files) via stash
+// transfer. Parent ends up exactly as it started.
+export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches }) {
+  const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
+  let n = 1, branch;
+  do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));
+
+  const dirty = isDirty(parentWorkspace);
+  let stashed = false;
+  if (dirty) {
+    git(parentWorkspace, "stash", "push", "-u", "-m", "pi-web-ui fork transfer");
+    stashed = true;
+  }
+  try {
+    const parentHead = git(parentWorkspace, "rev-parse", "HEAD").trim();
+    const wt = worktreePathFor(worktreeRoot, projectId, branch);
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(repoPath, "worktree", "add", "-b", branch, wt, parentHead);
+    if (stashed) git(wt, "stash", "apply");
+    return { branch, workspacePath: wt };
+  } finally {
+    if (stashed) git(parentWorkspace, "stash", "pop");
+  }
+}
+
+// Repo picker: shallow scan for git repos under a root dir.
+export function findRepos(root, depth = 2) {
+  const out = [];
+  const walk = (dir, d) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    if (entries.some(e => e.name === ".git")) { out.push(dir); return; }
+    if (d >= depth) return;
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules") walk(path.join(dir, e.name), d + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+// File tree for the panel: directories-first, alphabetical, shallow-ish.
+export function fileTree(dir, depth = 4) {
+  const walk = (d, lvl) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return []; }
+    return entries
+      .filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
+      .map(e => e.isDirectory()
+        ? { n: e.name, c: lvl < depth ? walk(path.join(d, e.name), lvl + 1) : [] }
+        : { n: e.name })
+      .sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
+  };
+  return walk(dir, 0);
+}

@@ -1,0 +1,276 @@
+import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import {
+  chatsDir, loadBindings, loadConfig, newId, saveBindings, saveConfig, slug, worktreeRoot,
+} from "./config.js";
+import { chatsState, projectState, sessionWorkspace, titleOf } from "./domain.js";
+import { closeSession, findProjectByWorkspace, mergeSession, sweepProject } from "./lifecycle.js";
+import { hub } from "./events.js";
+import * as ws from "./workspaces.js";
+
+const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
+
+export function buildApi(sup) {
+  const api = new Hono();
+
+  // ---------- state ----------
+  api.get("/state", async c => {
+    const cfg = loadConfig();
+    const projects = [];
+    for (const p of cfg.projects) {
+      try { projects.push(await projectState(p, sup)); }
+      catch (e) { projects.push({ id: p.id, name: p.name, repoPath: p.repoPath, error: String(e.message || e), branches: [], sessions: [], occupied: {}, worktrees: {} }); }
+    }
+    return c.json({
+      mode: process.env.PI_WEB_MODE || "real",
+      defaultModel: cfg.defaultModel,
+      projects,
+      chats: await chatsState(sup),
+    });
+  });
+
+  // ---------- SSE ----------
+  api.get("/events", c =>
+    streamSSE(c, async stream => {
+      let open = true;
+      const remove = hub.addClient(frame => { if (open) stream.writeln ? stream.write(frame) : stream.write(frame); });
+      stream.onAbort(() => { open = false; remove(); });
+      // keepalive
+      while (open) {
+        await stream.sleep(15000);
+        try { await stream.write(": ping\n\n"); } catch { break; }
+      }
+      remove();
+    })
+  );
+
+  // ---------- chats & projects ----------
+  api.post("/chats", async c => {
+    const { id } = await sup.createSession({ cwd: chatsDir() });
+    hub.emit(id, "session_created", { session: { id, title: "New session" } });
+    return c.json({ id });
+  });
+
+  api.get("/repos", c => {
+    const root = c.req.query("root") || process.env.PI_WEB_REPOS_ROOT || path.join(process.env.HOME || "", "src");
+    return c.json({ root, repos: ws.findRepos(root).map(p => ({ path: p, name: path.basename(p) })) });
+  });
+
+  api.post("/projects", async c => {
+    const { repoPath, name } = await c.req.json();
+    if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
+    const cfg = loadConfig();
+    if (cfg.projects.some(p => p.repoPath === repoPath)) return err(c, 409, "project_exists");
+    const project = { id: newId("p"), name: name || path.basename(repoPath), repoPath };
+    cfg.projects.push(project);
+    saveConfig(cfg);
+    ws.prune(repoPath);
+    // First session lives on the checkout's branch — the checkout is its workspace.
+    const { id: sessionId } = await sup.createSession({ cwd: repoPath });
+    hub.emit(sessionId, "session_created", { session: { id: sessionId } });
+    return c.json({ id: project.id, sessionId });
+  });
+
+  api.get("/projects/:id/files", c => {
+    const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
+    if (!p) return err(c, 404, "no_such_project");
+    const branch = c.req.query("branch");
+    const dir = branch ? (ws.listWorktrees(p.repoPath)[branch] || p.repoPath) : p.repoPath;
+    return c.json({ tree: ws.fileTree(dir) });
+  });
+
+  // ---------- session ops ----------
+
+  api.post("/sessions/:id/message", async c => {
+    const id = c.req.param("id");
+    const { text, mode = "prompt" } = await c.req.json();
+    if (!text?.trim()) return err(c, 400, "empty_message");
+    const cwd = await sessionWorkspace(id, sup);
+    // one-active-turn-per-workspace backstop (external/legacy sessions sharing a cwd)
+    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
+    if (busyBy) {
+      hub.emit(id, "workspace_busy", { workspacePath: cwd, bySessionId: busyBy });
+      return err(c, 409, "workspace_busy", { bySessionId: busyBy });
+    }
+    await sup.message(id, text.trim(), mode);
+    return c.json({ ok: true });
+  });
+
+  api.post("/sessions/:id/stop", async c => {
+    await sup.stop(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  api.get("/sessions/:id/transcript", async c => {
+    const id = c.req.param("id");
+    return c.json({
+      sessionId: id,
+      streaming: sup.isStreaming(id),
+      records: await sup.transcript(id),
+    });
+  });
+
+  api.post("/sessions/:id/model", async c => {
+    const { model } = await c.req.json();
+    await sup.setModel(c.req.param("id"), model);
+    return c.json({ ok: true });
+  });
+
+  api.post("/sessions/:id/name", async c => {
+    const { name } = await c.req.json();
+    await sup.setName(c.req.param("id"), name);
+    return c.json({ ok: true });
+  });
+
+  // Branch switch / create: re-home the session to that branch's workspace.
+  // Occupied rule: one session per workspace — moving onto a branch whose
+  // worktree is bound to another session is a 409.
+  api.post("/sessions/:id/branch", async c => {
+    const id = c.req.param("id");
+    const { branch: rawBranch, create = false } = await c.req.json();
+    const branch = slug(rawBranch || "");
+    if (!branch) return err(c, 400, "bad_branch");
+    if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
+
+    const cwd = await sessionWorkspace(id, sup);
+    const found = cwd && findProjectByWorkspace(cwd);
+    if (!found) return err(c, 404, "no_project_for_session");
+    const { project } = found;
+    const cfg = loadConfig();
+
+    if (!create && !ws.listBranches(project.repoPath).includes(branch)) return err(c, 404, "no_such_branch");
+    const target = ws.ensureWorkspace({
+      repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg),
+      projectId: project.id, branch, fromRef: create ? "HEAD" : undefined,
+    });
+    if (target === cwd) return c.json({ ok: true, branch, workspacePath: target });
+
+    // occupied?
+    const bindings = loadBindings();
+    for (const wt of [target]) {
+      const bound = await sup.listSessions(wt);
+      const boundHere = bound.filter(s => (bindings[s.id] || s.cwd) === wt && s.id !== id);
+      const rebound = Object.entries(bindings).find(([sid, p]) => p === wt && sid !== id);
+      const occupier = boundHere[0] || (rebound && { id: rebound[0] });
+      if (occupier) return err(c, 409, "branch_occupied", { bySessionId: occupier.id, byTitle: occupier.firstMessage ? titleOf(occupier) : undefined });
+    }
+
+    await sup.rehome(id, target);
+    bindings[id] = target;
+    saveBindings(bindings);
+    hub.emit(id, "session_meta", { branch });
+    return c.json({ ok: true, branch, workspacePath: target });
+  });
+
+  // Fork: point-in-time conversation + code. New branch + worktree from the
+  // parent workspace HEAD carrying dirty state; transcript forked at message.
+  api.post("/sessions/:id/fork", async c => {
+    const id = c.req.param("id");
+    const { atRecordId } = await c.req.json();
+    const cwd = await sessionWorkspace(id, sup);
+    const found = cwd && findProjectByWorkspace(cwd);
+    if (!found) return err(c, 400, "fork_requires_project");
+    const { project, worktrees } = found;
+    const cfg = loadConfig();
+    const parentBranch = Object.entries(worktrees).find(([, p]) => p === cwd)?.[0] || ws.currentBranch(cwd);
+
+    const { branch, workspacePath } = ws.forkWorkspace({
+      repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
+      parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath),
+    });
+    if (project.setup) {
+      await new Promise(res => execFile("/bin/sh", ["-c", project.setup], { cwd: workspacePath }, () => res()));
+    }
+    const { id: childId } = await sup.fork(id, atRecordId, { cwd: workspacePath });
+    hub.emit(childId, "session_forked", {
+      session: { id: childId, branch }, parentSessionId: id, atEntryId: atRecordId,
+    });
+    return c.json({ id: childId, branch, workspacePath });
+  });
+
+  // Bang: user-initiated local shell in the session's workspace. Distinct from
+  // agent tool calls end-to-end (orange ! rendering keyed on bang_* events).
+  api.post("/sessions/:id/bang", async c => {
+    const id = c.req.param("id");
+    const { cmd } = await c.req.json();
+    if (!cmd?.trim()) return err(c, 400, "empty_command");
+    const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
+    const bangId = newId("bg");
+    hub.emit(id, "bang_start", { bangId, cmd });
+    const t0 = Date.now();
+    const { exit, out } = await new Promise(resolve => {
+      execFile("/bin/sh", ["-c", cmd], { cwd, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
+        resolve({ exit: e ? (e.code ?? 1) : 0, out: [stdout, stderr].filter(Boolean).join("") });
+      });
+    });
+    const durationMs = Date.now() - t0;
+    const meta = `exit ${exit} · ${(durationMs / 1000).toFixed(1)}s`;
+    hub.emit(id, "bang_end", { bangId, exit, durationMs, stdout: out });
+    await sup.bangRecord(id, { id: bangId, role: "bang", cmd, meta, out });
+    return c.json({ exit, durationMs });
+  });
+
+  // Close: checkout session -> archival only; worktree session -> DESTRUCTIVE
+  // (worktree removed, branch force-deleted). Confirmation lives in the UI.
+  api.post("/sessions/:id/close", async c => {
+    const id = c.req.param("id");
+    try {
+      await closeSession(sup, hub, id);
+    } catch (e) {
+      if (e.code === "session_streaming") return err(c, 409, "session_streaming");
+      throw e;
+    }
+    return c.json({ ok: true });
+  });
+
+  // Merge: land the session's branch into the checkout's branch, clean up,
+  // re-home the session onto the default branch (it stays open).
+  api.post("/sessions/:id/merge", async c => {
+    try {
+      return c.json(await mergeSession(sup, hub, c.req.param("id")));
+    } catch (e) {
+      const codes = { session_streaming: 409, no_project_for_session: 404, nothing_to_merge: 400, workspace_dirty: 409, checkout_dirty: 409, merge_conflict: 409 };
+      if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail } : {});
+      throw e;
+    }
+  });
+
+  // Manual merge sweep (the periodic sweeper calls the same code).
+  api.post("/projects/:id/sweep", async c => {
+    const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
+    if (!p) return err(c, 404, "no_such_project");
+    const cfg = loadConfig();
+    return c.json(await sweepProject(sup, hub, p, { fetch: cfg.sweepFetch !== false }));
+  });
+
+  // ---------- workspace cleanup (no daemon: in-server job + endpoint) ----------
+  api.delete("/projects/:id/branches/:branch", async c => {
+    const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
+    if (!p) return err(c, 404, "no_such_project");
+    const branch = c.req.param("branch");
+    const map = ws.listWorktrees(p.repoPath);
+    const wsPath = map[branch];
+    if (!wsPath) return err(c, 404, "no_workspace");
+    if (wsPath === p.repoPath) return err(c, 400, "cannot_remove_checkout");
+    try {
+      ws.removeWorkspace({ repoPath: p.repoPath, workspacePath: wsPath, force: c.req.query("force") === "1" });
+    } catch (e) {
+      if (e.code === "workspace_dirty") return err(c, 409, "workspace_dirty");
+      throw e;
+    }
+    return c.json({ ok: true });
+  });
+
+  // ---------- settings ----------
+  api.post("/settings", async c => {
+    const body = await c.req.json();
+    const cfg = loadConfig();
+    if (body.defaultModel !== undefined) cfg.defaultModel = body.defaultModel;
+    saveConfig(cfg);
+    return c.json({ ok: true });
+  });
+
+  return api;
+}

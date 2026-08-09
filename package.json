@@ -1,0 +1,26 @@
+{
+  "name": "pi-ez-web",
+  "version": "0.1.0",
+  "description": "Self-hostable web UI for Pi coding-agent sessions",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "start": "node server/index.js",
+    "dev": "PI_WEB_MODE=mock node server/index.js",
+    "verify:real": "node scripts/verify-real.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.1.0",
+    "hono": "^4.13.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.0"
+  }
+}
