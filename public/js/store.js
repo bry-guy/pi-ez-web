@@ -44,7 +44,7 @@ export const store = {
     reposRoot: null,     // configured directory scanned by /api/repos
     reposRootSource: "default", // default | config | environment
     files: [],
-    filesContext: null,
+    queued: {},              // sessionId -> follow-up count (queue_update)
     transcripts: {},         // sessionId -> { records, streaming, seq }
   },
   listeners: new Set(),

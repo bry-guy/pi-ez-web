@@ -1,3 +1,5 @@
+> Superseded — predates workspace modes and streaming locks.
+
 # Plan: serving the Pi Web UI — final v1 design
 
 Supersedes the initial plan. Changes from review: worktrees by default (branch-switch guard removed), fork carries dirty state, restart-survival machinery removed per requester, Fastify replaced with Hono, pi-ez concepts folded in (config file, bindings, setup hook, composable modules in a monolith).

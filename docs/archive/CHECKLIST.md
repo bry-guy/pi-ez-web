@@ -1,3 +1,5 @@
+> Superseded — predates workspace modes and streaming locks.
+
 # Browser release checklist
 
 Run `mise check` first, then run the mock server with `mise dev` and register

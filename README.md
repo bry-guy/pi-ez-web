@@ -75,4 +75,4 @@ mise reset         # clear mock state
 
 With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults.
 
-See [PLAN.md](PLAN.md), [docs/plans/pi-web-ui-remediation.md](docs/plans/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use [CHECKLIST.md](CHECKLIST.md) for the browser click-through gate.
+See [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.

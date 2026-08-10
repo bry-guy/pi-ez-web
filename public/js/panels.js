@@ -418,7 +418,6 @@ class PiApp extends HTMLElement {
       const { tree } = await api.files(store.state.projectId, node?.branch);
       if (this.filesKey() === key) {
         store.state.files = tree;
-        store.state.filesContext = key;
         this.loadedFilesKey = key;
         store.notify("files");
       }

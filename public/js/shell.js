@@ -10,7 +10,6 @@ export function selectSession(projectId, sessionId) {
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
     filesOpen: store.state.filesOpen, files: [], fileError: null,
-    filesContext: node ? `${projectId}:${node.workspacePath || node.branch || ""}` : null,
     branchMenuOpen: false, model: node?.model || store.state.defaultModel || null,
   });
   openTranscript(sessionId);
@@ -20,7 +19,7 @@ export function selectChat(chatId) {
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
     branchMenuOpen: false, filesOpen: false, files: [], fileError: null,
-    filesContext: null, model: chat?.model || store.state.defaultModel || null,
+    model: chat?.model || store.state.defaultModel || null,
   });
   openTranscript(chatId);
 }

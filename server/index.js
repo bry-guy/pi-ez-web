@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { ensureHome, loadConfig } from "./config.js";
 import { hub } from "./events.js";
 import { buildApi } from "./routes.js";
-import { startSweeper } from "./lifecycle.js";
 import { createSupervisor } from "./supervisor/index.js";
 import { piWebStashes, prune } from "./workspaces.js";
 
@@ -30,7 +29,6 @@ export function startServer(port) {
   }
   const { app, sup } = createApp();
   const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg.port) });
-  startSweeper(sup, hub);
   return { server, app, sup };
 }
 

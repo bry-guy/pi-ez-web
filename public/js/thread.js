@@ -294,11 +294,15 @@ class PiComposer extends HTMLElement {
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
     const error = store.state.error;
+    const nQueued = store.state.queued[id] || 0;
     this.hint.classList.toggle("busy", !!lock);
     this.hint.classList.toggle("error", !!error);
     this.hint.textContent = error || (lock
       ? `branch busy — ${lock.title} is taking a turn`
-      : t.streaming ? "Enter steers · Alt+Enter queues a follow-up" : "Enter to send · Shift+Enter for a new line");
+      : t.streaming
+        ? (nQueued ? `${nQueued} follow-up${nQueued > 1 ? "s" : ""} queued · Enter steers`
+          : "Enter steers · Alt+Enter queues a follow-up")
+        : "Enter to send · Shift+Enter for a new line");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     this.sendBtn.classList.toggle("hidden", t.streaming);
     this.sendBtn.disabled = !!lock;

@@ -159,6 +159,9 @@ export function applyEvent(evt, replay = false) {
     case "turn_start":
       t.streaming = true;
       break;
+    case "queue_update":
+      store.state.queued[evt.sessionId] = evt.followUp || 0;
+      break;
     case "message_start":
       if (!byId(recs, evt.messageId)) recs.push({ id: evt.messageId, role: "assistant", text: "", streaming: true });
       break;
@@ -214,6 +217,7 @@ export function applyEvent(evt, replay = false) {
     }
     case "turn_end": {
       t.streaming = false;
+      delete store.state.queued[evt.sessionId];
       if (evt.reason === "stopped") {
         const empty = [...recs].reverse().find(r => r.role === "assistant" && r.streaming && !r.text);
         if (empty) recs.splice(recs.indexOf(empty), 1);
@@ -231,8 +235,7 @@ export function applyEvent(evt, replay = false) {
     case "session_merged":
       refreshState().catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;
-    case "session_closed":
-    case "branch_reaped": {
+    case "session_closed": {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
       refreshState().then(() => {

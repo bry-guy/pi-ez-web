@@ -1,6 +1,5 @@
 // Lifecycle: explicit close (worktree removed, branch + transcript kept) and
-// the merge sweep (merged + clean + idle -> session closed, worktree removed,
-// branch deleted; dirty/unmerged/streaming -> untouched).
+// explicit merge (lands work in the checkout and removes its worktree).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -180,38 +179,4 @@ test("closing a parent re-attaches its child at the visible tree position", asyn
   const p = await proj();
   assert.ok(p.sessions.some(node => node.id === fork.id), JSON.stringify(p.sessions));
   await post(`/api/sessions/${fork.id}/close`);
-});
-
-test("merge sweep still reaps CLI-side merges (merged+clean+idle)", async () => {
-  const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/cli-merged", create: true });
-  const wt = (await proj()).worktrees["feat/cli-merged"];
-  fs.writeFileSync(path.join(wt, "cli.txt"), "cli\n");
-  git(wt, "add", "-A"); git(wt, "commit", "-m", "cli");
-  git(repo, "merge", "--no-ff", "feat/cli-merged", "-m", "merged by hand");
-  const sweep = await (await post(`/api/projects/${projectId}/sweep`)).json();
-  assert.ok(sweep.reaped.some(x => x.branch === "feat/cli-merged"), JSON.stringify(sweep));
-  const p = await proj();
-  assert.equal(fs.existsSync(wt), false);
-  assert.equal(p.branches.includes("feat/cli-merged"), false);
-});
-
-test("sweep skips dirty worktrees and streaming sessions", async () => {
-  const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/skip-dirty", create: true });
-  const wt = (await proj()).worktrees["feat/skip-dirty"];
-  fs.writeFileSync(path.join(wt, "d.txt"), "d\n");
-  git(wt, "add", "-A"); git(wt, "commit", "-m", "d");
-  git(repo, "merge", "--no-ff", "feat/skip-dirty", "-m", "merged");
-  fs.writeFileSync(path.join(wt, "leftover.txt"), "uncommitted\n");
-  const s1 = await (await post(`/api/projects/${projectId}/sweep`)).json();
-  assert.ok(s1.skipped.some(x => x.branch === "feat/skip-dirty" && x.reason === "dirty"), JSON.stringify(s1));
-  fs.rmSync(path.join(wt, "leftover.txt"));
-
-  await post(`/api/sessions/${id}/message`, { text: "thinking" });
-  const s2 = await (await post(`/api/projects/${projectId}/sweep`)).json();
-  assert.ok(s2.skipped.some(x => x.branch === "feat/skip-dirty" && x.reason === "streaming"), JSON.stringify(s2));
-  await post(`/api/sessions/${id}/stop`);
-  const s3 = await (await post(`/api/projects/${projectId}/sweep`)).json();
-  assert.ok(s3.reaped.some(x => x.branch === "feat/skip-dirty"), JSON.stringify(s3));
 });

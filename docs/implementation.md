@@ -28,12 +28,12 @@ server/
   workspaces.js       git: worktree-per-branch, occupied rules, safe fork transfer
   domain.js           /api/state assembly (projects, session trees, occupied map)
   events.js           SSE hub (event contract v1 + sequence snapshots)
-  lifecycle.js        close session + merge sweep (in-server job, no daemon)
+  lifecycle.js        explicit close and merge lifecycle
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
 public/               index.html + app.css + ES modules; no build step
 test/                 workspaces (real git) · server integration (mock+SSE) · SDK surface · DOM gate
 scripts/verify-real.js  credentialed end-to-end smoke
-CHECKLIST.md            real-browser click-through gate
+docs/archive/CHECKLIST.md  archived real-browser click-through gate
 ```
 
 Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
@@ -65,8 +65,8 @@ Override the app home with `PI_WEB_HOME`.
   **Close ×** (sidebar): worktree sessions are destroyed — worktree removed,
   branch force-deleted, changes lost (the confirm dialog is the guard);
   checkout sessions and chats are archived, nothing in git touched.
-  Transcripts always survive. A merge sweep (every `sweepMinutes`, default 10)
-  still reaps CLI-side merges; `autoCleanup: false` disables it.
+  Transcripts always survive; stale-session cleanup is explicit rather than
+  timer-driven.
 
 ## Verification
 
@@ -76,17 +76,18 @@ npm run test:dom       # DOM interaction gate alone
 npm run verify:real    # with ~/.pi/agent: real turn, model, fork, and edit gate
 ```
 
-The DOM suite is a jsdom floor; complete [CHECKLIST.md](../CHECKLIST.md) in a
-real browser because jsdom does not paint pixels. The real server has no auth
-or sandbox and must remain inside a trusted LAN/tailnet/VPN.
+The DOM suite is a jsdom floor; use a real browser for visual and interaction
+validation because jsdom does not paint pixels. The real server has no auth or
+sandbox and must remain inside a trusted LAN/tailnet/VPN.
 
 `POST /api/sessions/:id/name` is intentionally API-only in v1; the UI has no
-rename control. The branch cleanup and sweep endpoints are also API-only.
+rename control. The branch cleanup endpoint is also API-only.
 
 The repository picker scans `$HOME/src` by default. Set `reposRoot` in
 `~/.pi-web-ui/config.json`, use `PI_WEB_REPOS_ROOT`, or type an absolute path
 in the picker to use a different local repository directory. The environment
 variable takes precedence over the config value.
 
-The design (tokens, screens, event contract) is specified in the accompanying
-PLAN.md and design README; the UI is a direct port of the approved prototype.
+The design (tokens, screens, event contract) is preserved in the archived
+[PLAN.md](archive/PLAN.md) and design README; the UI is a direct port of the
+approved prototype.

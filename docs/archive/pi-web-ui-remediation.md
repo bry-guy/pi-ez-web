@@ -1,3 +1,5 @@
+> Superseded — predates workspace modes and streaming locks.
+
 # Pi Web UI remediation implementation plan
 
 Status: accepted with revisions from `~/Downloads/FIXPLAN.md`.

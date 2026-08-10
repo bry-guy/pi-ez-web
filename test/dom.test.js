@@ -71,6 +71,7 @@ async function boot() {
 test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
+  const { applyEvent } = await import("../public/js/api.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
@@ -89,6 +90,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
   assert.equal(root.querySelector(".branch-pop"), null); // does not reappear
+
+  store.state.transcripts.s1 ||= { records: [], streaming: false, seq: -1 };
+  store.state.transcripts.s1.streaming = true;
+  store.notify("transcript");
+  applyEvent({ v: 1, seq: 99, sessionId: "s1", type: "queue_update", followUp: 1 });
+  assert.match(root.querySelector(".composer-hint").textContent, /1 follow-up queued/);
+  applyEvent({ v: 1, seq: 100, sessionId: "s1", type: "turn_end", reason: "done" });
+  assert.equal(store.state.queued.s1, undefined);
   assert.equal(send.disabled, false);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), false);
 

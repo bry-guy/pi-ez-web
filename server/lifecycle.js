@@ -1,16 +1,8 @@
-// Session/workspace lifecycle: explicit close, and the merge sweep.
+// Session/workspace lifecycle: explicit close and merge.
 //
 // Close ≠ discard: closing removes the worktree (working copy) and hides the
 // session, but keeps the git branch (commits stay reachable) and pi's JSONL
 // transcript (pi owns it; "closed" is only a marker in closed.json).
-//
-// The sweep is a job inside the server process, not a daemon: on startup and
-// every sweepMinutes, per project — optionally fetch, find branches merged
-// into the default branch, and reap each one whose worktree is clean and
-// whose session is idle: close session, remove worktree, `git branch -d`
-// (safe delete only). Dirty or mid-turn -> skipped, never auto-deleted.
-// Squash merges are NOT detected (the branch never becomes an ancestor);
-// those take the explicit close path.
 import { execFileSync } from "node:child_process";
 import { loadBindings, loadClosed, loadConfig, saveBindings, saveClosed } from "./config.js";
 import { sessionWorkspace } from "./domain.js";
@@ -32,15 +24,13 @@ export function findProjectByWorkspace(wsPath) {
 //  - worktree session: DESTRUCTIVE — worktree removed (force) and the branch
 //    force-deleted. The UI's confirmation dialog is the guard; throwaway
 //    means throwaway. Transcript always survives (closed is a marker).
-// removeWorktree=false marks closed without touching the working copy (used
-// by the sweep, which removes the worktree once per branch afterwards).
-export async function closeSession(sup, hub, sessionId, { removeWorktree = true } = {}) {
+export async function closeSession(sup, hub, sessionId) {
   if (sup.isStreaming(sessionId)) {
     throw Object.assign(new Error("session_streaming"), { code: "session_streaming" });
   }
   const cwd = await sessionWorkspace(sessionId, sup);
   const found = cwd && findProjectByWorkspace(cwd);
-  if (removeWorktree && found && cwd !== found.project.repoPath) {
+  if (found && cwd !== found.project.repoPath) {
     const branch = Object.entries(found.worktrees).find(([, p]) => p === cwd)?.[0];
     ws.removeWorkspace({ repoPath: found.project.repoPath, workspacePath: cwd, force: true });
     if (branch) {
@@ -105,79 +95,4 @@ export async function mergeSession(sup, hub, sessionId) {
   hub.emit(sessionId, "session_merged", { sessionId, branch, into: target });
   hub.emit(sessionId, "session_meta", { branch: target });
   return { merged: branch, into: target };
-}
-
-function mergedBranches(repoPath, into) {
-  try {
-    return execFileSync("git", ["branch", "--merged", into, "--format=%(refname:short)"],
-      { cwd: repoPath, encoding: "utf8" })
-      .split("\n").map(s => s.trim()).filter(b => b && b !== into);
-  } catch { return []; }
-}
-
-function tryFetch(repoPath) {
-  try {
-    const remotes = execFileSync("git", ["remote"], { cwd: repoPath, encoding: "utf8" }).trim();
-    if (!remotes) return;
-    execFileSync("git", ["fetch", "--prune", "--quiet"], { cwd: repoPath, timeout: 30000 });
-  } catch { /* offline / no auth: sweep proceeds on local refs */ }
-}
-
-// Returns { reaped: [{branch, sessions}], skipped: [{branch, reason}] }.
-export async function sweepProject(sup, hub, project, { fetch = true } = {}) {
-  const reaped = [], skipped = [];
-  if (fetch) tryFetch(project.repoPath);
-  const def = ws.currentBranch(project.repoPath);
-  if (!def) return { reaped, skipped };
-  const worktrees = ws.listWorktrees(project.repoPath);
-  const bindings = loadBindings();
-  const closed = loadClosed();
-
-  for (const branch of mergedBranches(project.repoPath, def)) {
-    const wt = worktrees[branch];
-    if (!wt || wt === project.repoPath) continue;           // no worktree, or it's the checkout
-    if (ws.isDirty(wt)) { skipped.push({ branch, reason: "dirty" }); continue; }
-
-    const bound = (await sup.listSessions(wt))
-      .filter(s => !closed.has(s.id) && (bindings[s.id]?.workspacePath || s.cwd) === wt)
-      .map(s => s.id);
-    for (const [sid, binding] of Object.entries(bindings)) {
-      if (binding?.workspacePath === wt && !closed.has(sid) && !bound.includes(sid)) bound.push(sid);
-    }
-    if (bound.some(id => sup.isStreaming(id))) { skipped.push({ branch, reason: "streaming" }); continue; }
-
-    for (const id of bound) {
-      await closeSession(sup, hub, id, { removeWorktree: false });
-    }
-    try {
-      ws.removeWorkspace({ repoPath: project.repoPath, workspacePath: wt });
-      execFileSync("git", ["branch", "-d", branch], { cwd: project.repoPath }); // safe delete: re-verifies merged
-      reaped.push({ branch, sessions: bound });
-      hub.emit("system", "branch_reaped", { projectId: project.id, branch, sessions: bound });
-    } catch (e) {
-      skipped.push({ branch, reason: e.code || String(e.message || e) });
-    }
-  }
-  return { reaped, skipped };
-}
-
-export async function sweepAll(sup, hub) {
-  const cfg = loadConfig();
-  const out = {};
-  if (cfg.autoCleanup === false) return out;
-  for (const p of cfg.projects) {
-    try { out[p.id] = await sweepProject(sup, hub, p, { fetch: cfg.sweepFetch !== false }); }
-    catch (e) { out[p.id] = { error: String(e.message || e) }; }
-  }
-  return out;
-}
-
-export function startSweeper(sup, hub) {
-  const cfg = loadConfig();
-  const minutes = Number(cfg.sweepMinutes ?? 10);
-  if (cfg.autoCleanup === false || !(minutes > 0)) return null;
-  sweepAll(sup, hub); // once at startup
-  const t = setInterval(() => sweepAll(sup, hub), minutes * 60 * 1000);
-  t.unref(); // a job in the server, not a reason to stay alive
-  return t;
 }

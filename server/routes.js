@@ -7,7 +7,7 @@ import {
   chatsDir, loadBindings, loadConfig, newId, projectMode, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
-import { closeSession, findProjectByWorkspace, mergeSession, sweepProject } from "./lifecycle.js";
+import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 
@@ -57,7 +57,7 @@ export function buildApi(sup) {
   api.get("/events", c =>
     streamSSE(c, async stream => {
       let open = true;
-      const remove = hub.addClient(frame => { if (open) stream.writeln ? stream.write(frame) : stream.write(frame); });
+      const remove = hub.addClient(frame => { if (open) stream.write(frame); });
       stream.onAbort(() => { open = false; remove(); });
       // keepalive
       while (open) {
@@ -216,13 +216,11 @@ export function buildApi(sup) {
 
     // occupied?
     const bindings = loadBindings();
-    for (const wt of [target]) {
-      const bound = await sup.listSessions(wt);
-      const boundHere = bound.filter(s => (bindings[s.id]?.workspacePath || s.cwd) === wt && s.id !== id);
-      const rebound = Object.entries(bindings).find(([sid, binding]) => binding?.workspacePath === wt && sid !== id);
-      const occupier = boundHere[0] || (rebound && { id: rebound[0] });
-      if (occupier) return err(c, 409, "branch_occupied", { bySessionId: occupier.id, byTitle: occupier.firstMessage ? titleOf(occupier) : undefined });
-    }
+    const bound = await sup.listSessions(target);
+    const boundHere = bound.filter(s => (bindings[s.id]?.workspacePath || s.cwd) === target && s.id !== id);
+    const rebound = Object.entries(bindings).find(([sid, binding]) => binding?.workspacePath === target && sid !== id);
+    const occupier = boundHere[0] || (rebound && { id: rebound[0] });
+    if (occupier) return err(c, 409, "branch_occupied", { bySessionId: occupier.id, byTitle: occupier.firstMessage ? titleOf(occupier) : undefined });
 
     await sup.rehome(id, target);
     bindings[id] = { branch, workspacePath: target };
@@ -326,14 +324,6 @@ export function buildApi(sup) {
       if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail } : {});
       throw e;
     }
-  });
-
-  // Manual merge sweep (the periodic sweeper calls the same code).
-  api.post("/projects/:id/sweep", async c => {
-    const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
-    if (!p) return err(c, 404, "no_such_project");
-    const cfg = loadConfig();
-    return c.json(await sweepProject(sup, hub, p, { fetch: cfg.sweepFetch !== false }));
   });
 
   // ---------- workspace cleanup (no daemon: in-server job + endpoint) ----------
