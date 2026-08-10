@@ -32,6 +32,11 @@ export async function newChat() {
 export async function newProjectSession(projectId) {
   const { id } = await api.newProjectSession(projectId);
   await refreshState();
+  const project = store.state.projects.find(p => p.id === projectId);
+  if (project && !findNode(project.sessions, id)) project.sessions.unshift({
+    id, title: "New session", branch: project.branch, workspacePath: project.repoPath,
+    model: store.state.defaultModel, when: "now", streaming: false, children: [],
+  });
   store.state.openTree[projectId] = true;
   selectSession(projectId, id);
 }
@@ -82,7 +87,11 @@ class PiSidebar extends HTMLElement {
       store.set({ confirm: { type: "close", kind: t.dataset.kind, id: t.dataset.id, label: t.dataset.label, branch: t.dataset.branch } });
       return;
     }
-    if (act === "collapse") store.set(s => (mobile() ? { drawerOpen: false } : { railOpen: !s.railOpen }));
+    if (act === "collapse") {
+      e.preventDefault();
+      e.stopPropagation();
+      store.set(mobile() ? { drawerOpen: false } : { railOpen: !store.state.railOpen });
+    }
     else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
     else if (act === "new-project-session") {
       e.stopPropagation();

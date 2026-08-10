@@ -118,6 +118,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   projectPlus.click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(store.state.sessionId, "s2");
+  assert.ok(root.querySelector("[data-id='s2']"));
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -134,9 +135,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector(".model-option[data-model='mock/smart']").click();
   assert.equal(store.state.model, "mock/smart");
 
-  const sessionRow = root.querySelector("[data-act='session-row']");
+  const sessionRow = root.querySelector("[data-id='s1']");
   sessionRow.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   assert.equal(store.state.sessionId, "s1");
+
+  const sidebar = root.querySelector("pi-sidebar");
+  sidebar.querySelector("[data-act='collapse']").click();
+  assert.equal(store.state.railOpen, false);
+  assert.equal(sidebar.dataset.layout, "mini");
+  sidebar.querySelector("[data-act='collapse']").click();
+  assert.equal(store.state.railOpen, true);
+  assert.equal(sidebar.dataset.layout, "rail");
 
   dom.window.close();
 });
