@@ -12,7 +12,10 @@ const state = {
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
     branches: ["main"], worktrees: { main: "/tmp/demo" }, occupied: {}, updated: "now",
-    sessions: [{ id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", children: [] }],
+    sessions: [
+      { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
+      { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
+    ],
   }],
   chats: [],
 };
@@ -71,6 +74,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
+
+  store.state.transcripts.sibling = { records: [], streaming: true, seq: -1 };
+  store.notify("transcript");
+  const send = root.querySelector(".send-btn");
+  assert.equal(send.disabled, true);
+  assert.match(root.querySelector(".composer-hint").textContent, /branch busy — Sibling session is taking a turn/);
+  assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
+  store.state.transcripts.sibling.streaming = false;
+  store.notify("transcript");
+  assert.equal(send.disabled, false);
+  assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), false);
 
   const search = root.querySelector(".rail-search");
   search.focus();

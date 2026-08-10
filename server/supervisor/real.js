@@ -62,7 +62,7 @@ export class RealSupervisor {
 
   _boundCwd(id, fallback) {
     const bindings = loadBindings();
-    return bindings[id] || this.live.get(id)?.cwd || this.info.get(id)?.cwd || fallback || null;
+    return bindings[id]?.workspacePath || this.live.get(id)?.cwd || this.info.get(id)?.cwd || fallback || null;
   }
 
   async _discover(id) {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, loadBindings, loadConfig, newId, reposRoot, resolvePath, saveBindings, saveConfig, slug, worktreeRoot,
+  chatsDir, loadBindings, loadConfig, newId, projectMode, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession, sweepProject } from "./lifecycle.js";
@@ -13,6 +13,16 @@ import * as ws from "./workspaces.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
+
+function suggestedSessionBranch(repoPath, firstMessage) {
+  const base = sessionSlug(firstMessage);
+  const branches = ws.listBranches(repoPath);
+  if (!branches.includes(base)) return base;
+  for (let n = 1; ; n++) {
+    const candidate = `${base}.${n}`;
+    if (!branches.includes(candidate)) return candidate;
+  }
+}
 
 export function buildApi(sup) {
   const api = new Hono();
@@ -116,6 +126,24 @@ export function buildApi(sup) {
       hub.emit(id, "workspace_busy", { workspacePath: cwd, bySessionId: busyBy });
       return err(c, 409, "workspace_busy", { bySessionId: busyBy });
     }
+
+    const bindings = loadBindings();
+    if (!bindings[id]) {
+      const found = cwd && findProjectByWorkspace(cwd);
+      if (found && projectMode(found.project) === "auto" && cwd === found.project.repoPath) {
+        const occupier = Object.entries(bindings).find(([sessionId, binding]) =>
+          sessionId !== id && binding?.workspacePath === found.project.repoPath);
+        if (occupier) {
+          const meta = await sup.meta(occupier[0]);
+          const suggestedBranch = suggestedSessionBranch(found.project.repoPath, text.trim());
+          return err(c, 409, "checkout_occupied", {
+            suggestedBranch, bySessionId: occupier[0], byTitle: titleOf(meta || { firstMessage: "another session" }),
+          });
+        }
+        bindings[id] = { branch: ws.currentBranch(found.project.repoPath), workspacePath: found.project.repoPath };
+        saveBindings(bindings);
+      }
+    }
     await sup.message(id, text.trim(), mode);
     return c.json({ ok: true });
   });
@@ -187,14 +215,14 @@ export function buildApi(sup) {
     const bindings = loadBindings();
     for (const wt of [target]) {
       const bound = await sup.listSessions(wt);
-      const boundHere = bound.filter(s => (bindings[s.id] || s.cwd) === wt && s.id !== id);
-      const rebound = Object.entries(bindings).find(([sid, p]) => p === wt && sid !== id);
+      const boundHere = bound.filter(s => (bindings[s.id]?.workspacePath || s.cwd) === wt && s.id !== id);
+      const rebound = Object.entries(bindings).find(([sid, binding]) => binding?.workspacePath === wt && sid !== id);
       const occupier = boundHere[0] || (rebound && { id: rebound[0] });
       if (occupier) return err(c, 409, "branch_occupied", { bySessionId: occupier.id, byTitle: occupier.firstMessage ? titleOf(occupier) : undefined });
     }
 
     await sup.rehome(id, target);
-    bindings[id] = target;
+    bindings[id] = { branch, workspacePath: target };
     saveBindings(bindings);
     hub.emit(id, "session_meta", { branch });
     return c.json({ ok: true, branch, workspacePath: target });
@@ -213,10 +241,13 @@ export function buildApi(sup) {
     const parentBranch = Object.entries(worktrees).find(([, p]) => p === cwd)?.[0] || ws.currentBranch(cwd);
 
     let branch, workspacePath;
+    const forkBranchBase = projectMode(project) === "auto"
+      ? sessionSlug((await sup.transcript(id)).find(record => record.role === "user")?.text)
+      : undefined;
     try {
       ({ branch, workspacePath } = ws.forkWorkspace({
         repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
-        parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath),
+        parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath), forkBranchBase,
       }));
     } catch (e) {
       if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
@@ -247,6 +278,13 @@ export function buildApi(sup) {
     const { cmd } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
+    // A bang is a workspace operation too; do not let it mutate a workspace
+    // while another session has an active agent turn there.
+    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
+    if (busyBy) {
+      hub.emit(id, "workspace_busy", { workspacePath: cwd, bySessionId: busyBy });
+      return err(c, 409, "workspace_busy", { bySessionId: busyBy });
+    }
     const bangId = newId("bg");
     hub.emit(id, "bang_start", { bangId, cmd });
     const t0 = Date.now();

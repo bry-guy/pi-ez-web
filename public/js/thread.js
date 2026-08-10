@@ -262,7 +262,7 @@ class PiComposer extends HTMLElement {
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || !text) return;
+    if (!id || !text || store.workspaceBusy(id)) return;
     this.ta.value = "";
     store.state.draft = "";
     if (text.startsWith("!")) {
@@ -274,10 +274,15 @@ class PiComposer extends HTMLElement {
     const mode = forcedMode || (streaming ? "steer" : "prompt");
     try {
       await api.message(id, text, mode);
-      delete store.state.busy[id];
     } catch (err) {
-      if (err.error === "workspace_busy") { store.state.busy[id] = err.bySessionId; store.notify("transcript"); }
-      else store.setError(`Send failed: ${err.error || err.message || err}`);
+      if (err.error === "workspace_busy") {
+        await refreshState().catch(refreshErr => store.setError(`Could not refresh state: ${refreshErr.message || refreshErr}`));
+      } else if (err.error === "checkout_occupied") {
+        store.set({ draft: text, confirm: {
+          type: "bind", id, text, mode, branch: err.suggestedBranch,
+          fromBranch: store.project()?.branch || "main", byTitle: err.byTitle || "another session",
+        } });
+      } else store.setError(`Send failed: ${err.error || err.message || err}`);
     }
   }
 
@@ -285,28 +290,19 @@ class PiComposer extends HTMLElement {
     const id = store.activeKey();
     const t = store.transcript();
     const p = store.project();
-    const busyBy = store.state.busy[id];
+    const lock = store.workspaceBusy(id);
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
     const error = store.state.error;
-    const owner = busyBy && findSessionTitle(busyBy);
-    this.hint.classList.toggle("busy", !!busyBy);
+    this.hint.classList.toggle("busy", !!lock);
     this.hint.classList.toggle("error", !!error);
-    this.hint.textContent = error || (busyBy
-      ? `branch busy in ${owner || "another session"}`
+    this.hint.textContent = error || (lock
+      ? `branch busy — ${lock.title} is taking a turn`
       : t.streaming ? "Enter steers · Alt+Enter queues a follow-up" : "Enter to send · Shift+Enter for a new line");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     this.sendBtn.classList.toggle("hidden", t.streaming);
-    this.sendBtn.disabled = !!busyBy;
+    this.sendBtn.disabled = !!lock;
   }
-}
-
-function findSessionTitle(id) {
-  for (const p of store.state.projects) {
-    const node = store.findSession(id, p.sessions);
-    if (node) return node.title;
-  }
-  return store.state.chats.find(chat => chat.id === id)?.title || null;
 }
 
 customElements.define("pi-thread", PiThread);

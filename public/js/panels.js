@@ -48,6 +48,7 @@ class PiProjects extends HTMLElement {
         <div class="card-meta">
           <span>${this.count(p.sessions)} sessions</span>
           <span>${this.branches(p.sessions).size || 1} branches</span>
+          <span>${esc(p.mode || "manual")} mode</span>
           <span>${esc(p.updated || "")}</span>
         </div>
       </div>`).join("");
@@ -96,8 +97,13 @@ class PiSettings extends HTMLElement {
     }
   }
   render() {
+    const invalidModes = store.state.projects.filter(project => project.modeInvalid);
+    const modeWarning = invalidModes.length
+      ? `<div class="settings-warning">Invalid project mode for ${esc(invalidModes.map(project => project.name).join(", "))}; using manual mode. Edit config.json to set <span class="settings-mono">mode: manual</span> or <span class="settings-mono">mode: auto</span>.</div>`
+      : "";
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
+      ${modeWarning}
       <div class="settings-card">
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Model</div><div class="sr-sub">Used for new sessions.</div></div>
@@ -300,6 +306,13 @@ class PiConfirm extends HTMLElement {
     const c = store.state.confirm;
     if (!c) return;
     try {
+      if (c.type === "bind") {
+        await api.branch(c.id, c.branch, true);
+        await refreshState();
+        store.set({ confirm: null, draft: c.text });
+        document.querySelector("pi-composer")?.send(c.mode);
+        return;
+      }
       if (c.type === "merge") await api.merge(c.id);
       else await api.close(c.id);
       store.set({ confirm: null });
@@ -309,6 +322,7 @@ class PiConfirm extends HTMLElement {
         workspace_dirty: "worktree has uncommitted changes — commit them first",
         checkout_dirty: "the project checkout has uncommitted changes",
         session_streaming: "session is mid-turn — stop it first",
+        branch_occupied: "that branch is already in use",
       };
       store.set(s => ({ confirm: { ...s.confirm, error: msgs[err.error] || err.error || "failed" } }));
     }
@@ -320,13 +334,16 @@ class PiConfirm extends HTMLElement {
     const p = store.project();
     const target = p?.branch || "main";
     const isMerge = c.type === "merge";
-    const title = isMerge ? "Merge branch" : c.kind === "chat" ? "Close chat" : "Close session";
-    const body = isMerge
-      ? `Merge ${esc(c.branch)} into ${esc(target)}. The session stays open and continues on ${esc(target)}.`
-      : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
-    const warn = !isMerge && c.branch && c.branch !== target
+    const isBind = c.type === "bind";
+    const title = isBind ? "Continue on a new branch?" : isMerge ? "Merge branch" : c.kind === "chat" ? "Close chat" : "Close session";
+    const body = isBind
+      ? `${esc(c.fromBranch || target)} is in use by <strong>${esc(c.byTitle || "another session")}</strong>. Continue on ${esc(c.branch)}?`
+      : isMerge
+        ? `Merge ${esc(c.branch)} into ${esc(target)}. The session stays open and continues on ${esc(target)}.`
+        : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
+    const warn = !isBind && !isMerge && c.branch && c.branch !== target
       ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
-    const cta = isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
+    const cta = isBind ? "Continue" : isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
     this.innerHTML = `<div class="confirm-scrim">
       <div class="confirm-modal">
         <div class="confirm-title">${title}</div>
@@ -335,7 +352,7 @@ class PiConfirm extends HTMLElement {
         ${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}
         <div class="confirm-actions">
           <button class="confirm-back" data-act="cancel">Go back</button>
-          <button class="confirm-cta ${isMerge ? "accent" : "danger"}" data-act="go">${cta}</button>
+          <button class="confirm-cta ${isMerge || isBind ? "accent" : "danger"}" data-act="go">${cta}</button>
         </div>
       </div>
     </div>`;

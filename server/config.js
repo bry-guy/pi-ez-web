@@ -1,5 +1,5 @@
 // Config + app-home paths. App state discipline: config.json (declarative,
-// user- and UI-editable) + bindings.json (session -> workspace overrides).
+// user- and UI-editable) + bindings.json (session -> { branch, workspacePath } overrides).
 // Everything else is discovered live or owned by pi.
 import fs from "node:fs";
 import os from "node:os";
@@ -9,7 +9,7 @@ export function appHome() {
   return process.env.PI_WEB_HOME || path.join(os.homedir(), ".pi-web-ui");
 }
 export const chatsDir = () => path.join(appHome(), "chats");
-export const worktreeRootDefault = () => path.join(appHome(), "worktrees");
+export const worktreeRootDefault = () => path.join(os.homedir(), ".pi", "worktrees");
 const configPath = () => path.join(appHome(), "config.json");
 const bindingsPath = () => path.join(appHome(), "bindings.json");
 
@@ -68,10 +68,33 @@ export function saveClosed(set) {
 }
 
 export function loadBindings() {
-  return readJson(bindingsPath(), {});
+  const bindings = readJson(bindingsPath(), {});
+  let migrated = false;
+  for (const [sessionId, value] of Object.entries(bindings)) {
+    if (typeof value === "string") {
+      bindings[sessionId] = { branch: null, workspacePath: value };
+      migrated = true;
+    }
+  }
+  if (migrated) saveBindings(bindings);
+  return bindings;
 }
 export function saveBindings(b) {
   writeJson(bindingsPath(), b);
+}
+
+export function projectMode(project) {
+  return project?.mode === "auto" || project?.mode === "manual" ? project.mode : "manual";
+}
+
+export function sessionSlug(firstMessage) {
+  const slug = String(firstMessage || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/g, "");
+  return `session/${slug || "chat"}`;
 }
 
 export function slug(s) {

@@ -3,20 +3,47 @@
 // (bindings.json overrides for re-homed sessions).
 import fs from "node:fs";
 import path from "node:path";
-import { chatsDir, loadBindings, loadClosed, loadConfig, worktreeRoot } from "./config.js";
+import { chatsDir, loadBindings, loadClosed, loadConfig, projectMode, saveBindings, worktreeRoot } from "./config.js";
 import * as ws from "./workspaces.js";
 
 export async function sessionWorkspace(sessionId, sup) {
   const bindings = loadBindings();
-  if (bindings[sessionId]) return bindings[sessionId];
+  if (bindings[sessionId]?.workspacePath) return bindings[sessionId].workspacePath;
   const meta = await sup.meta(sessionId);
   return meta?.cwd || null;
+}
+
+function pathKey(value) {
+  try { return path.resolve(value); } catch { return String(value || ""); }
+}
+
+function reconcileBindings(cfg, project, worktrees, bindings) {
+  const currentPaths = new Set([project.repoPath, ...Object.values(worktrees)].map(pathKey));
+  const otherPaths = new Set();
+  for (const candidate of cfg.projects) {
+    if (candidate.id === project.id) continue;
+    otherPaths.add(pathKey(candidate.repoPath));
+    try {
+      for (const workspacePath of Object.values(ws.listWorktrees(candidate.repoPath))) otherPaths.add(pathKey(workspacePath));
+    } catch { /* malformed or removed project repo */ }
+  }
+  let changed = false;
+  for (const [sessionId, binding] of Object.entries(bindings)) {
+    const workspacePath = binding?.workspacePath;
+    const key = pathKey(workspacePath);
+    if (!workspacePath || (!currentPaths.has(key) && !otherPaths.has(key))) {
+      delete bindings[sessionId];
+      changed = true;
+    }
+  }
+  if (changed) saveBindings(bindings);
 }
 
 export async function projectState(project, sup) {
   const cfg = loadConfig();
   const bindings = loadBindings();
   const worktrees = ws.listWorktrees(project.repoPath); // branch -> path
+  reconcileBindings(cfg, project, worktrees, bindings);
   const pathToBranch = Object.fromEntries(Object.entries(worktrees).map(([b, p]) => [p, b]));
 
   // Discover all sessions first, including closed nodes. Closed sessions stay
@@ -26,7 +53,7 @@ export async function projectState(project, sup) {
   const discovered = [];
   for (const wt of Object.values(worktrees)) {
     for (const s of await sup.listSessions(wt)) {
-      discovered.push({ ...s, cwd: bindings[s.id] || s.cwd, closed: closed.has(s.id) });
+      discovered.push({ ...s, cwd: bindings[s.id]?.workspacePath || s.cwd, closed: closed.has(s.id) });
     }
   }
   const all = discovered.filter(s => !s.closed);
@@ -52,6 +79,7 @@ export async function projectState(project, sup) {
     title: titleOf(n),
     branch: pathToBranch[n.cwd] || null,
     workspacePath: n.cwd || null,
+    streaming: sup.isStreaming(n.id),
     model: n.model || null,
     when: rel(n.modified),
     children: n.children.sort(byRecency).map(toNode),
@@ -68,6 +96,8 @@ export async function projectState(project, sup) {
     sessions: roots.sort(byRecency).map(toNode),
     updated: all.length ? rel(all.map(s => s.modified).sort().pop()) : "—",
     worktreeRoot: worktreeRoot(cfg),
+    mode: projectMode(project),
+    modeInvalid: project.mode !== undefined && project.mode !== "manual" && project.mode !== "auto",
   };
 }
 
@@ -89,7 +119,7 @@ export async function chatsState(sup) {
   const list = discovered.filter(s => !closed.has(s.id));
   return list
     .sort((a, b) => String(b.modified).localeCompare(String(a.modified)))
-    .map(s => ({ id: s.id, title: titleOf(s), when: rel(s.modified), model: s.model || null }));
+    .map(s => ({ id: s.id, title: titleOf(s), when: rel(s.modified), streaming: sup.isStreaming(s.id), model: s.model || null }));
 }
 
 export function titleOf(s) {

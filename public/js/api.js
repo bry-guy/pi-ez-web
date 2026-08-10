@@ -45,6 +45,20 @@ export async function refreshState() {
     reposRootSource: s.reposRootSource || "default",
     model: active?.model || s.defaultModel || null,
   });
+  for (const project of s.projects || []) seedStreaming(project.sessions);
+  for (const chat of s.chats || []) {
+    const transcript = store.state.transcripts[chat.id] ||= { records: [], streaming: false, seq: -1 };
+    transcript.streaming = !!chat.streaming;
+  }
+  store.notify("transcript");
+}
+
+function seedStreaming(nodes) {
+  for (const node of nodes || []) {
+    const transcript = store.state.transcripts[node.id] ||= { records: [], streaming: false, seq: -1 };
+    transcript.streaming = !!node.streaming;
+    seedStreaming(node.children);
+  }
 }
 
 function findSessionInState(state, id) {
@@ -206,13 +220,10 @@ export function applyEvent(evt, replay = false) {
       }
       for (const r of recs) if (r.role === "assistant" && r.streaming) delete r.streaming;
       if (evt.reason === "errored" && evt.error) recs.push({ id: "err" + evt.seq, role: "assistant", text: "⚠ " + evt.error });
-      for (const [sessionId, owner] of Object.entries(store.state.busy)) {
-        if (owner === evt.sessionId) delete store.state.busy[sessionId];
-      }
       break;
     }
     case "workspace_busy":
-      store.state.busy[evt.sessionId] = evt.bySessionId;
+      tOf(evt.bySessionId).streaming = true;
       break;
     case "session_created":
     case "session_forked":

@@ -36,12 +36,13 @@ scripts/verify-real.js  credentialed end-to-end smoke
 CHECKLIST.md            real-browser click-through gate
 ```
 
-State lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`, `chats/`,
-`worktrees/`); pi owns transcripts and auth under `~/.pi/agent`. New plain
-chats use private scratch directories under `chats/`; legacy sessions at the
-shared `chats/` cwd remain discoverable. Scratch directories are retained when
-a chat is closed and may be pruned manually. Override the app home with
-`PI_WEB_HOME`.
+Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
+`chats/`); project worktrees default to the Pi-adjacent `~/.pi/worktrees`
+(and can be overridden with `worktreeRoot`). Pi owns transcripts and auth under
+`~/.pi/agent`. New plain chats use private scratch directories under `chats/`;
+legacy sessions at the shared `chats/` cwd remain discoverable. Scratch
+directories are retained when a chat is closed and may be pruned manually.
+Override the app home with `PI_WEB_HOME`.
 
 ## Invariants
 

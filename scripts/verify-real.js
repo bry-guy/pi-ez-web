@@ -9,6 +9,8 @@ import path from "node:path";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-real-"));
 process.env.PI_WEB_HOME = path.join(tmp, "home");
+fs.mkdirSync(process.env.PI_WEB_HOME, { recursive: true });
+fs.writeFileSync(path.join(process.env.PI_WEB_HOME, "config.json"), JSON.stringify({ worktreeRoot: path.join(tmp, "worktrees") }));
 delete process.env.PI_WEB_MODE;
 
 const { startServer } = await import("../server/index.js");

@@ -123,6 +123,8 @@ aside.rail {
 .row.active { background: var(--accent-soft); color: var(--text); font-weight: 500; }
 .row .caret { font-family: var(--mono); font-size: 10px; width: 12px; flex: 0 0 12px; color: var(--faint); }
 .row .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pi-orange); flex: 0 0 auto; opacity: 0; }
+.row.streaming .live-dot { opacity: 1; animation: piBlink 1.05s steps(1) infinite; }
 .row .count, .row .when { font-family: var(--mono); font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .row .when { font-size: 10.5px; }
 .row-add { border: 0; background: transparent; padding: 1px 4px; line-height: 1; cursor: pointer; flex: 0 0 auto; }
@@ -381,6 +383,10 @@ header.bar {
 .card-meta { display: flex; gap: 14px; margin-top: 11px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 
 /* ---------- settings ---------- */
+.settings-warning {
+  margin-top: 18px; padding: 10px 12px; border: 1px solid var(--orange); border-radius: 9px;
+  background: var(--orange-soft); color: var(--orange); font-size: 12px; line-height: 1.5;
+}
 .settings-card { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; overflow: visible; margin-top: 18px; }
 .settings-row { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .settings-row:last-child { border-bottom: 0; }

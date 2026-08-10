@@ -100,7 +100,7 @@ export async function mergeSession(sup, hub, sessionId) {
   execFileSync("git", ["branch", "-d", branch], { cwd: project.repoPath });
   await sup.rehome(sessionId, project.repoPath);
   const bindings = loadBindings();
-  bindings[sessionId] = project.repoPath;
+  bindings[sessionId] = { branch: target, workspacePath: project.repoPath };
   saveBindings(bindings);
   hub.emit(sessionId, "session_merged", { sessionId, branch, into: target });
   hub.emit(sessionId, "session_meta", { branch: target });
@@ -139,10 +139,10 @@ export async function sweepProject(sup, hub, project, { fetch = true } = {}) {
     if (ws.isDirty(wt)) { skipped.push({ branch, reason: "dirty" }); continue; }
 
     const bound = (await sup.listSessions(wt))
-      .filter(s => !closed.has(s.id) && (bindings[s.id] || s.cwd) === wt)
+      .filter(s => !closed.has(s.id) && (bindings[s.id]?.workspacePath || s.cwd) === wt)
       .map(s => s.id);
-    for (const [sid, p] of Object.entries(bindings)) {
-      if (p === wt && !closed.has(sid) && !bound.includes(sid)) bound.push(sid);
+    for (const [sid, binding] of Object.entries(bindings)) {
+      if (binding?.workspacePath === wt && !closed.has(sid) && !bound.includes(sid)) bound.push(sid);
     }
     if (bound.some(id => sup.isStreaming(id))) { skipped.push({ branch, reason: "streaming" }); continue; }
 

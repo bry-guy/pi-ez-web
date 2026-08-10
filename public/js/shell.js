@@ -114,10 +114,12 @@ class PiSidebar extends HTMLElement {
       const kids = n.children.length > 0;
       const open = !!store.state.openTree[n.id];
       const sel = store.state.sessionId === n.id && !store.state.chatId && store.state.view === "chat";
+      const streaming = store.transcript(n.id).streaming;
       out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
-        <div class="row ${sel ? "active" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
+        <div class="row ${sel ? "active " : ""}${streaming ? "streaming" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
           <span class="caret">${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
+          <span class="live-dot" aria-label="Streaming"></span>
           <button class="row-close" data-act="close-row" data-kind="session" data-id="${esc(n.id)}"
             data-label="${esc(n.title)}" data-branch="${esc(n.branch || "")}" title="Close session">×</button>
         </div></div>`);
@@ -285,18 +287,20 @@ class PiHeader extends HTMLElement {
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const branch = inProject ? this.sessionBranch() : null;
     const streaming = store.transcript().streaming;
+    const workspaceLock = inProject ? store.workspaceBusy(store.state.sessionId) : null;
+    const blocked = streaming || !!workspaceLock;
 
     const showMerge = inProject && branch && branch !== p.branch;
     const branchChip = inProject && branch ? `
       <div class="bar-sub">
         <span class="repo">${esc(p.name)}</span><span class="dot">·</span>
-        <button class="branch-chip" data-act="branch-menu" title="Switch branch" ${streaming ? "disabled" : ""}>
+        <button class="branch-chip" data-act="branch-menu" title="Switch branch" ${blocked ? "disabled" : ""}>
           <span class="bname">${esc(branch)}</span><span class="bcaret">▾</span>
         </button>
-        ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge this branch" ${streaming ? "disabled" : ""}>merge</button>` : ""}
+        ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge this branch" ${blocked ? "disabled" : ""}>merge</button>` : ""}
       </div>` : "";
 
-    const pop = inProject && s.branchMenuOpen ? this.popover(p, branch) : "";
+    const pop = inProject && s.branchMenuOpen && !blocked ? this.popover(p, branch) : "";
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${s.filesOpen ? "»" : "«"}</button>` : "";
@@ -325,12 +329,13 @@ class PiHeader extends HTMLElement {
     const rows = p.branches.map(b => {
       const occ = p.occupied[b];
       const occupiedByOther = occ && occ.sessionId !== store.state.sessionId;
+      const occStreaming = occupiedByOther && store.transcript(occ.sessionId).streaming;
       const cls = ["branch-row", b === current ? "current" : "", occupiedByOther ? "occupied" : ""].join(" ");
       return `<div class="${cls}" ${occupiedByOther ? "" : `role="button" tabindex="0" data-act="switch-branch" data-branch="${esc(b)}"`}
         title="${occupiedByOther ? "in use by " + esc(occ.title) : ""}">
         <span class="check">${b === current ? "✓" : ""}</span>
         <span class="bn">${esc(b)}</span>
-        <span class="bm">${occupiedByOther ? "in use" : (b === p.branch ? "default" : "")}</span>
+        <span class="bm">${occupiedByOther ? (occStreaming ? "in use · streaming" : "in use") : (b === p.branch ? "default" : "")}</span>
       </div>`;
     }).join("");
     return `

@@ -27,6 +27,8 @@ before(async () => {
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   git(repo, "add", "-A"); git(repo, "commit", "-m", "init");
 
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ worktreeRoot: path.join(home, "worktrees") }));
   process.env.PI_WEB_HOME = home;
   process.env.PI_WEB_MODE = "mock";
   process.env.PI_WEB_MOCK_THINK_MS = "120";

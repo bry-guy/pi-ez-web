@@ -2,6 +2,13 @@
 // section. Transcripts are cached per session and fed by SSE.
 export const CONTRACT_VERSION = 1;
 
+function* iterateSessions(nodes = []) {
+  for (const node of nodes) {
+    yield node;
+    yield* iterateSessions(node.children || []);
+  }
+}
+
 export const store = {
   state: {
     view: "chat",            // chat | projects | settings
@@ -15,7 +22,7 @@ export const store = {
     openDirs: {},
     branchMenuOpen: false,
     branchError: null,
-    confirm: null,          // { type: "merge"|"close", kind, id, label, branch, error? }
+    confirm: null,          // { type: "merge"|"close"|"bind", id, branch, error? }
     filesOpen: false,
     repoPickerOpen: false,
     query: "",
@@ -39,7 +46,6 @@ export const store = {
     files: [],
     filesContext: null,
     transcripts: {},         // sessionId -> { records, streaming, seq }
-    busy: {},                // sessionId -> bySessionId (workspace_busy)
   },
   listeners: new Set(),
   set(patch) {
@@ -76,6 +82,26 @@ export const store = {
       if (n.id === id) return n;
       const r = this.findSession(id, n.children);
       if (r) return r;
+    }
+    return null;
+  },
+  findAnySession(id) {
+    for (const project of this.state.projects) {
+      const node = this.findSession(id, project.sessions);
+      if (node) return node;
+    }
+    return this.state.chats.find(chat => chat.id === id) || null;
+  },
+  workspaceBusy(id) {
+    const me = this.findAnySession(id);
+    const workspacePath = me?.workspacePath;
+    if (!workspacePath) return null;
+    for (const project of this.state.projects) {
+      for (const node of iterateSessions(project.sessions)) {
+        if (node.id !== id && node.workspacePath === workspacePath && this.transcript(node.id).streaming) {
+          return { id: node.id, title: node.title };
+        }
+      }
     }
     return null;
   },

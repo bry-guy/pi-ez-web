@@ -114,10 +114,14 @@ export function removeWorkspace({ repoPath, workspacePath, force = false }) {
 // Fork: new branch + worktree from the parent workspace's HEAD. Dirty state
 // may be transferred from an app-owned worktree, but the user's checkout is
 // sacred and is rejected before any stash mutation.
-export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches }) {
+export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase }) {
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
   let n = 1, branch;
-  do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));
+  if (forkBranchBase) {
+    do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));
+  } else {
+    do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));
+  }
 
   const dirty = isDirty(parentWorkspace);
   const isCheckout = path.resolve(parentWorkspace) === path.resolve(repoPath);
