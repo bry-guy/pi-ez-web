@@ -79,5 +79,10 @@ or sandbox and must remain inside a trusted LAN/tailnet/VPN.
 `POST /api/sessions/:id/name` is intentionally API-only in v1; the UI has no
 rename control. The branch cleanup and sweep endpoints are also API-only.
 
+The repository picker scans `$HOME/src` by default. Set `reposRoot` in
+`~/.pi-web-ui/config.json`, use `PI_WEB_REPOS_ROOT`, or type an absolute path
+in the picker to use a different local repository directory. The environment
+variable takes precedence over the config value.
+
 The design (tokens, screens, event contract) is specified in the accompanying
 PLAN.md and design README; the UI is a direct port of the approved prototype.

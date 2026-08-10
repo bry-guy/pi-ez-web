@@ -35,13 +35,25 @@ export function listBranches(repoPath) {
 // configured project paths, session cwd values, and discovered worktrees still
 // compare equal across platforms.
 function logicalWorktreePath(repoPath, discoveredPath) {
-  const logicalParent = path.dirname(path.resolve(repoPath));
+  const logicalRepo = path.resolve(repoPath);
   try {
-    const realParent = fs.realpathSync(logicalParent);
+    // On macOS /var is a symlink to /private/var. Git reports the real spelling
+    // even for worktrees outside the repository, so find the highest aliased
+    // ancestor and translate any discovered path beneath it back to the user's
+    // logical spelling.
+    let logicalAlias = null;
+    let realAlias = null;
+    for (let current = logicalRepo; ; current = path.dirname(current)) {
+      const real = fs.realpathSync(current);
+      if (real !== current) { logicalAlias = current; realAlias = real; }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+    }
+    if (!logicalAlias) return discoveredPath;
     const realPath = fs.realpathSync(discoveredPath);
-    const relative = path.relative(realParent, realPath);
-    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-      return path.join(logicalParent, relative);
+    const relative = path.relative(realAlias, realPath);
+    if (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)) {
+      return path.join(logicalAlias, relative);
     }
   } catch { /* keep Git's path when it cannot be resolved */ }
   return discoveredPath;

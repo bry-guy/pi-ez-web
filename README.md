@@ -18,7 +18,7 @@ These previews come from [design revision 2](design/revision-2/design/pi-app-sta
 
 ## Use
 
-Run the mock UI without Pi credentials:
+Run the mock UI without Pi credentials — **`npm run dev` is a scripted mock**: replies are canned (prefixed `mock:`), the model picker shows `Mock Fast` / `Mock Smart`, and nothing reaches a real agent. It exists to exercise the UI and event contract only:
 
 ```sh
 npm install
@@ -26,12 +26,15 @@ npm run dev
 # open http://localhost:3141
 ```
 
-Run against Pi:
+Run against the real Pi agent (requires `~/.pi/agent` to be configured):
 
 ```sh
 npm install @earendil-works/pi-coding-agent
+npm run verify:real   # sanity-check SDK + credentials
 npm start
 ```
+
+The Settings screen shows which mode the server is running in. Branch switching, the file tree, and forking appear only inside a **project** session — connect a repo first (the `+` next to PROJECTS, or the Projects screen). Plain chats intentionally have none of those affordances.
 
 ## Install and configure
 
@@ -42,11 +45,12 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
   "projects": [
     { "id": "my-project", "name": "my-project", "repoPath": "/path/to/my-project" }
   ],
+  "reposRoot": "~/src",
   "defaultModel": "provider/modelId"
 }
 ```
 
-Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change the application state directory. Pi owns session transcripts; pi-ez-web stores only its small configuration and workspace bindings. The model picker is backed by Pi's available model runtime; `defaultModel` may be set to a `provider/modelId` reference.
+Use `PORT` to change the HTTP port, `PI_WEB_HOME` to change the application state directory, and `PI_WEB_REPOS_ROOT` to override the repository scan root (for example, `PI_WEB_REPOS_ROOT=/Users/brain/dev mise start`). You can set the persistent `reposRoot` value in `~/.pi-web-ui/config.json` instead; the default is `$HOME/src`. The project picker also accepts an absolute or `~/...` repository path directly. Pi owns session transcripts; pi-ez-web stores only its small configuration and workspace bindings. The model picker is backed by Pi's available model runtime; `defaultModel` may be set to a `provider/modelId` reference.
 
 ## Trust boundary
 

@@ -148,6 +148,86 @@ class PiThread extends HTMLElement {
   }
 }
 
+/* ---------------- model picker ---------------- */
+class PiModelPicker extends HTMLElement {
+  connectedCallback() {
+    this.open = false;
+    this.mode = this.dataset.mode === "default" ? "default" : "session";
+    this.onDocumentPointer = e => {
+      if (this.open && !this.contains(e.target)) this.close();
+    };
+    document.addEventListener("pointerdown", this.onDocumentPointer);
+    this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => this.onKeyDown(e));
+    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.render();
+  }
+  disconnectedCallback() {
+    this.unsub?.();
+    document.removeEventListener("pointerdown", this.onDocumentPointer);
+  }
+  current() {
+    return this.mode === "default" ? store.state.defaultModel : store.state.model;
+  }
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    this.render();
+  }
+  onKeyDown(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.close();
+      this.querySelector("button")?.focus();
+    }
+  }
+  onClick(e) {
+    const toggle = e.target.closest("[data-model-toggle]");
+    if (toggle) {
+      this.open = !this.open;
+      this.render();
+      if (this.open) this.querySelector(".model-option")?.focus();
+      return;
+    }
+    const option = e.target.closest("[data-model]");
+    if (option) {
+      void this.choose(option.dataset.model);
+    }
+  }
+  async choose(id) {
+    const previous = this.current();
+    this.open = false;
+    store.set(this.mode === "default" ? { defaultModel: id } : { model: id });
+    try {
+      if (this.mode === "default") await api.settings(id);
+      else if (store.activeKey()) await api.setModel(store.activeKey(), id);
+    } catch (err) {
+      store.set(this.mode === "default" ? { defaultModel: previous } : { model: previous });
+      store.setError(err.error === "model_unavailable" ? "That model is unavailable." : `Model change failed: ${err.message || err}`);
+    }
+  }
+  render() {
+    const current = this.current();
+    const model = store.state.models.find(m => m.id === current);
+    const variant = this.dataset.variant === "settings" ? "settings-chip" : "model-chip";
+    const options = store.state.models.map(m => `
+      <button class="model-option ${m.id === current ? "current" : ""}" role="option"
+        aria-selected="${m.id === current}" data-model="${esc(m.id)}">
+        <span class="model-option-main">${esc(m.label || m.id)}</span>
+        <span class="model-option-meta">${esc(m.provider || m.id.split("/")[0] || "")}</span>
+        ${m.id === current ? `<span class="model-option-check">✓</span>` : ""}
+      </button>`).join("");
+    this.innerHTML = `<div class="model-picker">
+      <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-expanded="${this.open}"
+        title="Choose model">${esc(model?.label || current || "default")} <span class="model-chip-caret">▾</span></button>
+      ${this.open ? `<div class="model-popover" role="dialog" aria-label="Choose model">
+        <div class="model-popover-head">Choose model</div>
+        <div class="model-list" role="listbox">${options || `<div class="model-empty">No models available.</div>`}</div>
+      </div>` : ""}
+    </div>`;
+  }
+}
+
 /* ---------------- composer ---------------- */
 class PiComposer extends HTMLElement {
   connectedCallback() {
@@ -155,14 +235,13 @@ class PiComposer extends HTMLElement {
       <textarea rows="2"></textarea>
       <div class="composer-foot">
         <div class="composer-hint"></div>
-        <button class="model-chip" title="Switch model"></button>
+        <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
         <button class="send-btn" title="Send">↑</button>
       </div>
     </div></div></div>`;
     this.ta = this.querySelector("textarea");
     this.hint = this.querySelector(".composer-hint");
-    this.chip = this.querySelector(".model-chip");
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
@@ -175,8 +254,6 @@ class PiComposer extends HTMLElement {
     });
     this.sendBtn.addEventListener("click", () => this.send());
     this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
-    this.chip.addEventListener("click", () => this.cycleModel());
-
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.sync(); });
     this.sync();
   }
@@ -204,21 +281,6 @@ class PiComposer extends HTMLElement {
     }
   }
 
-  cycleModel() {
-    const list = store.state.models;
-    if (!list.length) { store.setError("No models are available."); return; }
-    const cur = store.state.model;
-    const index = list.findIndex(model => model.id === cur);
-    const next = list[index < 0 ? 0 : (index + 1) % list.length];
-    const id = store.activeKey();
-    const previous = cur;
-    store.set({ model: next.id });
-    if (id) api.setModel(id, next.id).catch(err => {
-      store.set({ model: previous });
-      store.setError(err.error === "model_unavailable" ? "That model is unavailable." : `Model change failed: ${err.message || err}`);
-    });
-  }
-
   sync() {
     const id = store.activeKey();
     const t = store.transcript();
@@ -233,8 +295,6 @@ class PiComposer extends HTMLElement {
     this.hint.textContent = error || (busyBy
       ? `branch busy in ${owner || "another session"}`
       : t.streaming ? "Enter steers · Alt+Enter queues a follow-up" : "Enter to send · Shift+Enter for a new line");
-    const model = store.state.models.find(m => m.id === store.state.model);
-    this.chip.textContent = model?.label || store.state.model || "default";
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     this.sendBtn.classList.toggle("hidden", t.streaming);
     this.sendBtn.disabled = !!busyBy;
@@ -250,4 +310,5 @@ function findSessionTitle(id) {
 }
 
 customElements.define("pi-thread", PiThread);
+customElements.define("pi-model-picker", PiModelPicker);
 customElements.define("pi-composer", PiComposer);

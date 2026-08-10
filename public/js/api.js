@@ -11,6 +11,7 @@ export const api = {
   models: () => fetch("/api/models").then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: (repoPath) => fetch("/api/projects", { method: "POST", headers: JH, body: JSON.stringify({ repoPath }) }).then(j),
+  newProjectSession: (projectId) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   repos: () => fetch("/api/repos").then(j),
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
@@ -21,7 +22,12 @@ export const api = {
   fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
   branch: (id, branch, create = false) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create }) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
-  settings: (defaultModel) => fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify({ defaultModel }) }).then(j),
+  settings: (defaultModel, reposRoot) => {
+    const body = {};
+    if (defaultModel !== undefined) body.defaultModel = defaultModel;
+    if (reposRoot !== undefined) body.reposRoot = reposRoot;
+    return fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
+  },
   close: (id) => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   merge: (id) => fetch(`/api/sessions/${id}/merge`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
 };
@@ -35,6 +41,8 @@ export async function refreshState() {
     mode: s.mode,
     defaultModel: s.defaultModel || null,
     models: s.models || [],
+    reposRoot: s.reposRoot || null,
+    reposRootSource: s.reposRootSource || "default",
     model: active?.model || s.defaultModel || null,
   });
 }
@@ -59,12 +67,24 @@ function findNode(nodes, id) {
 // --- transcript loading: subscribe first, buffer, snapshot, apply ---
 const loading = new Set();
 const buffers = new Map();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await api.transcript(id); }
+    catch (err) {
+      // Server-side 4xx/5xx carry an `error` code — don't retry those.
+      if (err.error || attempt >= delays.length) throw err;
+      await sleep(delays[attempt]);
+    }
+  }
+}
+
 export async function openTranscript(id) {
   if (!id || loading.has(id)) return;
   loading.add(id);
   buffers.set(id, []);
   try {
-    const snap = await api.transcript(id);
+    const snap = await fetchTranscriptWithRetry(id);
     store.state.transcripts[id] = {
       records: snap.records || [],
       streaming: !!snap.streaming,

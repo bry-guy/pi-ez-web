@@ -30,6 +30,13 @@ export async function newChat() {
   selectChat(id);
 }
 
+export async function newProjectSession(projectId) {
+  const { id } = await api.newProjectSession(projectId);
+  await refreshState();
+  store.state.openTree[projectId] = true;
+  selectSession(projectId, id);
+}
+
 function findNode(nodes, id) {
   for (const n of nodes || []) {
     if (n.id === id) return n;
@@ -78,7 +85,10 @@ class PiSidebar extends HTMLElement {
     }
     if (act === "collapse") store.set(s => (mobile() ? { drawerOpen: false } : { railOpen: !s.railOpen }));
     else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
-    else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
+    else if (act === "new-project-session") {
+      e.stopPropagation();
+      newProjectSession(t.dataset.id).catch(err => store.setError(`Could not create session: ${err.error || err.message || err}`));
+    } else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
     else if (act === "projects") store.set({ view: "projects", drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
     else if (act === "project-row") {
@@ -126,7 +136,7 @@ class PiSidebar extends HTMLElement {
         this.innerHTML = `<aside class="mini">
           <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
           <div class="mini-gap"></div>
-          <button class="mini-btn" data-act="new-chat" title="New chat">+</button>
+          <button class="mini-btn cta-plus" data-act="new-chat" title="New chat">+</button>
           <button class="mini-btn quiet" data-act="projects" title="Projects">▤</button>
           <div class="mini-flex"></div>
           <button class="mini-btn quiet" data-act="settings" title="Settings">⚙</button>
@@ -140,14 +150,14 @@ class PiSidebar extends HTMLElement {
           <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
         </div>
         <div class="rail-actions">
-          <button class="primary-btn" data-act="new-chat"><span class="plus">+</span><span>New chat</span></button>
           <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
         </div>
         <div class="rail-scroll">
           <div class="sec-head"><div class="sec-label">Projects</div>
-            <button class="ghost-btn" data-act="repo-picker" title="New project" style="padding:3px 6px">+</button></div>
+            <button class="ghost-btn cta-plus" data-act="repo-picker" title="New project" style="padding:3px 6px">+</button></div>
           <div class="projects-list"></div>
-          <div class="sec-label pad">Chats</div>
+          <div class="sec-head chats-head"><div class="sec-label">Chats</div>
+            <button class="ghost-btn cta-plus" data-act="new-chat" title="New chat" style="padding:3px 6px">+</button></div>
           <div class="chats-list"></div>
         </div>
         <div class="rail-foot">
@@ -178,6 +188,7 @@ class PiSidebar extends HTMLElement {
           <span class="caret">${open ? "▾" : "▸"}</span>
           <span class="lbl">${esc(p.name)}</span>
           <span class="count">${this.count(p.sessions)}</span>
+          <button class="row-add cta-plus" data-act="new-project-session" data-id="${esc(p.id)}" title="New session in ${esc(p.name)}" aria-label="New session in ${esc(p.name)}">+</button>
         </div></div>`);
       if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, nameMatch);
     }

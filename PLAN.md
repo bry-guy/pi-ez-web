@@ -80,7 +80,7 @@ Declarative config + minimal runtime state + live discovery; Pi owns transcripts
 ```
 ~/.pi-web-ui/config.json     user-editable, UI writes too:
                              { projects: [{ name, repoPath, setup? }],
-                               worktreeRoot, port, defaultModel }
+                               reposRoot, worktreeRoot, port, defaultModel }
 ~/.pi-web-ui/bindings.json   { sessionId → workspacePath } — only for sessions
                              re-homed from their birth workspace
 ~/.pi-web-ui/chats/          cwd for plain chats (CHATS section; no project)

@@ -34,6 +34,8 @@ export const store = {
     chats: [],
     mode: "real",
     repos: [],
+    reposRoot: null,     // configured directory scanned by /api/repos
+    reposRootSource: "default", // default | config | environment
     files: [],
     filesContext: null,
     transcripts: {},         // sessionId -> { records, streaming, seq }

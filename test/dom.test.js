@@ -53,6 +53,7 @@ async function boot() {
       if (url === "/api/sessions/s1/transcript") return json(transcript);
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
+      if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
       if (url === "/api/projects") return json({ id: "p2", sessionId: "s2" });
       if (url.includes("/api/projects/") && url.endsWith("/files")) return json({ tree: [] });
       return json({ ok: true });
@@ -69,13 +70,25 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const { store } = await import("../public/js/store.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
-  assert.equal(root.querySelector(".model-chip").textContent, "Mock Fast");
+  assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
 
   const search = root.querySelector(".rail-search");
   search.focus();
   search.value = "d";
   search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, search);
+
+  const newChat = root.querySelector(".chats-head [data-act='new-chat']");
+  assert.ok(newChat);
+  newChat.click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.chatId, "c1");
+
+  const projectPlus = root.querySelector("[data-act='new-project-session']");
+  assert.ok(projectPlus);
+  projectPlus.click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.sessionId, "s2");
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -88,6 +101,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.repoPickerOpen, false);
 
   root.querySelector(".model-chip").click();
+  assert.ok(root.querySelector(".model-popover"));
+  root.querySelector(".model-option[data-model='mock/smart']").click();
   assert.equal(store.state.model, "mock/smart");
 
   const sessionRow = root.querySelector("[data-act='session-row']");

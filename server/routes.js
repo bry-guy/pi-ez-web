@@ -3,7 +3,7 @@ import { streamSSE } from "hono/streaming";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, loadBindings, loadConfig, newId, saveBindings, saveConfig, slug, worktreeRoot,
+  chatsDir, loadBindings, loadConfig, newId, reposRoot, resolvePath, saveBindings, saveConfig, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession, sweepProject } from "./lifecycle.js";
@@ -30,6 +30,8 @@ export function buildApi(sup) {
       mode: process.env.PI_WEB_MODE || "real",
       defaultModel: configuredDefault,
       models,
+      reposRoot: reposRoot(cfg),
+      reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
       projects,
       chats: await chatsState(sup),
     });
@@ -60,12 +62,13 @@ export function buildApi(sup) {
   });
 
   api.get("/repos", c => {
-    const root = c.req.query("root") || process.env.PI_WEB_REPOS_ROOT || path.join(process.env.HOME || "", "src");
+    const root = c.req.query("root") ? resolvePath(c.req.query("root")) : reposRoot(loadConfig());
     return c.json({ root, repos: ws.findRepos(root).map(p => ({ path: p, name: path.basename(p) })) });
   });
 
   api.post("/projects", async c => {
-    const { repoPath, name } = await c.req.json();
+    const { repoPath: rawPath, name } = await c.req.json();
+    const repoPath = rawPath ? resolvePath(rawPath) : null;
     if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
     const cfg = loadConfig();
     if (cfg.projects.some(p => p.repoPath === repoPath)) return err(c, 409, "project_exists");
@@ -75,8 +78,16 @@ export function buildApi(sup) {
     ws.prune(repoPath);
     // First session lives on the checkout's branch — the checkout is its workspace.
     const { id: sessionId } = await sup.createSession({ cwd: repoPath, model: await sup.defaultModel() });
-    hub.emit(sessionId, "session_created", { session: { id: sessionId } });
+    hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id } });
     return c.json({ id: project.id, sessionId });
+  });
+
+  api.post("/projects/:id/sessions", async c => {
+    const project = loadConfig().projects.find(p => p.id === c.req.param("id"));
+    if (!project) return err(c, 404, "no_such_project");
+    const { id: sessionId } = await sup.createSession({ cwd: project.repoPath, model: await sup.defaultModel() });
+    hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id } });
+    return c.json({ id: sessionId, projectId: project.id });
   });
 
   api.get("/projects/:id/files", c => {
@@ -307,8 +318,17 @@ export function buildApi(sup) {
       if (!models.some(model => model.id === body.defaultModel)) return err(c, 400, "model_unavailable");
       cfg.defaultModel = body.defaultModel;
     }
+    if (body.reposRoot !== undefined) {
+      const value = typeof body.reposRoot === "string" ? body.reposRoot.trim() : "";
+      cfg.reposRoot = value || null;
+    }
     saveConfig(cfg);
-    return c.json({ ok: true, defaultModel: await sup.defaultModel() });
+    return c.json({
+      ok: true,
+      defaultModel: await sup.defaultModel(),
+      reposRoot: reposRoot(cfg),
+      reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
+    });
   });
 
   return api;

@@ -16,6 +16,7 @@ const bindingsPath = () => path.join(appHome(), "bindings.json");
 const DEFAULTS = {
   projects: [], // { id, name, repoPath, setup? }
   worktreeRoot: null, // null -> worktreeRootDefault()
+  reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
   defaultModel: null,
 };
@@ -39,6 +40,20 @@ export function saveConfig(cfg) {
   writeJson(configPath(), cfg);
   return cfg;
 }
+export function resolvePath(raw) {
+  let value = String(raw).trim().replace(/^~(?=$|\/)/, os.homedir());
+  // Be forgiving of the common macOS shell typo `Users/name/...` when the
+  // intended path is `/Users/name/...`; ordinary relative paths still resolve
+  // from the process working directory.
+  if (process.platform === "darwin" && value.startsWith("Users/")) value = `/${value}`;
+  return path.resolve(value);
+}
+
+export function reposRoot(cfg = loadConfig()) {
+  const raw = process.env.PI_WEB_REPOS_ROOT || cfg.reposRoot || path.join(os.homedir(), "src");
+  return resolvePath(raw);
+}
+
 export function worktreeRoot(cfg) {
   return cfg.worktreeRoot || worktreeRootDefault();
 }

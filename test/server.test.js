@@ -56,8 +56,9 @@ class SSE {
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-srv-"));
   home = path.join(tmp, "home");
-  repo = path.join(tmp, "repo");
-  fs.mkdirSync(repo);
+  const reposRoot = path.join(tmp, "local-repositories");
+  repo = path.join(reposRoot, "repo");
+  fs.mkdirSync(repo, { recursive: true });
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "t@t");
   git(repo, "config", "user.name", "t");
@@ -65,6 +66,9 @@ before(async () => {
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "init");
 
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ reposRoot }));
+  delete process.env.PI_WEB_REPOS_ROOT;
   process.env.PI_WEB_HOME = home;
   process.env.PI_WEB_MODE = "mock";
   process.env.PI_WEB_MOCK_THINK_MS = "120";
@@ -86,6 +90,18 @@ test("serves the UI", async () => {
   assert.match(html, /<pi-app>/);
   const css = await (await get("/app.css")).text();
   assert.match(css, /--pi-orange/);
+  // Custom elements default to display:inline; without this rule the sidebar,
+  // header, composer, and file panel are not flex items and collapse.
+  assert.match(css, /pi-sidebar[\s\S]{0,200}display:\s*contents/);
+});
+
+test("repository picker uses the configured local repositories root", async () => {
+  const state = await (await get("/api/state")).json();
+  assert.equal(state.reposRoot, path.resolve(tmp, "local-repositories"));
+  assert.equal(state.reposRootSource, "config");
+  const repos = await (await get("/api/repos")).json();
+  assert.equal(repos.root, state.reposRoot);
+  assert.deepEqual(repos.repos, [{ path: repo, name: "repo" }]);
 });
 
 test("plain chat: full turn lifecycle over SSE (thinking -> deltas -> done)", async () => {
@@ -314,6 +330,25 @@ test("branch delete: dirty refused, force removes", async () => {
   assert.equal(r1.status, 409);
   const r2 = await fetch(`${base}/api/projects/${projectId}/branches/${encodeURIComponent(forkBranch)}?force=1`, { method: "DELETE" });
   assert.equal(r2.status, 200);
+});
+
+test("project session creation starts a new session on the project", async () => {
+  const r = await post(`/api/projects/${projectId}/sessions`, {});
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.projectId, projectId);
+  const state = await (await get("/api/state")).json();
+  const p = state.projects.find(x => x.id === projectId);
+  assert.ok(p.sessions.some(s => s.id === body.id));
+});
+
+test("settings can persist a custom local repositories root", async () => {
+  const customRoot = path.join(tmp, "another-repositories");
+  const r = await post("/api/settings", { reposRoot: customRoot });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.reposRoot, customRoot);
+  assert.equal((await (await get("/api/state")).json()).reposRoot, customRoot);
 });
 
 test("checkout workspace cannot be deleted", async () => {

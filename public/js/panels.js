@@ -69,30 +69,46 @@ class PiSettings extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => {
-      if (e.target.closest("[data-act='cycle-model']")) this.cycleModel();
+      if (e.target.closest("[data-act='save-repos-root']")) this.saveReposRoot();
+    });
+    this.addEventListener("keydown", e => {
+      if (e.key === "Enter" && e.target.matches(".repos-root-input")) {
+        e.preventDefault();
+        this.saveReposRoot();
+      }
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
-  async cycleModel() {
-    const list = store.state.models;
-    if (!list.length) { store.setError("No models are available."); return; }
-    const current = store.state.defaultModel;
-    const index = list.findIndex(model => model.id === current);
-    const next = list[index < 0 ? 0 : (index + 1) % list.length];
-    const previous = current;
-    store.set({ defaultModel: next.id });
-    try { await api.settings(next.id); }
-    catch (err) { store.set({ defaultModel: previous }); store.setError(err.error === "model_unavailable" ? "That model is unavailable." : String(err.error || err)); }
+  async saveReposRoot() {
+    const input = this.querySelector(".repos-root-input");
+    if (!input) return;
+    const value = input.value.trim() || null;
+    const previous = store.state.reposRoot;
+    try {
+      const result = await api.settings(undefined, value);
+      store.set({ reposRoot: result.reposRoot || null, reposRootSource: result.reposRootSource || "default", repos: [] });
+      store.setError("Repository path saved.", 2200);
+    } catch (err) {
+      input.focus();
+      store.set({ reposRoot: previous });
+      store.setError(`Repository path failed: ${err.error || err.message || err}`);
+    }
   }
   render() {
-    const model = store.state.models.find(m => m.id === store.state.defaultModel);
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
       <div class="settings-card">
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Model</div><div class="sr-sub">Used for new sessions.</div></div>
-          <button class="settings-chip" data-act="cycle-model">${esc(model?.label || store.state.defaultModel || "default")}</button>
+          <pi-model-picker data-mode="default" data-variant="settings"></pi-model-picker>
+        </div>
+        <div class="settings-row settings-path-row">
+          <div class="sr-main"><div class="sr-title">Local repositories</div><div class="sr-sub">Folder scanned by the project picker. Empty uses <span class="settings-mono">~/src</span>${store.state.reposRootSource === "environment" ? ". <span class=\"settings-mono\">PI_WEB_REPOS_ROOT</span> currently overrides this value" : ""}.</div></div>
+          <div class="settings-path-control">
+            <input class="repos-root-input" aria-label="Local repositories path" value="${esc(store.state.reposRoot || "")}" placeholder="~/src">
+            <button class="settings-save" data-act="save-repos-root">Save</button>
+          </div>
         </div>
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Agent endpoint</div><div class="sr-sub">Pi SDK in-process, streaming over SSE.</div></div>
@@ -157,7 +173,15 @@ class PiFiles extends HTMLElement {
 /* ---------------- repo picker ---------------- */
 class PiRepoPicker extends HTMLElement {
   connectedCallback() {
-    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.repoRoot = store.state.reposRoot;
+    this.unsub = store.subscribe(w => {
+      if (w !== "state") return;
+      const rootChanged = this.repoRoot !== null && this.repoRoot !== store.state.reposRoot;
+      this.repoRoot = store.state.reposRoot;
+      if (rootChanged) this.loaded = false;
+      this.render();
+      if (rootChanged && store.state.repoPickerOpen) void this.load();
+    });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
       if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-repo]")) {
@@ -194,8 +218,8 @@ class PiRepoPicker extends HTMLElement {
     if (this.loaded) return;
     this.loaded = true;
     try {
-      const { repos } = await api.repos();
-      store.set({ repos });
+      const { repos, root } = await api.repos();
+      store.set({ repos, reposRoot: root });
     } catch (err) {
       this.errorMsg = `Could not load repositories: ${err.error || err.message || err}`;
       store.set({ repos: [] });
@@ -230,8 +254,19 @@ class PiRepoPicker extends HTMLElement {
   renderResults() {
     const list = this.querySelector(".modal-list");
     if (!list) return;
-    const q = store.state.repoQuery.trim().toLowerCase();
+    const raw = store.state.repoQuery.trim();
+    const q = raw.toLowerCase();
     const results = store.state.repos.filter(r => !q || r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q));
+    // Typing an absolute (or ~/) path connects a repo outside the scanned root.
+    const isPath = raw.startsWith("/") || raw.startsWith("~/") || raw === "~";
+    const pathRow = isPath ? `
+      <div class="repo-row" role="button" tabindex="0" data-repo="${esc(raw)}">
+        <div class="rr-main">
+          <div class="rr-name">Connect ${esc(raw)}</div>
+          <div class="rr-meta"><span>use this path directly</span></div>
+        </div>
+        <span class="rr-vis">path</span>
+      </div>` : "";
     const rows = results.map(r => `
       <div class="repo-row" role="button" tabindex="0" data-repo="${esc(r.path)}">
         <div class="rr-main">
@@ -240,7 +275,8 @@ class PiRepoPicker extends HTMLElement {
         </div>
         <span class="rr-vis">local</span>
       </div>`).join("");
-    list.innerHTML = `${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${rows || `<div class="modal-empty">No repositories match.</div>`}`;
+    const empty = `<div class="modal-empty">No repositories ${q ? "match" : `found under ${esc(store.state.reposRoot || "the repos root")}`}.<br>Type an absolute path to a git repo to connect it, or set PI_WEB_REPOS_ROOT.</div>`;
+    list.innerHTML = `${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${pathRow}${rows || (pathRow ? "" : empty)}`;
   }
 }
 
