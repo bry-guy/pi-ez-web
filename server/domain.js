@@ -1,6 +1,8 @@
 // Assembles the /api/state shape: projects with branches + session trees,
 // occupied map, plain chats. Session->project/branch is derived from cwd
 // (bindings.json overrides for re-homed sessions).
+import fs from "node:fs";
+import path from "node:path";
 import { chatsDir, loadBindings, loadClosed, loadConfig, worktreeRoot } from "./config.js";
 import * as ws from "./workspaces.js";
 
@@ -70,8 +72,21 @@ export async function projectState(project, sup) {
 }
 
 export async function chatsState(sup) {
+  const root = chatsDir();
+  const cwds = [root];
+  try {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) cwds.push(path.join(root, entry.name));
+    }
+  } catch { /* ensureHome normally creates this; discovery stays best-effort */ }
+
+  const discovered = [];
+  for (const cwd of cwds) {
+    try { discovered.push(...await sup.listSessions(cwd)); }
+    catch { /* ignore an empty or malformed scratch directory */ }
+  }
   const closed = loadClosed();
-  const list = (await sup.listSessions(chatsDir())).filter(s => !closed.has(s.id));
+  const list = discovered.filter(s => !closed.has(s.id));
   return list
     .sort((a, b) => String(b.modified).localeCompare(String(a.modified)))
     .map(s => ({ id: s.id, title: titleOf(s), when: rel(s.modified), model: s.model || null }));

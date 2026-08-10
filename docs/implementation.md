@@ -37,8 +37,11 @@ CHECKLIST.md            real-browser click-through gate
 ```
 
 State lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`, `chats/`,
-`worktrees/`); pi owns transcripts and auth under `~/.pi/agent`. Override the
-app home with `PI_WEB_HOME`.
+`worktrees/`); pi owns transcripts and auth under `~/.pi/agent`. New plain
+chats use private scratch directories under `chats/`; legacy sessions at the
+shared `chats/` cwd remain discoverable. Scratch directories are retained when
+a chat is closed and may be pruned manually. Override the app home with
+`PI_WEB_HOME`.
 
 ## Invariants
 

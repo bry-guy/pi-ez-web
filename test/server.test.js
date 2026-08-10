@@ -6,8 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { chatsDir } from "../server/config.js";
 
-let base, server, home, tmp, repo;
+let base, server, supervisor, home, tmp, repo;
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
 const J = { "content-type": "application/json" };
 const post = (p, body) => fetch(base + p, { method: "POST", headers: J, body: JSON.stringify(body ?? {}) });
@@ -75,7 +76,7 @@ before(async () => {
   process.env.PI_WEB_MOCK_DELTA_MS = "5";
 
   const { startServer } = await import("../server/index.js");
-  ({ server } = startServer(0));
+  ({ server, sup: supervisor } = startServer(0));
   const addr = server.address();
   base = `http://127.0.0.1:${addr.port}`;
 });
@@ -102,6 +103,55 @@ test("repository picker uses the configured local repositories root", async () =
   const repos = await (await get("/api/repos")).json();
   assert.equal(repos.root, state.reposRoot);
   assert.deepEqual(repos.repos, [{ path: repo, name: "repo" }]);
+});
+
+test("plain chats use isolated scratch workspaces and retain legacy discovery", async () => {
+  const sse = new SSE(base + "/api/events");
+  const a = await (await post("/api/chats")).json();
+  const b = await (await post("/api/chats")).json();
+  const metaA = await (await get(`/api/sessions/${a.id}/meta`)).json();
+  const metaB = await (await get(`/api/sessions/${b.id}/meta`)).json();
+  const chatRoot = path.resolve(chatsDir());
+  assert.notEqual(metaA.cwd, metaB.cwd);
+  for (const cwd of [metaA.cwd, metaB.cwd]) {
+    assert.ok(fs.existsSync(cwd));
+    assert.ok(path.relative(chatRoot, cwd) && !path.relative(chatRoot, cwd).startsWith(".."));
+  }
+
+  let state = await (await get("/api/state")).json();
+  assert.ok(state.chats.some(chat => chat.id === a.id));
+  assert.ok(state.chats.some(chat => chat.id === b.id));
+
+  const legacy = await supervisor.createSession({ cwd: chatsDir() });
+  state = await (await get("/api/state")).json();
+  assert.ok(state.chats.some(chat => chat.id === legacy.id));
+
+  await post(`/api/sessions/${b.id}/message`, { text: "stream in chat B" });
+  await sse.wait(e => e.sessionId === b.id && e.type === "message_start");
+  const aResponse = await post(`/api/sessions/${a.id}/message`, { text: "chat A is independent" });
+  assert.equal(aResponse.status, 200);
+  await sse.wait(e => e.sessionId === a.id && e.type === "turn_end");
+  await sse.wait(e => e.sessionId === b.id && e.type === "turn_end");
+
+  const branchResponse = await post(`/api/sessions/${a.id}/branch`, { branch: "not-a-chat-branch", create: true });
+  assert.equal(branchResponse.status, 404);
+  assert.equal((await branchResponse.json()).error, "no_project_for_session");
+  const forkResponse = await post(`/api/sessions/${b.id}/fork`, {});
+  assert.equal(forkResponse.status, 400);
+  assert.equal((await forkResponse.json()).error, "fork_requires_project");
+  const mergeResponse = await post(`/api/sessions/${b.id}/merge`, {});
+  assert.equal(mergeResponse.status, 404);
+  assert.equal((await mergeResponse.json()).error, "no_project_for_session");
+
+  await post(`/api/sessions/${a.id}/bang`, { cmd: "pwd" });
+  const bang = await sse.wait(e => e.sessionId === a.id && e.type === "bang_end");
+  assert.equal(fs.realpathSync(bang.stdout.trim()), fs.realpathSync(metaA.cwd));
+
+  const closeResponse = await post(`/api/sessions/${a.id}/close`, {});
+  assert.equal(closeResponse.status, 200);
+  assert.ok(fs.existsSync(metaA.cwd));
+  state = await (await get("/api/state")).json();
+  assert.ok(!state.chats.some(chat => chat.id === a.id));
 });
 
 test("plain chat: full turn lifecycle over SSE (thinking -> deltas -> done)", async () => {

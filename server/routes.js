@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
@@ -56,7 +57,11 @@ export function buildApi(sup) {
 
   // ---------- chats & projects ----------
   api.post("/chats", async c => {
-    const { id } = await sup.createSession({ cwd: chatsDir(), model: await sup.defaultModel() });
+    // Give every plain chat its own workspace. Keep chatsDir() itself as the
+    // legacy parent so old shared-cwd sessions remain discoverable.
+    const scratch = path.join(chatsDir(), newId("c"));
+    fs.mkdirSync(scratch, { recursive: true });
+    const { id } = await sup.createSession({ cwd: scratch, model: await sup.defaultModel() });
     hub.emit(id, "session_created", { session: { id, title: "New session" } });
     return c.json({ id });
   });

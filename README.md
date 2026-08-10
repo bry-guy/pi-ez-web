@@ -50,7 +50,7 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
 }
 ```
 
-Use `PORT` to change the HTTP port, `PI_WEB_HOME` to change the application state directory, and `PI_WEB_REPOS_ROOT` to override the repository scan root (for example, `PI_WEB_REPOS_ROOT=/Users/brain/dev mise start`). You can set the persistent `reposRoot` value in `~/.pi-web-ui/config.json` instead; the default is `$HOME/src`. The project picker also accepts an absolute or `~/...` repository path directly. Pi owns session transcripts; pi-ez-web stores only its small configuration and workspace bindings. The model picker is backed by Pi's available model runtime; `defaultModel` may be set to a `provider/modelId` reference.
+Use `PORT` to change the HTTP port, `PI_WEB_HOME` to change the application state directory, and `PI_WEB_REPOS_ROOT` to override the repository scan root (for example, `PI_WEB_REPOS_ROOT=/Users/brain/dev mise start`). You can set the persistent `reposRoot` value in `~/.pi-web-ui/config.json` instead; the default is `$HOME/src`. The project picker also accepts an absolute or `~/...` repository path directly. Pi owns session transcripts; pi-ez-web stores only its small configuration and workspace bindings. Plain chats are Pi sessions with a private scratch workspace under `~/.pi-web-ui/chats/<scratch-id>`; project sessions use repository checkouts/worktrees. Scratch directories accumulate and are safe to prune manually after checking for files you want to keep. The model picker is backed by Pi's available model runtime; `defaultModel` may be set to a `provider/modelId` reference.
 
 ## Trust boundary
 
