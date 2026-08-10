@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   chatsDir, loadBindings, loadConfig, newId, projectMode, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
-import { chatsState, projectState, sessionWorkspace, titleOf } from "./domain.js";
+import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession, sweepProject } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
@@ -14,12 +14,14 @@ import * as ws from "./workspaces.js";
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
 
+// Collisions count like humans do: foo, foo-2, foo-3.
+// The `.N` namespace is reserved for fork children (see forkWorkspace).
 function suggestedSessionBranch(repoPath, firstMessage) {
   const base = sessionSlug(firstMessage);
   const branches = ws.listBranches(repoPath);
   if (!branches.includes(base)) return base;
-  for (let n = 1; ; n++) {
-    const candidate = `${base}.${n}`;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
     if (!branches.includes(candidate)) return candidate;
   }
 }
@@ -30,6 +32,7 @@ export function buildApi(sup) {
   // ---------- state ----------
   api.get("/state", async c => {
     const cfg = loadConfig();
+    reconcileBindings(cfg, loadBindings());
     const models = await safe(() => sup.listModels(), []);
     const configuredDefault = await safe(() => sup.defaultModel(), cfg.defaultModel || null);
     const projects = [];

@@ -289,6 +289,9 @@ class PiHeader extends HTMLElement {
     const streaming = store.transcript().streaming;
     const workspaceLock = inProject ? store.workspaceBusy(store.state.sessionId) : null;
     const blocked = streaming || !!workspaceLock;
+    // A lock closes an open popover outright; suppressing the render while
+    // leaving branchMenuOpen=true made it reappear when the lock cleared.
+    if (blocked && s.branchMenuOpen) store.set({ branchMenuOpen: false, branchError: null });
 
     const showMerge = inProject && branch && branch !== p.branch;
     const branchChip = inProject && branch ? `
@@ -300,7 +303,7 @@ class PiHeader extends HTMLElement {
         ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge this branch" ${blocked ? "disabled" : ""}>merge</button>` : ""}
       </div>` : "";
 
-    const pop = inProject && s.branchMenuOpen && !blocked ? this.popover(p, branch) : "";
+    const pop = inProject && s.branchMenuOpen ? this.popover(p, branch) : "";
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${s.filesOpen ? "»" : "«"}</button>` : "";

@@ -81,8 +81,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(send.disabled, true);
   assert.match(root.querySelector(".composer-hint").textContent, /branch busy — Sibling session is taking a turn/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
+  store.set({ branchMenuOpen: true });          // user had the menu open
+  store.state.transcripts.sibling.streaming = true;
+  store.notify("transcript");
+  assert.equal(store.state.branchMenuOpen, false);
+  assert.equal(root.querySelector(".branch-pop"), null);
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
+  assert.equal(root.querySelector(".branch-pop"), null); // does not reappear
   assert.equal(send.disabled, false);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), false);
 

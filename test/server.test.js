@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import * as ws from "../server/workspaces.js";
-import { chatsDir, loadBindings, loadConfig, saveConfig, sessionSlug } from "../server/config.js";
+import { chatsDir, loadBindings, loadConfig, saveBindings, saveConfig, sessionSlug } from "../server/config.js";
 
 let base, server, supervisor, home, tmp, repo;
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
@@ -474,6 +474,12 @@ test("auto checkout collision suggests a deterministic session branch", async ()
   assert.equal(body.error, "checkout_occupied");
   assert.equal(body.suggestedBranch, sessionSlug(autoSecondMessage));
   assert.equal(body.bySessionId, autoFirstId);
+
+  git(autoRepo, "branch", body.suggestedBranch);
+  const third = await (await post(`/api/projects/${autoProjectId}/sessions`, {})).json();
+  const collide = await post(`/api/sessions/${third.id}/message`, { text: autoSecondMessage });
+  assert.equal(collide.status, 409);
+  assert.equal((await collide.json()).suggestedBranch, `${sessionSlug(autoSecondMessage)}-2`);
 });
 
 test("auto collision branch can be created before sending", async () => {
@@ -505,8 +511,14 @@ test("manual projects never create a lazy binding", async () => {
 test("state reconciliation removes bindings for deleted worktrees", async () => {
   const binding = loadBindings()[autoSecondId];
   ws.removeWorkspace({ repoPath: autoRepo, workspacePath: binding.workspacePath, force: true });
+  const otherProjectWorktreePath = repo;
+  const bindings = loadBindings();
+  bindings["cross-project-session"] = { branch: "main", workspacePath: otherProjectWorktreePath };
+  saveBindings(bindings);
   await get("/api/state");
-  assert.equal(loadBindings()[autoSecondId], undefined);
+  const reconciled = loadBindings();
+  assert.equal(reconciled[autoSecondId], undefined);
+  assert.ok(reconciled["cross-project-session"]);
 });
 
 test("auto forks use the deterministic session slug with a numeric suffix", async () => {

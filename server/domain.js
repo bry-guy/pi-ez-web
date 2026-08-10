@@ -17,21 +17,17 @@ function pathKey(value) {
   try { return path.resolve(value); } catch { return String(value || ""); }
 }
 
-function reconcileBindings(cfg, project, worktrees, bindings) {
-  const currentPaths = new Set([project.repoPath, ...Object.values(worktrees)].map(pathKey));
-  const otherPaths = new Set();
-  for (const candidate of cfg.projects) {
-    if (candidate.id === project.id) continue;
-    otherPaths.add(pathKey(candidate.repoPath));
+export function reconcileBindings(cfg, bindings) {
+  const valid = new Set();
+  for (const project of cfg.projects) {
+    valid.add(pathKey(project.repoPath));
     try {
-      for (const workspacePath of Object.values(ws.listWorktrees(candidate.repoPath))) otherPaths.add(pathKey(workspacePath));
+      for (const p of Object.values(ws.listWorktrees(project.repoPath))) valid.add(pathKey(p));
     } catch { /* malformed or removed project repo */ }
   }
   let changed = false;
   for (const [sessionId, binding] of Object.entries(bindings)) {
-    const workspacePath = binding?.workspacePath;
-    const key = pathKey(workspacePath);
-    if (!workspacePath || (!currentPaths.has(key) && !otherPaths.has(key))) {
+    if (!binding?.workspacePath || !valid.has(pathKey(binding.workspacePath))) {
       delete bindings[sessionId];
       changed = true;
     }
@@ -43,7 +39,6 @@ export async function projectState(project, sup) {
   const cfg = loadConfig();
   const bindings = loadBindings();
   const worktrees = ws.listWorktrees(project.repoPath); // branch -> path
-  reconcileBindings(cfg, project, worktrees, bindings);
   const pathToBranch = Object.fromEntries(Object.entries(worktrees).map(([b, p]) => [p, b]));
 
   // Discover all sessions first, including closed nodes. Closed sessions stay
