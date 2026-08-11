@@ -106,10 +106,11 @@ mise test          # run server, SDK, and DOM tests
 mise test:dom      # run the DOM-only gate
 mise check         # tests plus whitespace validation
 mise start         # real server
+mise kill          # stop listeners on PORT (default 3141)
 mise verify-real   # credentialed real-Pi smoke test
 mise reset         # clear mock state
 ```
 
-With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults.
+With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults. `mise kill` also accepts a port directly (`mise kill -- 3141`).
 
 See [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.

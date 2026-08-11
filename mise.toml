@@ -20,6 +20,56 @@ exec npm run dev
 description = "Start the real server against Pi"
 run = "npm start"
 
+[tasks.kill]
+description = "Stop processes listening on the app port"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+port="${PORT:-3141}"
+if (( $# > 0 )); then
+  port="$1"
+fi
+if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+  printf 'Invalid port: %s\n' "$port" >&2
+  exit 2
+fi
+if ! command -v lsof >/dev/null 2>&1; then
+  printf 'mise kill requires lsof to find listeners.\n' >&2
+  exit 1
+fi
+
+list_pids() {
+  lsof -t -n -P -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u || true
+}
+
+pids="$(list_pids)"
+if [[ -z "$pids" ]]; then
+  printf 'No process is listening on port %s.\n' "$port"
+  exit 0
+fi
+
+label=process
+[[ "$pids" == *$'\n'* ]] && label=processes
+printf 'Stopping %s on port %s: %s\n' "$label" "$port" "$(tr '\n' ' ' <<< "$pids")"
+while IFS= read -r pid; do
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+done <<< "$pids"
+
+for _ in {1..50}; do
+  remaining="$(list_pids)"
+  [[ -z "$remaining" ]] && exit 0
+  sleep 0.1
+done
+
+label=process
+[[ "$remaining" == *$'\n'* ]] && label=processes
+printf 'Force-stopping remaining %s on port %s: %s\n' "$label" "$port" "$(tr '\n' ' ' <<< "$remaining")" >&2
+while IFS= read -r pid; do
+  [[ -n "$pid" ]] && kill -KILL "$pid" 2>/dev/null || true
+done <<< "$remaining"
+'''
+
 [tasks.test]
 description = "Run the test suite"
 run = "npm test"
