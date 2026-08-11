@@ -96,7 +96,7 @@ class PiSettings extends HTMLElement {
   async onClick(e) {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
-    if (e.target.closest("[data-act='open-github-picker']")) return store.set({ repoPickerOpen: true, repoPickerSource: "github" });
+    if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
     const login = e.target.closest("[data-auth-login]");
     if (login) return this.startAuth(login.dataset.authLogin, login.dataset.authType);
@@ -200,6 +200,16 @@ class PiSettings extends HTMLElement {
       store.setError("Provider disconnected.", 2200);
     } catch (err) {
       store.setError(`Provider logout failed: ${err.error || err.message || err}`);
+    }
+  }
+  openGithubPicker() {
+    const github = store.state.repositorySources?.sources?.find(source => source.id === "github");
+    store.set({ repoPickerOpen: true, repoPickerSource: "github" });
+    // A Settings action labelled “Sign in” must actually begin sign-in. The
+    // picker owns the Device Flow display and polling, so defer until it has
+    // rendered in its GitHub source state.
+    if (github?.configured && !github.authenticated) {
+      queueMicrotask(() => { void document.querySelector("pi-repo-picker")?.startGithubLogin(); });
     }
   }
   async logoutGithub() {

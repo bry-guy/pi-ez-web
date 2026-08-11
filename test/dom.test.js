@@ -63,6 +63,9 @@ async function boot() {
       if (url === "/api/events") return new Response(": connected v1\n\n", { headers: { "content-type": "text/event-stream" } });
       if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
       if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
+      if (url === "/api/github/device-login" && options.method === "POST") return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } }, true, 202);
+      if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
+      if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
@@ -172,6 +175,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-settings [data-act='save-repository-settings']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-settings").textContent, /Repository settings saved/);
+  store.state.repositorySources.sources.find(source => source.id === "github").configured = true;
+  root.querySelector("pi-settings [data-act='open-github-picker']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector("pi-repo-picker").textContent, /TEST-CODE/, "Settings sign-in begins GitHub Device Flow directly");
+  root.querySelector("pi-repo-picker [data-github-cancel]").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  root.querySelector("pi-repo-picker [data-act='close']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
   const defaultToggle = root.querySelector("pi-settings pi-model-picker[data-mode='default'] [data-model-toggle]");
   defaultToggle.focus();
   defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));

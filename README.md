@@ -78,17 +78,32 @@ Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
 user setting: until the project ships its own registered OAuth App ID, a
 deployment must provide that public ID through this advanced override.
 Environment values take precedence over config and are read-only in Settings.
-The default local repository root is `$HOME/src`. The
-picker also accepts an absolute or `~/...` repository path directly. Omit
-`worktreeRoot` to use the Pi-adjacent default `~/.pi/worktrees`, or set it to an
-absolute path. Project entries may set `mode` to `manual` (default) or `auto`;
-change that in `config.json` for now. Auto-mode branch names: colliding
-sessions with the same opening message get `-2`, `-3`…; fork children get `.1`,
-`.2`. Pi-web's config, bindings, chats, and UI state remain under
-`~/.pi-web-ui`; existing worktrees are discovered in place and are not moved.
-Plain chats use private scratch workspaces under
-`~/.pi-web-ui/chats/<scratch-id>` and scratch directories are retained for
-manual cleanup. The model picker is backed by Pi's available model runtime.
+
+For a local real-server test, `mise start` is the normal command but does not
+inherit a deployment's environment. Supply the public OAuth App client ID to
+make GitHub Device Flow available locally:
+
+```sh
+PI_WEB_GITHUB_CLIENT_ID='<your public OAuth App client ID>' mise start
+```
+
+No client secret is needed. Alternatively, keep the public ID only in your
+machine-local `~/.pi-web-ui/config.json` under
+`repositorySources.github.clientId`. The Settings **Sign in with GitHub** action
+opens the Device Flow directly; approve its displayed code in GitHub while
+leaving the repository dialog open.
+
+The default local repository root is `$HOME/src`. The picker also accepts an
+absolute or `~/...` repository path directly. Omit `worktreeRoot` to use the
+Pi-adjacent default `~/.pi/worktrees`, or set it to an absolute path. Project
+entries may set `mode` to `manual` (default) or `auto`; change that in
+`config.json` for now. Auto-mode branch names: colliding sessions with the same
+opening message get `-2`, `-3`…; fork children get `.1`, `.2`. Pi-web's config,
+bindings, chats, and UI state remain under `~/.pi-web-ui`; existing worktrees
+are discovered in place and are not moved. Plain chats use private scratch
+workspaces under `~/.pi-web-ui/chats/<scratch-id>` and scratch directories are
+retained for manual cleanup. The model picker is backed by Pi's available model
+runtime.
 
 ## Trust boundary
 
