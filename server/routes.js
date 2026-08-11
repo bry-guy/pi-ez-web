@@ -4,18 +4,67 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, loadBindings, loadConfig, newId, projectMode, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
+import { AuthFlowManager } from "./auth-flows.js";
+import { GitHubClient, GitHubDeviceFlowManager } from "./github.js";
+import { cloneRepository } from "./repositories.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
 
 // Collisions count like humans do: foo, foo-2, foo-3.
 // The `.N` namespace is reserved for fork children (see forkWorkspace).
+function repositorySourceState(cfg, github) {
+  const status = github.status();
+  return {
+    default: repositorySource(cfg),
+    sources: [
+      { id: "local", enabled: true },
+      {
+        id: "github",
+        enabled: true,
+        configured: status.configured,
+        authenticated: status.authenticated,
+        credentialSource: status.credentialSource,
+        account: status.account,
+        owner: status.owner,
+      },
+      { id: "git-url", enabled: true },
+    ],
+  };
+}
+
+function settingsState(cfg, github) {
+  const githubCfg = githubConfig(cfg);
+  return {
+    reposRoot: {
+      value: reposRoot(cfg),
+      source: process.env.PI_WEB_REPOS_ROOT ? "PI_WEB_REPOS_ROOT" : cfg.reposRoot ? "config" : "default",
+      editable: !process.env.PI_WEB_REPOS_ROOT,
+    },
+    defaultRepositorySource: {
+      value: repositorySource(cfg),
+      source: process.env.PI_WEB_REPOSITORY_SOURCE ? "PI_WEB_REPOSITORY_SOURCE" : "config",
+      editable: !process.env.PI_WEB_REPOSITORY_SOURCE,
+    },
+    githubClientId: {
+      value: githubCfg.clientId,
+      source: process.env.PI_WEB_GITHUB_CLIENT_ID ? "PI_WEB_GITHUB_CLIENT_ID" : "config",
+      editable: !process.env.PI_WEB_GITHUB_CLIENT_ID,
+    },
+    githubOwner: {
+      value: githubCfg.owner,
+      source: process.env.PI_WEB_GITHUB_OWNER ? "PI_WEB_GITHUB_OWNER" : "config",
+      editable: !process.env.PI_WEB_GITHUB_OWNER,
+    },
+  };
+}
+
 function suggestedSessionBranch(repoPath, firstMessage) {
   const base = sessionSlug(firstMessage);
   const branches = ws.listBranches(repoPath);
@@ -28,13 +77,23 @@ function suggestedSessionBranch(repoPath, firstMessage) {
 
 export function buildApi(sup) {
   const api = new Hono();
+  const authFlows = new AuthFlowManager(sup);
+  const github = new GitHubClient();
+  const githubFlows = new GitHubDeviceFlowManager(github);
 
   // ---------- state ----------
   api.get("/state", async c => {
     const cfg = loadConfig();
     reconcileBindings(cfg, loadBindings());
-    const models = await safe(() => sup.listModels(), []);
-    const configuredDefault = await safe(() => sup.defaultModel(), cfg.defaultModel || null);
+    const modelState = await safe(() => sup.modelState(), {
+      models: [],
+      configuredDefault: cfg.defaultModel || null,
+      effectiveDefault: null,
+      status: cfg.defaultModel ? "unavailable" : "automatic",
+      error: { code: "model_runtime_error", message: "Could not load models." },
+    });
+    const models = modelState.models || [];
+    const providers = await safe(() => sup.listProviders(), []);
     const projects = [];
     for (const p of cfg.projects) {
       try { projects.push(await projectState(p, sup)); }
@@ -42,8 +101,14 @@ export function buildApi(sup) {
     }
     return c.json({
       mode: process.env.PI_WEB_MODE || "real",
-      defaultModel: configuredDefault,
+      defaultModel: modelState.configuredDefault,
+      effectiveDefaultModel: modelState.effectiveDefault,
+      defaultModelStatus: modelState.status,
+      modelError: modelState.error || null,
       models,
+      providers,
+      repositorySources: repositorySourceState(cfg, github),
+      settings: settingsState(cfg, github),
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
       projects,
@@ -51,7 +116,97 @@ export function buildApi(sup) {
     });
   });
 
-  api.get("/models", async c => c.json({ models: await sup.listModels() }));
+  api.get("/models", async c => {
+    const state = await sup.modelState();
+    return c.json({ models: state.models, error: state.error || null });
+  });
+
+  api.get("/providers", async c => c.json({ providers: await sup.listProviders() }));
+
+  api.get("/repository-sources", c => c.json(repositorySourceState(loadConfig(), github)));
+  api.get("/github/repos", async c => {
+    try {
+      return c.json(await github.listRepositories({ query: c.req.query("q"), page: c.req.query("page") }));
+    } catch (e) {
+      const statuses = { github_auth_required: 401, github_rate_limited: 403, github_unavailable: 502 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      throw e;
+    }
+  });
+  api.post("/github/device-login", async c => {
+    try { return c.json({ flow: githubFlows.view(await githubFlows.start()) }, 202); }
+    catch (e) {
+      const statuses = { github_not_configured: 409, github_flow_active: 409, github_login_unavailable: 502, github_unavailable: 502 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      throw e;
+    }
+  });
+  api.get("/github/device-login/:id", c => {
+    try { return c.json({ flow: githubFlows.view(githubFlows.get(c.req.param("id"))) }); }
+    catch (e) { if (e.code === "no_such_github_flow") return err(c, 404, e.code); throw e; }
+  });
+  api.delete("/github/device-login/:id", c => {
+    try { githubFlows.cancel(c.req.param("id")); return c.json({ ok: true }); }
+    catch (e) { if (e.code === "no_such_github_flow") return err(c, 404, e.code); throw e; }
+  });
+  api.post("/github/logout", c => {
+    try { github.logout(); return c.json({ ok: true }); }
+    catch (e) { if (e.code === "credential_managed_by_environment") return err(c, 409, e.code); throw e; }
+  });
+
+  api.post("/providers/:id/login", async c => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const flow = await authFlows.start(c.req.param("id"), body.type);
+      return c.json({ flow: flow.view() }, 202);
+    } catch (e) {
+      const statuses = { no_such_provider: 404, unsupported_auth_type: 400, auth_flow_active: 409 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code);
+      throw e;
+    }
+  });
+
+  api.get("/auth-flows/:id", c => {
+    try { return c.json({ flow: authFlows.get(c.req.param("id")).view() }); }
+    catch (e) {
+      if (e.code === "no_such_auth_flow") return err(c, 404, e.code);
+      throw e;
+    }
+  });
+
+  api.post("/auth-flows/:id/input", async c => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const flow = authFlows.get(c.req.param("id"));
+      flow.submit(body.promptId, body.value);
+      return c.json({ flow: flow.view() }, 202);
+    } catch (e) {
+      const statuses = { no_such_auth_flow: 404, stale_auth_prompt: 409, invalid_auth_option: 400 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code);
+      throw e;
+    }
+  });
+
+  api.delete("/auth-flows/:id", c => {
+    try {
+      const flow = authFlows.get(c.req.param("id"));
+      flow.cancel();
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e.code === "no_such_auth_flow") return err(c, 404, e.code);
+      throw e;
+    }
+  });
+
+  api.post("/providers/:id/logout", async c => {
+    try {
+      await sup.logoutProvider(c.req.param("id"));
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e.code === "credential_managed_by_environment") return err(c, 409, e.code);
+      throw e;
+    }
+  });
 
   // ---------- SSE ----------
   api.get("/events", c =>
@@ -74,7 +229,7 @@ export function buildApi(sup) {
     // legacy parent so old shared-cwd sessions remain discoverable.
     const scratch = path.join(chatsDir(), newId("c"));
     fs.mkdirSync(scratch, { recursive: true });
-    const { id } = await sup.createSession({ cwd: scratch, model: await sup.defaultModel() });
+    const { id } = await sup.createSession({ cwd: scratch });
     hub.emit(id, "session_created", { session: { id, title: "New session" } });
     return c.json({ id });
   });
@@ -85,25 +240,62 @@ export function buildApi(sup) {
   });
 
   api.post("/projects", async c => {
-    const { repoPath: rawPath, name } = await c.req.json();
-    const repoPath = rawPath ? resolvePath(rawPath) : null;
-    if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
+    const body = await c.req.json();
     const cfg = loadConfig();
+    const source = body.source || (body.repoPath ? "local" : repositorySource(cfg));
+    let repoPath = null;
+    let sourceInfo = { type: "local" };
+    let cloned = false;
+    if (source === "local") {
+      repoPath = body.repoPath ? resolvePath(body.repoPath) : null;
+      if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
+    } else {
+      try {
+        const result = await cloneRepository({
+          source,
+          url: body.url,
+          fullName: body.fullName,
+          github,
+          root: reposRoot(cfg),
+          signal: c.req.raw?.signal,
+        });
+        repoPath = result.repoPath;
+        sourceInfo = result.source;
+        cloned = result.cloned;
+      } catch (e) {
+        const statuses = {
+          github_auth_required: 401,
+          github_not_configured: 409,
+          github_not_found: 404,
+          github_rate_limited: 403,
+          github_unavailable: 502,
+          invalid_github_repository: 400,
+          invalid_git_url: 400,
+          invalid_repository_name: 400,
+          unsupported_repository_source: 400,
+          repository_exists: 409,
+          clone_in_progress: 409,
+          clone_failed: 502,
+        };
+        if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.code === "clone_failed" ? { message: e.message } : {});
+        throw e;
+      }
+    }
     if (cfg.projects.some(p => p.repoPath === repoPath)) return err(c, 409, "project_exists");
-    const project = { id: newId("p"), name: name || path.basename(repoPath), repoPath };
+    const project = { id: newId("p"), name: body.name || path.basename(repoPath), repoPath, source: sourceInfo };
     cfg.projects.push(project);
     saveConfig(cfg);
     ws.prune(repoPath);
     // First session lives on the checkout's branch — the checkout is its workspace.
-    const { id: sessionId } = await sup.createSession({ cwd: repoPath, model: await sup.defaultModel() });
+    const { id: sessionId } = await sup.createSession({ cwd: repoPath });
     hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id } });
-    return c.json({ id: project.id, sessionId });
+    return c.json({ id: project.id, sessionId, repoPath, cloned });
   });
 
   api.post("/projects/:id/sessions", async c => {
     const project = loadConfig().projects.find(p => p.id === c.req.param("id"));
     if (!project) return err(c, 404, "no_such_project");
-    const { id: sessionId } = await sup.createSession({ cwd: project.repoPath, model: await sup.defaultModel() });
+    const { id: sessionId } = await sup.createSession({ cwd: project.repoPath });
     hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id } });
     return c.json({ id: sessionId, projectId: project.id });
   });
@@ -147,8 +339,17 @@ export function buildApi(sup) {
         saveBindings(bindings);
       }
     }
-    await sup.message(id, text.trim(), mode);
-    return c.json({ ok: true });
+    try {
+      await sup.message(id, text.trim(), mode);
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e.code === "model_required") {
+        return err(c, 409, "model_required", {
+          message: "Connect a provider or choose an available model.",
+        });
+      }
+      throw e;
+    }
   });
 
   api.post("/sessions/:id/stop", async c => {
@@ -355,15 +556,35 @@ export function buildApi(sup) {
       cfg.defaultModel = body.defaultModel;
     }
     if (body.reposRoot !== undefined) {
+      if (process.env.PI_WEB_REPOS_ROOT) return err(c, 409, "setting_overridden", { field: "reposRoot", source: "PI_WEB_REPOS_ROOT" });
       const value = typeof body.reposRoot === "string" ? body.reposRoot.trim() : "";
       cfg.reposRoot = value || null;
     }
+    if (body.defaultRepositorySource !== undefined) {
+      if (process.env.PI_WEB_REPOSITORY_SOURCE) return err(c, 409, "setting_overridden", { field: "defaultRepositorySource", source: "PI_WEB_REPOSITORY_SOURCE" });
+      if (!["local", "github", "git-url"].includes(body.defaultRepositorySource)) return err(c, 400, "invalid_repository_source");
+      cfg.repositorySources.default = body.defaultRepositorySource;
+    }
+    if (body.githubOwner !== undefined) {
+      if (process.env.PI_WEB_GITHUB_OWNER) return err(c, 409, "setting_overridden", { field: "githubOwner", source: "PI_WEB_GITHUB_OWNER" });
+      cfg.repositorySources.github.owner = String(body.githubOwner || "").trim() || null;
+    }
+    if (body.githubClientId !== undefined) {
+      if (process.env.PI_WEB_GITHUB_CLIENT_ID) return err(c, 409, "setting_overridden", { field: "githubClientId", source: "PI_WEB_GITHUB_CLIENT_ID" });
+      cfg.repositorySources.github.clientId = String(body.githubClientId || "").trim() || null;
+    }
     saveConfig(cfg);
+    const modelState = await sup.modelState();
     return c.json({
       ok: true,
-      defaultModel: await sup.defaultModel(),
+      defaultModel: modelState.configuredDefault,
+      effectiveDefaultModel: modelState.effectiveDefault,
+      defaultModelStatus: modelState.status,
+      modelError: modelState.error || null,
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
+      repositorySources: repositorySourceState(cfg, github),
+      settings: settingsState(cfg, github),
     });
   });
 

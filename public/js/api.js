@@ -1,18 +1,49 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const JH = { "content-type": "application/json" };
-const j = (r) => {
-  if (!r.ok) return r.json().then(b => { throw Object.assign(new Error(b.error || r.status), b); });
-  return r.json();
+
+async function responseBody(r) {
+  const type = r.headers.get("content-type") || "";
+  if (type.includes("application/json")) return r.json().catch(() => ({}));
+  const text = await r.text().catch(() => "");
+  return text ? { message: text.slice(0, 300) } : {};
+}
+
+const j = async (r) => {
+  const body = await responseBody(r);
+  if (!r.ok) {
+    const code = body.error || `http_${r.status}`;
+    const message = body.message || (body.requestId ? `${code} (${body.requestId})` : code);
+    throw Object.assign(new Error(message), body, {
+      status: r.status,
+      requestId: body.requestId || r.headers.get("x-request-id"),
+    });
+  }
+  return body;
 };
 
 export const api = {
   state: () => fetch("/api/state").then(j),
   models: () => fetch("/api/models").then(j),
+  providers: () => fetch("/api/providers").then(j),
+  authStart: (providerId, type) => fetch(`/api/providers/${encodeURIComponent(providerId)}/login`, { method: "POST", headers: JH, body: JSON.stringify({ type }) }).then(j),
+  authFlow: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`).then(j),
+  authInput: (id, promptId, value) => fetch(`/api/auth-flows/${encodeURIComponent(id)}/input`, { method: "POST", headers: JH, body: JSON.stringify({ promptId, value }) }).then(j),
+  authCancel: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
+  providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
-  newProject: (repoPath) => fetch("/api/projects", { method: "POST", headers: JH, body: JSON.stringify({ repoPath }) }).then(j),
+  newProject: value => {
+    const body = typeof value === "string" ? { repoPath: value } : (value || {});
+    return fetch("/api/projects", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
+  },
   newProjectSession: (projectId) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   repos: () => fetch("/api/repos").then(j),
+  repositorySources: () => fetch("/api/repository-sources").then(j),
+  githubRepos: (query = "", page = 1) => fetch(`/api/github/repos?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),
+  githubLogin: () => fetch("/api/github/device-login", { method: "POST" }).then(j),
+  githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
+  githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
+  githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
@@ -28,6 +59,7 @@ export const api = {
     if (reposRoot !== undefined) body.reposRoot = reposRoot;
     return fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
   },
+  settingsPatch: patch => fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(patch || {}) }).then(j),
   close: (id) => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   merge: (id) => fetch(`/api/sessions/${id}/merge`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
 };
@@ -40,10 +72,16 @@ export async function refreshState() {
     chats: s.chats,
     mode: s.mode,
     defaultModel: s.defaultModel || null,
+    effectiveDefaultModel: s.effectiveDefaultModel || null,
+    defaultModelStatus: s.defaultModelStatus || "automatic",
+    modelError: s.modelError || null,
     models: s.models || [],
+    providers: s.providers || [],
+    repositorySources: s.repositorySources || null,
+    settings: s.settings || null,
     reposRoot: s.reposRoot || null,
     reposRootSource: s.reposRootSource || "default",
-    model: active?.model || s.defaultModel || null,
+    model: active?.model || s.effectiveDefaultModel || null,
   });
   for (const project of s.projects || []) seedStreaming(project.sessions);
   for (const chat of s.chats || []) {
@@ -247,7 +285,7 @@ export function applyEvent(evt, replay = false) {
         if (!wasSession) return;
         const p = s.projects.find(x => x.id === s.projectId);
         if (p?.sessions[0]) {
-          store.set({ view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, branchMenuOpen: false, files: [], fileError: null, model: p.sessions[0].model || s.defaultModel || null });
+          store.set({ view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, branchMenuOpen: false, files: [], fileError: null, model: p.sessions[0].model || s.effectiveDefaultModel || null });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
           store.set({ view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, branchMenuOpen: false, filesOpen: false });

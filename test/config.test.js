@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, loadBindings, projectMode, saveBindings, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadConfig, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -28,6 +28,36 @@ test("project modes default to manual and preserve only valid values", () => {
   assert.equal(projectMode({}), "manual");
   assert.equal(projectMode({ mode: "auto" }), "auto");
   assert.equal(projectMode({ mode: "invalid" }), "manual");
+});
+
+test("repository source config merges nested defaults and validates the default", () => {
+  saveConfig({ repositorySources: { default: "github", github: { owner: "bry-guy" } } });
+  const cfg = loadConfig();
+  assert.equal(repositorySource(cfg), "github");
+  assert.equal(cfg.repositorySources.github.owner, "bry-guy");
+  assert.equal(cfg.repositorySources.github.clientId, null);
+
+  saveConfig({ repositorySources: { default: "invalid" } });
+  assert.equal(repositorySource(loadConfig()), "local");
+});
+
+test("environment overrides repository source settings", () => {
+  const previous = {
+    source: process.env.PI_WEB_REPOSITORY_SOURCE,
+    client: process.env.PI_WEB_GITHUB_CLIENT_ID,
+    owner: process.env.PI_WEB_GITHUB_OWNER,
+  };
+  process.env.PI_WEB_REPOSITORY_SOURCE = "git-url";
+  process.env.PI_WEB_GITHUB_CLIENT_ID = "client-from-env";
+  process.env.PI_WEB_GITHUB_OWNER = "owner-from-env";
+  try {
+    assert.equal(repositorySource({ repositorySources: { default: "local" } }), "git-url");
+    assert.deepEqual(githubConfig({ repositorySources: { github: { clientId: "config-client", owner: "config-owner" } } }), { clientId: "client-from-env", owner: "owner-from-env" });
+  } finally {
+    for (const [key, value] of Object.entries({ PI_WEB_REPOSITORY_SOURCE: previous.source, PI_WEB_GITHUB_CLIENT_ID: previous.client, PI_WEB_GITHUB_OWNER: previous.owner })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });
 
 test("bindings v1 strings migrate to v2 objects and round-trip", () => {

@@ -26,15 +26,21 @@ npm run dev
 # open http://localhost:3141
 ```
 
-Run against the real Pi agent (requires `~/.pi/agent` to be configured):
+Run against the real Pi agent:
 
 ```sh
 npm install @earendil-works/pi-coding-agent
-npm run verify:real   # sanity-check SDK + credentials
+npm run verify:real   # explicit, credentialed SDK + model smoke test
 npm start
 ```
 
-The Settings screen shows which mode the server is running in. Branch switching, the file tree, and forking appear only inside a **project** session — connect a repo first (the `+` next to PROJECTS, or the Projects screen). Plain chats intentionally have none of those affordances.
+Chats and project sessions can be created before a provider is configured. The
+first prompt asks you to connect a model provider when no usable model is
+available. Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex
+OAuth, OpenAI API-key login, and the default-model selector. Branch switching,
+the file tree, and forking appear only inside a **project** session — connect a
+repo first (the `+` next to PROJECTS, or the Projects screen). Plain chats
+intentionally have none of those affordances.
 
 ## Install and configure
 
@@ -47,11 +53,37 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
   ],
   "reposRoot": "~/src",
   "worktreeRoot": null,
-  "defaultModel": "provider/modelId"
+  "defaultModel": null,
+  "repositorySources": {
+    "default": "local",
+    "github": { "clientId": null, "owner": null }
+  }
 }
 ```
 
-Use `PORT` to change the HTTP port, `PI_WEB_HOME` to change the application state directory, and `PI_WEB_REPOS_ROOT` to override the repository scan root (for example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). You can set the persistent `reposRoot` value in `~/.pi-web-ui/config.json` instead; the default is `$HOME/src`. The project picker also accepts an absolute or `~/...` repository path directly. Omit `worktreeRoot` to use the Pi-adjacent default `~/.pi/worktrees`, or set it to an absolute path. Project entries may set `mode` to `manual` (default) or `auto`; change that in `config.json` for now—the UI does not toggle it. Auto-mode branch names: colliding sessions with the same opening message get `-2`, `-3`…; fork children get `.1`, `.2`. Pi-web's own config, bindings, chats, and UI state remain under `~/.pi-web-ui`; existing worktrees are discovered in place and are not moved. Pi owns session transcripts. Plain chats are Pi sessions with a private scratch workspace under `~/.pi-web-ui/chats/<scratch-id>`; project sessions use repository checkouts/worktrees. Scratch directories accumulate and are safe to prune manually after checking for files you want to keep. The model picker is backed by Pi's available model runtime; `defaultModel` may be set to a `provider/modelId` reference.
+`defaultModel: null` means Automatic: use the first currently available
+provider model. An explicit value must be a usable `provider/modelId` reference.
+Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
+state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for
+example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). The project picker
+supports Local, GitHub, and public HTTPS Git URL sources. GitHub device login
+stores its token in `PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
+`PI_CODING_AGENT_DIR/auth.json`. Never put either credential in `config.json`.
+
+Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
+`PI_WEB_GITHUB_CLIENT_ID`, `PI_WEB_GITHUB_OWNER`, and
+`PI_WEB_GITHUB_TOKEN`. Environment values take precedence over config and are
+read-only in Settings. The default local repository root is `$HOME/src`. The
+picker also accepts an absolute or `~/...` repository path directly. Omit
+`worktreeRoot` to use the Pi-adjacent default `~/.pi/worktrees`, or set it to an
+absolute path. Project entries may set `mode` to `manual` (default) or `auto`;
+change that in `config.json` for now. Auto-mode branch names: colliding
+sessions with the same opening message get `-2`, `-3`…; fork children get `.1`,
+`.2`. Pi-web's config, bindings, chats, and UI state remain under
+`~/.pi-web-ui`; existing worktrees are discovered in place and are not moved.
+Plain chats use private scratch workspaces under
+`~/.pi-web-ui/chats/<scratch-id>` and scratch directories are retained for
+manual cleanup. The model picker is backed by Pi's available model runtime.
 
 ## Trust boundary
 
@@ -75,4 +107,4 @@ mise reset         # clear mock state
 
 With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults.
 
-See [deployment.md](docs/deployment.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.
+See [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.

@@ -98,6 +98,19 @@ after(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test("unknown API failures return structured JSON with a request id", async () => {
+  const response = await fetch(base + "/api/projects", {
+    method: "POST",
+    headers: J,
+    body: "{",
+  });
+  assert.equal(response.status, 500);
+  assert.match(response.headers.get("x-request-id") || "", /^[0-9a-f-]{36}$/);
+  const body = await response.json();
+  assert.equal(body.error, "internal_error");
+  assert.equal(body.requestId, response.headers.get("x-request-id"));
+});
+
 test("serves the UI", async () => {
   const html = await (await get("/")).text();
   assert.match(html, /<pi-app>/);
@@ -438,6 +451,27 @@ test("settings can persist a custom local repositories root", async () => {
   const body = await r.json();
   assert.equal(body.reposRoot, customRoot);
   assert.equal((await (await get("/api/state")).json()).reposRoot, customRoot);
+});
+
+test("model state distinguishes Automatic from an explicit default", async () => {
+  let r = await post("/api/settings", { defaultModel: null });
+  assert.equal(r.status, 200);
+  let body = await r.json();
+  assert.equal(body.defaultModel, null);
+  assert.equal(body.effectiveDefaultModel, "mock/fast");
+  assert.equal(body.defaultModelStatus, "automatic");
+
+  r = await post("/api/settings", { defaultModel: "mock/smart" });
+  assert.equal(r.status, 200);
+  body = await r.json();
+  assert.equal(body.defaultModel, "mock/smart");
+  assert.equal(body.effectiveDefaultModel, "mock/smart");
+  assert.equal(body.defaultModelStatus, "available");
+
+  r = await post("/api/settings", { defaultModel: "not-a-model" });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "model_unavailable");
+  await post("/api/settings", { defaultModel: null });
 });
 
 test("checkout workspace cannot be deleted", async () => {

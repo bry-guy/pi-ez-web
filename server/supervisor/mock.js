@@ -50,9 +50,38 @@ export class MockSupervisor {
 
   listModels() { return MOCK_MODELS.map(m => ({ ...m })); }
   defaultModel() {
-    const configured = loadConfig().defaultModel;
-    return MOCK_MODELS.some(m => m.id === configured) ? configured : MOCK_MODELS[0].id;
+    const configured = loadConfig().defaultModel || null;
+    return configured ? (MOCK_MODELS.some(m => m.id === configured) ? configured : null) : MOCK_MODELS[0].id;
   }
+  modelState() {
+    const configuredDefault = loadConfig().defaultModel || null;
+    const effectiveDefault = configuredDefault
+      ? (MOCK_MODELS.some(m => m.id === configuredDefault) ? configuredDefault : null)
+      : MOCK_MODELS[0].id;
+    return {
+      models: this.listModels(),
+      configuredDefault,
+      effectiveDefault,
+      status: configuredDefault ? (effectiveDefault === configuredDefault ? "available" : "unavailable") : "automatic",
+      error: null,
+    };
+  }
+  listProviders() {
+    return [{
+      id: "mock",
+      name: "Mock provider",
+      configured: true,
+      source: "runtime",
+      sourceLabel: "Scripted",
+      authType: null,
+      authMethods: [],
+      availableModels: MOCK_MODELS.length,
+      canLogout: false,
+      error: null,
+    }];
+  }
+  async loginProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
+  async logoutProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
 
   async createSession({ cwd, name, model }) {
     const s = {

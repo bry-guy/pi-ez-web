@@ -29,7 +29,7 @@ test("pi SDK exposes the surface the real supervisor uses", async () => {
   surfaceSession.dispose();
   assert.equal(typeof sdk.ModelRuntime, "function");
   assert.equal(typeof sdk.ModelRuntime.create, "function");
-  for (const m of ["getAvailableSnapshot", "getAvailable", "getModel", "getProviders"]) {
+  for (const m of ["getAvailableSnapshot", "getAvailable", "getModel", "getProviders", "getProviderAuthStatus", "checkAuth", "login", "logout", "refresh"]) {
     assert.equal(typeof sdk.ModelRuntime.prototype[m], "function", `ModelRuntime.${m}`);
   }
 });

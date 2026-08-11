@@ -19,14 +19,29 @@ const DEFAULTS = {
   reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
   defaultModel: null,
+  repositorySources: {
+    default: "local",
+    github: { clientId: null, owner: null },
+  },
 };
 
 function readJson(p, fallback) {
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; }
+  try { return JSON.parse(fs.readFileSync(p, "utf8")); }
+  catch (error) {
+    if (fs.existsSync(p)) console.warn(`pi-ez-web: could not read JSON state ${p}: ${error.message}`);
+    return fallback;
+  }
 }
-function writeJson(p, obj) {
+function writeJson(p, obj, mode = 0o600) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(obj, null, 2) + "\n");
+  const temporary = `${p}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(obj, null, 2) + "\n", { encoding: "utf8", mode, flag: "wx" });
+    fs.renameSync(temporary, p);
+    try { fs.chmodSync(p, mode); } catch { /* best effort on non-POSIX filesystems */ }
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 export function ensureHome() {
@@ -34,7 +49,27 @@ export function ensureHome() {
 }
 
 export function loadConfig() {
-  return { ...DEFAULTS, ...readJson(configPath(), {}) };
+  const rawValue = readJson(configPath(), {});
+  const raw = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : {};
+  const sources = raw.repositorySources && typeof raw.repositorySources === "object" ? raw.repositorySources : {};
+  const github = sources.github && typeof sources.github === "object" ? sources.github : {};
+  const projects = Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects;
+  return {
+    ...DEFAULTS,
+    ...raw,
+    projects,
+    repositorySources: {
+      ...DEFAULTS.repositorySources,
+      ...sources,
+      default: ["local", "github", "git-url"].includes(sources.default) ? sources.default : DEFAULTS.repositorySources.default,
+      github: {
+        ...DEFAULTS.repositorySources.github,
+        ...github,
+        clientId: github.clientId ? String(github.clientId).trim() : null,
+        owner: github.owner ? String(github.owner).trim() : null,
+      },
+    },
+  };
 }
 export function saveConfig(cfg) {
   writeJson(configPath(), cfg);
@@ -54,6 +89,19 @@ export function reposRoot(cfg = loadConfig()) {
   return resolvePath(raw);
 }
 
+export function repositorySource(cfg = loadConfig()) {
+  const value = process.env.PI_WEB_REPOSITORY_SOURCE || cfg.repositorySources?.default || "local";
+  return ["local", "github", "git-url"].includes(value) ? value : "local";
+}
+
+export function githubConfig(cfg = loadConfig()) {
+  const configured = cfg.repositorySources?.github || {};
+  return {
+    clientId: process.env.PI_WEB_GITHUB_CLIENT_ID || configured.clientId || null,
+    owner: process.env.PI_WEB_GITHUB_OWNER || configured.owner || null,
+  };
+}
+
 export function worktreeRoot(cfg) {
   return cfg.worktreeRoot || worktreeRootDefault();
 }
@@ -63,8 +111,7 @@ export function loadClosed() {
   try { return new Set(JSON.parse(fs.readFileSync(closedPath(), "utf8"))); } catch { return new Set(); }
 }
 export function saveClosed(set) {
-  fs.mkdirSync(appHome(), { recursive: true });
-  fs.writeFileSync(closedPath(), JSON.stringify([...set], null, 2) + "\n");
+  writeJson(closedPath(), [...set]);
 }
 
 export function loadBindings() {

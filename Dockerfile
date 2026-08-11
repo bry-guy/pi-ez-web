@@ -5,6 +5,11 @@ ENV NODE_ENV=production \
     PI_WEB_MODE=real
 
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 
 # Pi is a peer dependency for local development, but is required at runtime.

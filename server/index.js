@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,23 @@ export function createApp() {
   ensureHome();
   const sup = createSupervisor(hub);
   const app = new Hono();
+  app.use("/api/*", async (c, next) => {
+    const requestId = randomUUID();
+    c.set("requestId", requestId);
+    c.header("x-request-id", requestId);
+    await next();
+  });
+  app.onError((error, c) => {
+    const requestId = c.get("requestId") || randomUUID();
+    console.error("pi-ez-web request failed", {
+      requestId,
+      method: c.req.method,
+      path: c.req.path,
+      stack: error instanceof Error ? error.stack : String(error),
+    });
+    c.header("x-request-id", requestId);
+    return c.json({ error: "internal_error", requestId }, 500);
+  });
   app.route("/api", buildApi(sup));
   app.use("/*", serveStatic({ root: path.relative(process.cwd(), path.join(here, "..", "public")) || "./public" }));
   return { app, sup };

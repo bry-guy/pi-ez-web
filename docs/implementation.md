@@ -30,19 +30,30 @@ server/
   events.js           SSE hub (event contract v1 + sequence snapshots)
   lifecycle.js        explicit close and merge lifecycle
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
+  auth-flows.js       server-side Pi OAuth/API-key interaction bridge
+  github.js           GitHub device login, API listing, and private token store
+  repositories.js     validated HTTPS cloning with temporary GIT_ASKPASS
 public/               index.html + app.css + ES modules; no build step
-test/                 workspaces (real git) · server integration (mock+SSE) · SDK surface · DOM gate
+test/                 workspaces (real git) · server integration (mock+SSE) · SDK/auth/clone surfaces · DOM gate
 scripts/verify-real.js  credentialed end-to-end smoke
 docs/archive/CHECKLIST.md  archived real-browser click-through gate
 ```
 
 Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
-`chats/`); project worktrees default to the Pi-adjacent `~/.pi/worktrees`
-(and can be overridden with `worktreeRoot`). Pi owns transcripts and auth under
-`~/.pi/agent`. New plain chats use private scratch directories under `chats/`;
-legacy sessions at the shared `chats/` cwd remain discoverable. Scratch
-directories are retained when a chat is closed and may be pruned manually.
-Override the app home with `PI_WEB_HOME`.
+`closed.json`, `github-auth.json`, and `chats/`); project worktrees default to
+the Pi-adjacent `~/.pi/worktrees` (and can be overridden with `worktreeRoot`).
+Pi owns transcripts, settings, models, and AI auth under
+`PI_CODING_AGENT_DIR` (normally `~/.pi/agent`). New plain chats use private
+scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
+remain discoverable. Scratch directories are retained when a chat is closed and
+may be pruned manually. Override the app home with `PI_WEB_HOME`.
+
+The app supports Local, GitHub, and public HTTPS Git URL repository sources.
+GitHub uses device authorization and stores its token separately from
+`config.json`; private clones use a temporary `GIT_ASKPASS` helper and never
+place credentials in clone URLs or process arguments. AI login flows use a
+short-polling REST API because Pi's provider OAuth implementations are
+server-side Node flows. Transcript SSE remains contract version 1.
 
 ## Invariants
 
@@ -86,7 +97,11 @@ rename control. The branch cleanup endpoint is also API-only.
 The repository picker scans `$HOME/src` by default. Set `reposRoot` in
 `~/.pi-web-ui/config.json`, use `PI_WEB_REPOS_ROOT`, or type an absolute path
 in the picker to use a different local repository directory. The environment
-variable takes precedence over the config value.
+variable takes precedence over the config value. The picker also supports
+GitHub device login/private repository cloning and public HTTPS Git URLs.
+`defaultModel: null` means Automatic; an explicit default must be currently
+available. Chats and project sessions can be created without a model and return
+`409 model_required` on the first prompt when no provider is usable.
 
 The design (tokens, screens, event contract) is preserved in the archived
 [PLAN.md](archive/PLAN.md) and design README; the UI is a direct port of the

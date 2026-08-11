@@ -12,6 +12,21 @@ async function SDK() {
   return sdk;
 }
 
+function persistManager(manager, code = "session_persistence_unavailable") {
+  const file = manager.getSessionFile?.();
+  if (!file) throw Object.assign(new Error(code), { code });
+  if (!fs.existsSync(file)) {
+    if (typeof manager._rewriteFile !== "function") {
+      throw Object.assign(new Error(code), { code });
+    }
+    manager._rewriteFile();
+    // Pi 0.84 defers a new session file until its first assistant message.
+    // Marking it flushed makes subsequent custom/session-info entries append.
+    manager.flushed = true;
+  }
+  return file;
+}
+
 export class RealSupervisor {
   constructor(hub) {
     this.hub = hub;
@@ -20,6 +35,7 @@ export class RealSupervisor {
     this.info = new Map();       // sessionId -> discovered SessionInfo metadata
     this.runtime = null;         // shared ModelRuntime for all attached sessions
     this.models = null;
+    this.modelError = null;
   }
 
   async _modelRuntime() {
@@ -234,14 +250,24 @@ export class RealSupervisor {
     }
   }
 
-  async createSession({ cwd, name, model }) {
-    const st = await this._attach(null, cwd, model || await this.defaultModel());
-    if (name) st.session.setSessionName(name);
-    return { id: st.session.sessionId };
+  async createSession({ cwd, name }) {
+    const { SessionManager } = await SDK();
+    const manager = SessionManager.create(cwd);
+    if (name) manager.appendSessionInfo(name);
+    const file = persistManager(manager);
+    const id = manager.getSessionId();
+    this.paths.set(id, file);
+    this.info.set(id, {
+      id, path: file, cwd, name: name || null, parentSessionId: null,
+    });
+    return { id };
   }
 
   async message(id, text, mode) {
     const st = await this._attachById(id);
+    if (!isUsableModel(st.session.model)) {
+      throw Object.assign(new Error("model_required"), { code: "model_required" });
+    }
     if (mode === "steer" && st.session.isStreaming) return st.session.steer(text);
     if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text);
     st.session.prompt(text).catch(err => {
@@ -276,9 +302,12 @@ export class RealSupervisor {
   }
 
   async transcript(id) {
-    const st = await this._attachById(id).catch(() => null);
-    if (!st) return [];
-    return snapshotRecords(st);
+    const st = this.live.get(id);
+    if (st) return snapshotRecords(st);
+    if (!await this._discover(id)) return [];
+    await SDK();
+    const manager = this._managerFor(id);
+    return entriesToRecords(manager.getBranch?.() || []);
   }
 
   async meta(id) {
@@ -294,6 +323,7 @@ export class RealSupervisor {
     const file = this.paths.get(id) || this.info.get(id)?.path;
     if (!file) return null;
     try {
+      await SDK();
       const manager = this._managerFor(id);
       const branch = manager.getBranch();
       const info = this.info.get(id) || {};
@@ -301,7 +331,7 @@ export class RealSupervisor {
         id,
         cwd: this._boundCwd(id, manager.getCwd()),
         name: manager.getSessionName?.() || info.name || null,
-        model: modelRefFromEntries(branch) || await this.defaultModel(),
+        model: modelRefFromEntries(branch),
         parentSessionId: info.parentSessionId || null,
       };
     } catch { return null; }
@@ -315,25 +345,128 @@ export class RealSupervisor {
       st.session.dispose?.();
       this.live.delete(id);
     }
-    await this._attach(id, newCwd);
+    if (!await this._discover(id)) throw new Error("unknown session " + id);
+    // The durable binding is written by the route immediately after this
+    // method. Keep the session header intact; _boundCwd() and meta() already
+    // prefer that binding over the original Pi cwd.
     this.info.set(id, { ...(this.info.get(id) || {}), cwd: newCwd });
   }
 
   async listModels() {
-    const runtime = await this._modelRuntime();
-    let models = runtime.getAvailableSnapshot?.() || [];
-    if (!models.length) {
-      try { models = await runtime.getAvailable(); } catch { /* no configured provider/auth */ }
+    try {
+      const runtime = await this._modelRuntime();
+      let models = runtime.getAvailableSnapshot?.() || [];
+      if (!models.length) {
+        try { models = await runtime.getAvailable(); } catch { /* no configured provider/auth */ }
+      }
+      this.modelError = runtime.getError?.()
+        ? { code: "model_runtime_error", message: "Model discovery reported a provider configuration error." }
+        : null;
+      this.models = models.map(modelInfo);
+    } catch (error) {
+      const detail = String(error?.message || error || "unknown error")
+        .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+        .replace(/sk-[A-Za-z0-9_-]+/g, "sk-[redacted]")
+        .replace(/([?&](?:code|state|access_token|refresh_token)=)[^&\s]+/gi, "$1[redacted]");
+      console.error("pi-ez-web model discovery failed", detail);
+      this.modelError = { code: "model_runtime_error", message: "Could not load models. Check Pi provider configuration." };
+      this.models = [];
     }
-    this.models = models.map(modelInfo);
     return this.models.map(m => ({ ...m }));
   }
 
-  async defaultModel() {
-    const configured = loadConfig().defaultModel;
+  async modelState() {
+    const configuredDefault = loadConfig().defaultModel || null;
     const models = await this.listModels();
-    if (configured && models.some(m => m.id === configured)) return configured;
-    return models[0]?.id || configured || null;
+    const configuredAvailable = configuredDefault && models.some(m => m.id === configuredDefault);
+    return {
+      models,
+      configuredDefault,
+      effectiveDefault: configuredDefault ? (configuredAvailable ? configuredDefault : null) : (models[0]?.id || null),
+      status: configuredDefault ? (configuredAvailable ? "available" : "unavailable") : "automatic",
+      error: this.modelError,
+    };
+  }
+
+  async defaultModel() {
+    return (await this.modelState()).effectiveDefault;
+  }
+
+  async listProviders() {
+    const runtime = await this._modelRuntime();
+    const supported = new Set(["anthropic", "openai-codex", "openai"]);
+    const models = await this.listModels();
+    const availableByProvider = new Map();
+    for (const model of models) {
+      availableByProvider.set(model.provider, (availableByProvider.get(model.provider) || 0) + 1);
+    }
+    const providers = [];
+    for (const provider of runtime.getProviders()) {
+      if (!supported.has(provider.id)) continue;
+      const status = runtime.getProviderAuthStatus(provider.id) || {};
+      const auth = await runtime.checkAuth(provider.id).catch(() => undefined);
+      const authMethods = [];
+      if (provider.auth.oauth) authMethods.push({
+        id: "oauth",
+        label: provider.auth.oauth.name,
+        subscription: !!provider.auth.oauth.isSubscription,
+      });
+      if (provider.auth.apiKey?.login) authMethods.push({
+        id: "api_key",
+        label: provider.auth.apiKey.name,
+        subscription: false,
+      });
+      const authLabel = auth?.type === "oauth"
+        ? (provider.auth.oauth?.name || "OAuth")
+        : auth?.type === "api_key"
+          ? (provider.auth.apiKey?.name || "API key")
+          : null;
+      providers.push({
+        id: provider.id,
+        name: provider.name,
+        configured: !!status.configured || !!auth,
+        source: status.source || (auth?.source ? "environment" : null),
+        sourceLabel: authLabel || status.label || null,
+        authType: auth?.type || null,
+        authMethods,
+        availableModels: availableByProvider.get(provider.id) || 0,
+        canLogout: !!auth && status.source === "stored",
+        error: this.modelError && !availableByProvider.get(provider.id) ? this.modelError : null,
+      });
+    }
+    return providers;
+  }
+
+  async loginProvider(providerId, authType, interaction) {
+    const runtime = await this._modelRuntime();
+    await runtime.login(providerId, authType, interaction);
+    await runtime.refresh({ providers: [providerId], allowNetwork: true, force: true });
+    await runtime.getAvailable(providerId).catch(() => []);
+    this.models = null;
+    this.modelError = null;
+    // A no-model session may have been attached once to render its metadata
+    // before the user logged in. Let the next prompt rebuild it with the new
+    // runtime availability instead of keeping Pi's "unknown" sentinel.
+    for (const [id, state] of this.live) {
+      if (!isUsableModel(state.session.model) && !state.session.isStreaming) {
+        state.unsubscribe?.();
+        state.session.dispose?.();
+        this.live.delete(id);
+      }
+    }
+  }
+
+  async logoutProvider(providerId) {
+    const runtime = await this._modelRuntime();
+    const credentials = await runtime.listCredentials();
+    const stored = credentials.some(item => item.providerId === providerId);
+    const status = runtime.getProviderAuthStatus(providerId) || {};
+    if (!stored && status.configured) {
+      throw Object.assign(new Error("credential_managed_by_environment"), { code: "credential_managed_by_environment" });
+    }
+    await runtime.logout(providerId);
+    this.models = null;
+    this.modelError = null;
   }
 
   async setModel(id, modelRef) {
@@ -345,8 +478,18 @@ export class RealSupervisor {
   }
 
   async setName(id, name) {
-    const st = await this._attachById(id);
-    st.session.setSessionName(name);
+    const st = this.live.get(id);
+    if (st) {
+      st.session.setSessionName(name);
+      return;
+    }
+    if (!await this._discover(id)) throw new Error("unknown session " + id);
+    await SDK();
+    const manager = this._managerFor(id);
+    manager.appendSessionInfo(String(name || ""));
+    const info = this.info.get(id) || {};
+    this.info.set(id, { ...info, name: String(name || "") || null });
+    this.hub.emit(id, "session_meta", { name: String(name || "") || null });
   }
 
   async fork(parentId, atRecordId, { cwd, name }) {
@@ -377,27 +520,23 @@ export class RealSupervisor {
   }
 
   async bangRecord(id, rec) {
-    const st = await this._attachById(id);
-    const manager = st.session.sessionManager;
+    const st = this.live.get(id);
+    if (!st && !await this._discover(id)) throw new Error("unknown session " + id);
+    if (!st) await SDK();
+    const manager = st?.session.sessionManager || this._managerFor(id);
     manager.appendCustomEntry("pi-web:bang", {
       id: rec.id, cmd: rec.cmd, meta: rec.meta, out: rec.out,
     });
-    // The SDK intentionally defers writing a new session until its first
-    // assistant message. A bang is allowed before that, so flush the same
-    // SessionManager entry list through its existing writer when necessary.
-    const file = manager.getSessionFile?.();
-    if (file && !fs.existsSync(file)) {
-      if (typeof manager._rewriteFile !== "function") {
-        throw Object.assign(new Error("bang_persistence_unavailable"), { code: "bang_persistence_unavailable" });
-      }
-      manager._rewriteFile();
-      manager.flushed = true;
-    }
+    persistManager(manager, "bang_persistence_unavailable");
   }
 }
 
+function isUsableModel(model) {
+  return !!model && model.provider !== "unknown" && model.id !== "unknown" && model.api !== "unknown";
+}
+
 function modelRef(model) {
-  if (!model) return null;
+  if (!isUsableModel(model)) return null;
   const provider = model.provider;
   const id = model.id ?? model.modelId;
   return provider && id ? `${provider}/${id}` : null;

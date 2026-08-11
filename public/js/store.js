@@ -25,12 +25,16 @@ export const store = {
     confirm: null,          // { type: "merge"|"close"|"bind", id, branch, error? }
     filesOpen: false,
     repoPickerOpen: false,
+    repoPickerSource: null,
     query: "",
     repoQuery: "",
     newBranch: "",
     draft: "",
     model: null,             // active session model reference
-    defaultModel: null,      // setting used for new sessions
+    defaultModel: null,      // configured setting; null means Automatic
+    effectiveDefaultModel: null,
+    defaultModelStatus: "automatic",
+    modelError: null,
     models: [],              // registry-backed { id, provider, label }
     animIdx: 0,
     error: null,             // transient composer/action error
@@ -40,6 +44,9 @@ export const store = {
     projects: [],
     chats: [],
     mode: "real",
+    providers: [],
+    repositorySources: null,
+    settings: null,
     repos: [],
     reposRoot: null,     // configured directory scanned by /api/repos
     reposRootSource: "default", // default | config | environment

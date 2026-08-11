@@ -10,7 +10,7 @@ export function selectSession(projectId, sessionId) {
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
     filesOpen: store.state.filesOpen, files: [], fileError: null,
-    branchMenuOpen: false, model: node?.model || store.state.defaultModel || null,
+    branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   openTranscript(sessionId);
 }
@@ -19,7 +19,7 @@ export function selectChat(chatId) {
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
     branchMenuOpen: false, filesOpen: false, files: [], fileError: null,
-    model: chat?.model || store.state.defaultModel || null,
+    model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   openTranscript(chatId);
 }
@@ -35,7 +35,7 @@ export async function newProjectSession(projectId) {
   const project = store.state.projects.find(p => p.id === projectId);
   if (project && !findNode(project.sessions, id)) project.sessions.unshift({
     id, title: "New session", branch: project.branch, workspacePath: project.repoPath,
-    model: store.state.defaultModel, when: "now", streaming: false, children: [],
+    model: store.state.effectiveDefaultModel, when: "now", streaming: false, children: [],
   });
   store.state.openTree[projectId] = true;
   selectSession(projectId, id);

@@ -13,15 +13,34 @@ docker run --rm -p 3141:3141 pi-ez-web:local
 A real deployment must provide Pi credentials and persistent storage. Keep
 these paths stable across container restarts:
 
-- `PI_WEB_HOME` — config, bindings, closed markers, and chat scratch space.
-- `/home/node/.pi/agent` — Pi transcripts and agent configuration/auth.
+- `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, and chat scratch space.
+- `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
 - `reposRoot` — the checked-out repositories.
 - `worktreeRoot` — Git worktrees created by the app.
 
-For containers, set `PI_WEB_HOME` and configure absolute paths such as
-`/data/repos` and `/data/worktrees`; do not rely on the image user's default
-home paths. Repositories and worktrees must be writable by the service user.
-Never bake credentials into the image.
+The image includes `git` and CA certificates. GitHub private clones use HTTPS
+and a temporary askpass helper; SSH keys are not managed by the app.
+
+For containers, set `PI_WEB_HOME`, `PI_CODING_AGENT_DIR`, and configure
+absolute paths such as `/data/repos` and `/data/worktrees`; do not rely on the
+image user's default home paths. Repositories and worktrees must be writable by
+the service user. Never bake credentials into the image.
+
+A typical retained layout is:
+
+```text
+/data/pi-ez-web/config.json
+/data/pi-ez-web/bindings.json
+/data/pi-ez-web/github-auth.json
+/data/pi-ez-web/chats/
+/data/pi-ez-agent/auth.json
+/data/pi-ez-agent/models.json
+/data/pi-ez-agent/sessions/
+/data/pi-ez-workspaces/
+/data/pi-ez-worktrees/
+```
+
+Treat both `github-auth.json` and Pi's `auth.json` as secrets in backups.
 
 ## k3s
 
@@ -53,11 +72,20 @@ pi.example.ts.net {
 }
 ```
 
-Ensure the proxy permits long-lived SSE responses. Restrict access with
-Tailscale ACLs and, if appropriate, an additional Caddy authentication layer.
+Ensure the proxy permits long-lived SSE responses. GitHub device login and
+Pi provider login use server-side polling, so no OAuth callback route needs to
+be exposed through Caddy. Restrict access with Tailscale ACLs and, if
+appropriate, an additional Caddy authentication layer.
 The application has no built-in authentication and the agent can execute shell
 commands as its service user, so it must remain inside a trusted tailnet.
 
+Test NFS-backed state for same-directory atomic rename, POSIX permissions,
+Pi auth-file locking, Git clone, and Git worktree add/remove. Keep mount paths
+stable because Git worktree metadata records absolute paths. Do not introduce a
+second storage tier unless an acceptance test demonstrates a concrete NFS
+failure.
+
 Before treating this as a highly available service, add external session/event
 coordination, a readiness endpoint, and graceful shutdown/drain handling. A
-single persistent pod is the supported deployment shape today.
+single persistent pod is the supported deployment shape today; OAuth flow state,
+SSE clients, and workspace locks are in memory.

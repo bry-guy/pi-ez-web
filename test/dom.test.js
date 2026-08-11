@@ -122,6 +122,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
+  const sourceToggle = root.querySelector("[data-source-toggle]");
+  assert.ok(sourceToggle);
+  sourceToggle.click();
+  assert.ok(root.querySelector("[data-source='github']"));
+  root.querySelector("[data-source='local']").click();
   const filter = root.querySelector(".modal-filter");
   filter.focus();
   filter.value = "oth";
@@ -129,6 +134,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(dom.window.document.activeElement, filter);
   root.querySelector("pi-repo-picker [data-act='close']").click();
   assert.equal(store.state.repoPickerOpen, false);
+
+  store.set({ view: "settings" });
+  assert.match(root.querySelector("pi-settings").textContent, /Default model/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
+  store.set({ view: "chat" });
 
   root.querySelector(".model-chip").click();
   assert.ok(root.querySelector(".model-popover"));

@@ -152,11 +152,15 @@ class PiThread extends HTMLElement {
 class PiModelPicker extends HTMLElement {
   connectedCallback() {
     this.open = false;
+    this.focusedIndex = 0;
     this.mode = this.dataset.mode === "default" ? "default" : "session";
     this.onDocumentPointer = e => {
       if (this.open && !this.contains(e.target)) this.close();
     };
+    this.onViewport = () => { if (this.open) this.positionPopover(); };
     document.addEventListener("pointerdown", this.onDocumentPointer);
+    window.addEventListener("resize", this.onViewport);
+    window.addEventListener("scroll", this.onViewport, true);
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => this.onKeyDown(e));
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
@@ -165,66 +169,170 @@ class PiModelPicker extends HTMLElement {
   disconnectedCallback() {
     this.unsub?.();
     document.removeEventListener("pointerdown", this.onDocumentPointer);
+    window.removeEventListener("resize", this.onViewport);
+    window.removeEventListener("scroll", this.onViewport, true);
   }
   current() {
-    return this.mode === "default" ? store.state.defaultModel : store.state.model;
+    return this.mode === "default"
+      ? store.state.defaultModel
+      : store.state.model || store.state.effectiveDefaultModel || null;
   }
-  close() {
+  close(returnFocus = false) {
     if (!this.open) return;
     this.open = false;
     this.render();
+    if (returnFocus) this.querySelector("[data-model-toggle]")?.focus();
   }
+  options() { return [...this.querySelectorAll("[data-model]:not([disabled])")]; }
   onKeyDown(e) {
     if (e.key === "Escape") {
       e.preventDefault();
-      this.close();
-      this.querySelector("button")?.focus();
+      this.close(true);
+      return;
     }
+    const toggle = e.target.closest("[data-model-toggle]");
+    if (!this.open) {
+      if (toggle && ["ArrowDown", "Enter", " "].includes(e.key)) {
+        e.preventDefault();
+        this.open = true;
+        this.focusedIndex = 0;
+        this.render();
+        this.focusOption();
+      }
+      return;
+    }
+    const options = this.options();
+    if (!options.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      this.focusedIndex = (this.focusedIndex + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+      this.focusOption();
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      this.focusedIndex = e.key === "Home" ? 0 : options.length - 1;
+      this.focusOption();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      void this.choose(options[this.focusedIndex]?.dataset.model);
+    }
+  }
+  focusOption() {
+    const options = this.options();
+    const option = options[this.focusedIndex];
+    option?.focus();
+    option?.scrollIntoView?.({ block: "nearest" });
   }
   onClick(e) {
     const toggle = e.target.closest("[data-model-toggle]");
     if (toggle) {
       this.open = !this.open;
+      this.focusedIndex = 0;
       this.render();
-      if (this.open) this.querySelector(".model-option")?.focus();
+      if (this.open) this.focusOption();
+      return;
+    }
+    const automatic = e.target.closest("[data-model-automatic]");
+    if (automatic) {
+      void this.choose(null);
       return;
     }
     const option = e.target.closest("[data-model]");
-    if (option) {
-      void this.choose(option.dataset.model);
-    }
+    if (option && !option.disabled) void this.choose(option.dataset.model);
   }
   async choose(id) {
     const previous = this.current();
     this.open = false;
-    store.set(this.mode === "default" ? { defaultModel: id } : { model: id });
+    if (this.mode === "default") store.set({ defaultModel: id });
+    else store.set({ model: id });
     try {
-      if (this.mode === "default") await api.settings(id);
-      else if (store.activeKey()) await api.setModel(store.activeKey(), id);
+      if (this.mode === "default") {
+        const result = await api.settings(id);
+        store.set({
+          defaultModel: result.defaultModel ?? null,
+          effectiveDefaultModel: result.effectiveDefaultModel ?? null,
+          defaultModelStatus: result.defaultModelStatus || "automatic",
+          modelError: result.modelError || null,
+        });
+      } else if (store.activeKey()) {
+        await api.setModel(store.activeKey(), id);
+      }
     } catch (err) {
-      store.set(this.mode === "default" ? { defaultModel: previous } : { model: previous });
-      store.setError(err.error === "model_unavailable" ? "That model is unavailable." : `Model change failed: ${err.message || err}`);
+      if (this.mode === "default") store.set({ defaultModel: previous });
+      else store.set({ model: previous });
+      store.setError(err.error === "model_unavailable"
+        ? "That model is unavailable."
+        : `Model change failed: ${err.message || err}`);
     }
+  }
+  positionPopover() {
+    const popover = this.querySelector(".model-popover");
+    const anchor = this.querySelector("[data-model-toggle]");
+    if (!popover || !anchor) return;
+    const a = anchor.getBoundingClientRect();
+    const margin = 12;
+    const gap = 8;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+    const width = Math.min(292, Math.max(0, viewportWidth - margin * 2));
+    const height = popover.getBoundingClientRect().height;
+    const aboveRoom = a.top - margin;
+    const belowRoom = viewportHeight - a.bottom - margin;
+    const above = aboveRoom >= Math.min(height, 240) || aboveRoom >= belowRoom;
+    const left = Math.max(margin, Math.min(a.right - width, viewportWidth - width - margin));
+    const top = above
+      ? Math.max(margin, a.top - height - gap)
+      : Math.min(viewportHeight - margin - Math.min(height, belowRoom), a.bottom + gap);
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+    popover.style.width = `${width}px`;
+    popover.querySelector(".model-list")?.style.setProperty("max-height", `${Math.max(120, (above ? aboveRoom : belowRoom) - gap)}px`);
   }
   render() {
     const current = this.current();
     const model = store.state.models.find(m => m.id === current);
+    const configuredUnavailable = this.mode === "default" && current && !model && store.state.defaultModelStatus === "unavailable";
+    const chipLabel = this.mode === "default"
+      ? (model?.label || (configuredUnavailable ? `${current} (unavailable)` : "Automatic"))
+      : (model?.label || current || "Automatic");
     const variant = this.dataset.variant === "settings" ? "settings-chip" : "model-chip";
-    const options = store.state.models.map(m => `
-      <button class="model-option ${m.id === current ? "current" : ""}" role="option"
-        aria-selected="${m.id === current}" data-model="${esc(m.id)}">
-        <span class="model-option-main">${esc(m.label || m.id)}</span>
-        <span class="model-option-meta">${esc(m.provider || m.id.split("/")[0] || "")}</span>
-        ${m.id === current ? `<span class="model-option-check">✓</span>` : ""}
-      </button>`).join("");
+    const groups = new Map();
+    for (const m of store.state.models) {
+      const key = m.provider || m.id.split("/")[0] || "Other";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    }
+    const options = [...groups.entries()].map(([provider, models]) => `
+      <div class="model-group" role="group" aria-label="${esc(provider)}">
+        <div class="model-group-label">${esc(provider)}</div>
+        ${models.map(m => `
+          <button class="model-option ${m.id === current ? "current" : ""}" role="option"
+            aria-selected="${m.id === current}" data-model="${esc(m.id)}">
+            <span class="model-option-main">${esc(m.label || m.id)}</span>
+            <span class="model-option-meta">${esc(m.provider || "")}</span>
+            ${m.id === current ? `<span class="model-option-check">✓</span>` : ""}
+          </button>`).join("")}
+      </div>`).join("");
+    const automatic = this.mode === "default" ? `
+      <button class="model-option ${current === null ? "current" : ""}" role="option"
+        aria-selected="${current === null}" data-model-automatic>
+        <span class="model-option-main">Automatic</span>
+        <span class="model-option-meta">first available model</span>
+        ${current === null ? `<span class="model-option-check">✓</span>` : ""}
+      </button>` : "";
+    const unavailable = configuredUnavailable ? `
+      <div class="model-unavailable">Configured model unavailable:<br><span>${esc(current)}</span></div>` : "";
+    const empty = !options && !unavailable
+      ? `<div class="model-empty">No models available.<br><span>Connect a provider in Settings.</span></div>` : "";
+    const popoverId = this._popoverId ||= `model-popover-${Math.random().toString(36).slice(2, 9)}`;
     this.innerHTML = `<div class="model-picker">
-      <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-expanded="${this.open}"
-        title="Choose model">${esc(model?.label || current || "default")} <span class="model-chip-caret">▾</span></button>
-      ${this.open ? `<div class="model-popover" role="dialog" aria-label="Choose model">
+      <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-controls="${popoverId}" aria-expanded="${this.open}"
+        title="Choose model">${esc(chipLabel)} <span class="model-chip-caret">▾</span></button>
+      ${this.open ? `<div id="${popoverId}" class="model-popover" role="dialog" aria-label="Choose model">
         <div class="model-popover-head">Choose model</div>
-        <div class="model-list" role="listbox">${options || `<div class="model-empty">No models available.</div>`}</div>
+        <div class="model-list" role="listbox">${automatic}${unavailable}${options || empty}</div>
       </div>` : ""}
     </div>`;
+    if (this.open) this.positionPopover();
   }
 }
 
@@ -282,7 +390,15 @@ class PiComposer extends HTMLElement {
           type: "bind", id, text, mode, branch: err.suggestedBranch,
           fromBranch: store.project()?.branch || "main", byTitle: err.byTitle || "another session",
         } });
-      } else store.setError(`Send failed: ${err.error || err.message || err}`);
+      } else if (err.error === "model_required") {
+        store.set({ draft: text });
+        this.ta.value = text;
+        store.setError("No model is available. Connect a provider or choose one in Settings.");
+      } else {
+        store.set({ draft: text });
+        this.ta.value = text;
+        store.setError(`Send failed: ${err.error || err.message || err}`);
+      }
     }
   }
 

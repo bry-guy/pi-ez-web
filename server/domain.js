@@ -84,6 +84,7 @@ export async function projectState(project, sup) {
     id: project.id,
     name: project.name,
     repoPath: project.repoPath,
+    source: project.source || { type: "local" },
     branch: ws.currentBranch(project.repoPath),
     branches: ws.listBranches(project.repoPath),
     worktrees,
