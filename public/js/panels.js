@@ -68,6 +68,7 @@ class PiProjects extends HTMLElement {
 /* ---------------- settings ---------------- */
 class PiSettings extends HTMLElement {
   connectedCallback() {
+    this.feedback = null;
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
@@ -81,6 +82,16 @@ class PiSettings extends HTMLElement {
   disconnectedCallback() {
     this.unsub?.();
     clearTimeout(this.flowTimer);
+    clearTimeout(this.feedbackTimer);
+  }
+  setFeedback(message, kind = "success") {
+    this.feedback = { message, kind };
+    clearTimeout(this.feedbackTimer);
+    this.feedbackTimer = setTimeout(() => {
+      this.feedback = null;
+      this.render();
+    }, 3500);
+    this.render();
   }
   async onClick(e) {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
@@ -102,11 +113,10 @@ class PiSettings extends HTMLElement {
     try {
       const result = await api.settings(undefined, value);
       store.set({ reposRoot: result.reposRoot || null, reposRootSource: result.reposRootSource || "default", repos: [] });
-      store.setError("Repository path saved.", 2200);
+      this.setFeedback("Repository path saved.");
     } catch (err) {
-      input.focus();
       store.set({ reposRoot: previous });
-      store.setError(`Repository path failed: ${err.error || err.message || err}`);
+      this.setFeedback(`Repository path failed: ${err.error || err.message || err}`, "error");
     }
   }
   async saveRepositorySettings() {
@@ -117,9 +127,12 @@ class PiSettings extends HTMLElement {
     try {
       await api.settingsPatch(patch);
       await refreshState();
-      store.setError("Repository settings saved.", 2200);
+      this.setFeedback("Repository settings saved.");
     } catch (err) {
-      store.setError(`Repository settings failed: ${err.error || err.message || err}`);
+      const message = err.error === "invalid_github_owner"
+        ? "Enter a valid GitHub user or organization name."
+        : `Repository settings failed: ${err.error || err.message || err}`;
+      this.setFeedback(message, "error");
     }
   }
   async startAuth(providerId, type) {
@@ -258,11 +271,15 @@ class PiSettings extends HTMLElement {
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
+    const feedback = this.feedback
+      ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
+      : "";
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
+      ${feedback}
       ${modeWarning}
       <section class="settings-section">
         <div class="settings-section-title">AI providers</div>
@@ -356,6 +373,13 @@ class PiRepoPicker extends HTMLElement {
     this.repoRoot = store.state.reposRoot;
     this.source = null;
     this.sourceMenuOpen = false;
+    this.onDocumentKeydown = e => {
+      if (e.key === "Escape" && store.state.repoPickerOpen) {
+        e.preventDefault();
+        void this.dismiss();
+      }
+    };
+    document.addEventListener("keydown", this.onDocumentKeydown);
     this.unsub = store.subscribe(w => {
       if (w !== "state") return;
       const rootChanged = this.repoRoot !== null && this.repoRoot !== store.state.reposRoot;
@@ -384,6 +408,11 @@ class PiRepoPicker extends HTMLElement {
   disconnectedCallback() {
     this.unsub?.();
     clearTimeout(this.githubTimer);
+    document.removeEventListener("keydown", this.onDocumentKeydown);
+  }
+  async dismiss() {
+    await this.cancelGithubLogin();
+    store.set({ repoPickerOpen: false, repoPickerSource: null });
   }
   availableSources() {
     const configured = store.state.repositorySources?.sources || [];
@@ -392,7 +421,9 @@ class PiRepoPicker extends HTMLElement {
   }
   chooseSource(source) {
     if (!this.availableSources().includes(source)) return;
+    const changed = this.source !== source;
     this.source = source;
+    if (changed) store.state.repoQuery = "";
     store.state.repoPickerSource = source;
     this.sourceMenuOpen = false;
     this.loaded = false;
@@ -404,7 +435,7 @@ class PiRepoPicker extends HTMLElement {
   async onClick(e) {
     const scrim = this.querySelector(".scrim");
     if (e.target === scrim || e.target.closest("[data-act='close']")) {
-      store.set({ repoPickerOpen: false, repoPickerSource: null }); return;
+      void this.dismiss(); return;
     }
     const sourceToggle = e.target.closest("[data-source-toggle]");
     if (sourceToggle) { this.sourceMenuOpen = !this.sourceMenuOpen; this.render(); return; }
@@ -454,6 +485,12 @@ class PiRepoPicker extends HTMLElement {
     if (source === "github") {
       const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
       this.githubNextPage = null;
+      if (!status?.authenticated && !status?.owner) {
+        this.githubRepos = [];
+        this.errorMsg = "Set a GitHub owner in Settings to browse public repositories, or sign in to list your repositories.";
+        this.renderResults();
+        return;
+      }
       try {
         const result = status?.authenticated
           ? await api.githubRepos(store.state.repoQuery)
@@ -516,8 +553,10 @@ class PiRepoPicker extends HTMLElement {
   }
   async pollGithubLogin(id) {
     clearTimeout(this.githubTimer);
+    if (!store.state.repoPickerOpen || this.githubFlow?.id !== id) return;
     try {
       const result = await api.githubFlow(id);
+      if (!store.state.repoPickerOpen || this.githubFlow?.id !== id) return;
       this.githubFlow = result.flow;
       if (["complete", "error", "cancelled"].includes(this.githubFlow.state)) {
         if (this.githubFlow.state === "complete") {
@@ -543,10 +582,10 @@ class PiRepoPicker extends HTMLElement {
   }
   async cancelGithubLogin() {
     const id = this.githubFlow?.id;
-    if (id) await api.githubCancel(id).catch(() => {});
     clearTimeout(this.githubTimer);
     this.githubFlow = null;
-    this.renderResults();
+    if (id) await api.githubCancel(id).catch(() => {});
+    if (store.state.repoPickerOpen) this.renderResults();
   }
   render() {
     if (!store.state.repoPickerOpen) {

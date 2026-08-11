@@ -12,9 +12,8 @@ RUN apt-get update \
 
 COPY package.json package-lock.json ./
 
-# Pi is a peer dependency for local development, but is required at runtime.
+# Pi is a production dependency: the real supervisor imports its SDK in-process.
 RUN npm ci --omit=dev --ignore-scripts \
-    && npm install --no-save --omit=dev --ignore-scripts @earendil-works/pi-coding-agent@0.84.1 \
     && npm cache clean --force
 
 COPY server ./server

@@ -1,10 +1,13 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity"];
 const JH = { "content-type": "application/json" };
 
 function validateStateContract(state) {
-  if (state?.apiContractVersion === API_CONTRACT_VERSION) return state;
+  const advertised = new Set(Array.isArray(state?.capabilities) ? state.capabilities : []);
+  const missing = REQUIRED_CAPABILITIES.filter(capability => !advertised.has(capability));
+  if (state?.apiContractVersion === API_CONTRACT_VERSION && missing.length === 0) return state;
   const error = Object.assign(new Error("incompatible_server"), {
     error: "incompatible_server",
     message: "The server is running an older pi-ez-web build. Restart pi-ez-web and reload this page.",
@@ -51,7 +54,11 @@ export const api = {
   repos: () => fetch("/api/repos").then(j),
   repositorySources: () => fetch("/api/repository-sources").then(j),
   githubRepos: (query = "", page = 1) => fetch(`/api/github/repos?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),
-  githubPublicRepos: (owner, query = "", page = 1) => fetch(`/api/github/public-repos?owner=${encodeURIComponent(owner)}&q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),
+  githubPublicRepos: (owner, query = "", page = 1) => {
+    const params = new URLSearchParams({ q: query, page: String(page) });
+    if (owner) params.set("owner", owner);
+    return fetch(`/api/github/public-repos?${params}`).then(j);
+  },
   githubLogin: () => fetch("/api/github/device-login", { method: "POST" }).then(j),
   githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),

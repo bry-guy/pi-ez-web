@@ -15,15 +15,12 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1",
     "@hono/node-server": "^2.1.0",
     "hono": "^4.13.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.1",
     "jsdom": "^29.1.1",
     "playwright": "^1.62.1"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.0"
   }
 }

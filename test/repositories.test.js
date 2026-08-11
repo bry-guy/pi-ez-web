@@ -5,12 +5,12 @@ import path from "node:path";
 import { test } from "node:test";
 import { cloneRepository, parsePublicGitUrl } from "../server/repositories.js";
 
-function fakeGithub() {
+function fakeGithub({ token = "gho_secret-token", privateRepo = false } = {}) {
   return {
-    effectiveAuth: () => ({ accessToken: "gho_secret-token" }),
+    effectiveAuth: () => token ? { accessToken: token } : null,
     async repository(fullName) {
       assert.equal(fullName, "bry-guy/private-repo");
-      return { name: "private-repo", fullName, cloneUrl: "https://github.com/bry-guy/private-repo.git" };
+      return { name: "private-repo", fullName, private: privateRepo, cloneUrl: "https://github.com/bry-guy/private-repo.git" };
     },
   };
 }
@@ -41,9 +41,48 @@ test("GitHub clone uses askpass environment, not URL or argv", async () => {
     assert.equal(fs.readFileSync(path.join(result.repoPath, "README.md"), "utf8"), "cloned\n");
     assert.ok(call.options.env.GIT_ASKPASS);
     assert.equal(call.options.env.PI_WEB_GIT_TOKEN, "gho_secret-token");
+    assert.equal(call.options.env.GIT_CONFIG_GLOBAL, os.devNull);
+    assert.equal(call.options.env.GIT_CONFIG_NOSYSTEM, "1");
     assert.doesNotMatch(call.args.join(" "), /gho_secret-token/);
     assert.doesNotMatch(call.args.join(" "), /user:password/);
     assert.equal(fs.existsSync(call.options.env.GIT_ASKPASS), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("public GitHub repositories clone without an OAuth token", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-clone-public-"));
+  let call;
+  try {
+    const result = await cloneRepository({
+      source: "github",
+      fullName: "bry-guy/private-repo",
+      github: fakeGithub({ token: null }),
+      root: tmp,
+      runGit: async (_file, args, options) => {
+        call = { args, options };
+        fs.writeFileSync(path.join(args.at(-1), "README.md"), "public\n");
+      },
+    });
+    assert.equal(result.source.fullName, "bry-guy/private-repo");
+    assert.equal(call.options.env.GIT_ASKPASS, undefined);
+    assert.equal(call.options.env.PI_WEB_GIT_TOKEN, undefined);
+    assert.equal(call.options.env.GIT_CONFIG_GLOBAL, os.devNull);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("private GitHub repositories require OAuth before cloning", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-clone-private-"));
+  try {
+    await assert.rejects(() => cloneRepository({
+      source: "github",
+      fullName: "bry-guy/private-repo",
+      github: fakeGithub({ token: null, privateRepo: true }),
+      root: tmp,
+    }), error => error.code === "github_auth_required");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -183,7 +183,8 @@ class PiModelPicker extends HTMLElement {
     this.render();
     if (returnFocus) this.querySelector("[data-model-toggle]")?.focus();
   }
-  options() { return [...this.querySelectorAll("[data-model]:not([disabled])")]; }
+  options() { return [...this.querySelectorAll("[data-model]:not([disabled]), [data-model-automatic]:not([disabled])")]; }
+  optionValue(option) { return option?.hasAttribute("data-model-automatic") ? null : option?.dataset.model; }
   onKeyDown(e) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -213,7 +214,7 @@ class PiModelPicker extends HTMLElement {
       this.focusOption();
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      void this.choose(options[this.focusedIndex]?.dataset.model);
+      void this.choose(this.optionValue(options[this.focusedIndex]));
     }
   }
   focusOption() {

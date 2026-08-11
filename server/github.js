@@ -70,6 +70,15 @@ function validateFullName(fullName) {
   return value;
 }
 
+function normalizeGitHubOwner(owner) {
+  const value = String(owner ?? "").trim();
+  if (!value) return null;
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(value)) {
+    throw coded("invalid_github_owner", "Enter a valid GitHub user or organization name.");
+  }
+  return value;
+}
+
 export class GitHubClient {
   constructor({ fetchImpl = globalThis.fetch, authFile = null, configOverride = null } = {}) {
     this.fetch = fetchImpl;
@@ -199,8 +208,8 @@ export class GitHubClient {
   }
 
   async listPublicRepositories({ owner, query = "", page = 1 } = {}) {
-    const account = String(owner || this.config().owner || "").trim();
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(account)) throw coded("github_owner_required");
+    const account = normalizeGitHubOwner(owner || this.config().owner);
+    if (!account) throw coded("github_owner_required");
     const params = new URLSearchParams({
       type: "owner",
       per_page: "100",
@@ -384,4 +393,4 @@ export class GitHubDeviceFlowManager {
   }
 }
 
-export { authPath, atomicWrite, readStoredAuth, coded as githubError, validateFullName };
+export { authPath, atomicWrite, readStoredAuth, coded as githubError, normalizeGitHubOwner, validateFullName };

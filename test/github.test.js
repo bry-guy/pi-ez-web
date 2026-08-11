@@ -77,6 +77,22 @@ test("GitHub repository metadata can resolve a public repo without auth", async 
   assert.equal(result.cloneUrl, "https://github.com/bry-guy/pi-ez-web.git");
 });
 
+test("GitHub public browsing rejects malformed owners before an upstream request", async () => {
+  const client = new GitHubClient({
+    fetchImpl: async () => { throw new Error("must not call GitHub"); },
+    configOverride: { clientId: null, owner: null },
+    authFile: "/tmp/piweb-test-github-does-not-exist",
+  });
+  await assert.rejects(
+    () => client.listPublicRepositories({ owner: "not valid!" }),
+    error => error.code === "invalid_github_owner",
+  );
+  await assert.rejects(
+    () => client.listPublicRepositories({ owner: "" }),
+    error => error.code === "github_owner_required",
+  );
+});
+
 test("GitHub repository listing applies owner and query filters", async () => {
   const client = new GitHubClient({ fetchImpl: async (url, init) => {
     assert.match(url, /user\/repos/);

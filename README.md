@@ -29,7 +29,7 @@ npm run dev
 Run against the real Pi agent:
 
 ```sh
-npm install @earendil-works/pi-coding-agent
+# npm install already includes the Pi SDK runtime dependency.
 npm run verify:real   # explicit, credentialed SDK + model smoke test
 npm start
 ```
@@ -67,8 +67,8 @@ Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
 state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for
 example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). The project picker
 supports Local, GitHub, and public HTTPS Git URL sources. With a configured
-owner, public GitHub repositories can be browsed before login; GitHub device
-login adds private repositories and stores its token in
+owner, public GitHub repositories can be browsed and cloned before login;
+GitHub device login adds private repositories and stores its token in
 `PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
 `PI_CODING_AGENT_DIR/auth.json`. Never put either credential in `config.json`.
 

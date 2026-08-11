@@ -11,7 +11,7 @@ import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
-import { GitHubClient, GitHubDeviceFlowManager } from "./github.js";
+import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
 import { cloneRepository } from "./repositories.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
@@ -138,7 +138,7 @@ export function buildApi(sup) {
         page: c.req.query("page"),
       }));
     } catch (e) {
-      const statuses = { github_owner_required: 400, github_not_found: 404, github_rate_limited: 403, github_unavailable: 502 };
+      const statuses = { github_owner_required: 400, invalid_github_owner: 400, github_not_found: 404, github_rate_limited: 403, github_unavailable: 502 };
       if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
       throw e;
     }
@@ -586,7 +586,12 @@ export function buildApi(sup) {
     }
     if (body.githubOwner !== undefined) {
       if (process.env.PI_WEB_GITHUB_OWNER) return err(c, 409, "setting_overridden", { field: "githubOwner", source: "PI_WEB_GITHUB_OWNER" });
-      cfg.repositorySources.github.owner = String(body.githubOwner || "").trim() || null;
+      try {
+        cfg.repositorySources.github.owner = normalizeGitHubOwner(body.githubOwner);
+      } catch (e) {
+        if (e.code === "invalid_github_owner") return err(c, 400, e.code, { message: e.message });
+        throw e;
+      }
     }
     saveConfig(cfg);
     const modelState = await sup.modelState();

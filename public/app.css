@@ -92,6 +92,12 @@ aside.rail {
 }
 .ghost-btn:hover, .ghost-btn:focus-visible { background: var(--surface-2); color: var(--text); }
 .rail-actions { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.rail-nav {
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+  background: var(--surface-2); color: var(--muted); font: 500 11.5px var(--mono);
+  text-align: left; cursor: pointer;
+}
+.rail-nav:hover, .rail-nav:focus-visible { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
 .primary-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border-radius: 9px;
   border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
@@ -404,6 +410,12 @@ header.bar {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 7px;
   padding: 6px 9px; font-size: 11.5px; cursor: pointer;
 }
+.settings-feedback {
+  margin: 10px 0; border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--border));
+  border-radius: 8px; background: var(--accent-soft); color: var(--text); padding: 8px 10px;
+  font: 11.5px var(--mono);
+}
+.settings-feedback.error { border-color: var(--red); background: color-mix(in oklch, var(--red) 10%, var(--surface)); color: var(--red); }
 .settings-action:hover, .settings-action:focus-visible { border-color: var(--accent); color: var(--accent); }
 .settings-action.quiet { color: var(--muted); }
 .provider-error { margin-top: 9px; padding: 7px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font-family: var(--mono); font-size: 10.5px; line-height: 1.45; }

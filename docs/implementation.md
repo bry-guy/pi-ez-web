@@ -8,9 +8,8 @@ worktrees; fork ⑂ branches both the conversation and the code.
 ## Run
 
 ```sh
-npm install
-npm install @earendil-works/pi-coding-agent   # peer dep; needs ~/.pi/agent configured (run `pi` once)
-npm start                                     # http://localhost:3141
+npm install                                  # includes the Pi SDK runtime dependency
+npm start                                    # http://localhost:3141
 ```
 
 No credentials handy? Full UI against a scripted agent:
@@ -50,10 +49,12 @@ remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
 
 The app supports Local, GitHub, and public HTTPS Git URL repository sources.
-A configured GitHub owner can browse public repositories without signing in;
-GitHub device authorization adds private repositories and stores its token
-separately from `config.json`. Private clones use a temporary `GIT_ASKPASS`
-helper and never place credentials in clone URLs or process arguments. The
+A configured GitHub owner can browse and clone public repositories without
+signing in; GitHub device authorization adds private repositories and stores
+its token separately from `config.json`. Private clones use a temporary
+`GIT_ASKPASS` helper and never place credentials in clone URLs or process
+arguments. Clone processes ignore global/system Git URL rewrite configuration
+so validated public HTTPS URLs cannot turn into SSH. The
 GitHub OAuth client ID is an advanced server deployment setting, not a normal
 user-facing setting. AI login flows use a short-polling REST API because Pi's
 provider OAuth implementations are server-side Node flows. Transcript SSE

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -57,7 +58,16 @@ function cloneAskpass(root) {
 
 function gitOptions({ root, token, signal }) {
   const args = ["-c", "credential.helper=", "clone", "--"];
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  // A user's global `url.*.insteadOf` can silently turn a validated public
+  // HTTPS URL into SSH (or another protocol). Cloning starts in an empty temp
+  // directory, so ignoring global/system Git config is safe and preserves the
+  // public-HTTPS-only source boundary.
+  const env = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
   delete env.PI_WEB_GITHUB_TOKEN;
   const cleanup = [];
   if (token) {
@@ -83,7 +93,10 @@ export async function cloneRepository({ source, url, fullName, github, root = re
     name = repo.name;
     sourceInfo = { type: "github", fullName: repo.fullName };
     token = github.effectiveAuth()?.accessToken || null;
-    if (!token) throw githubError("github_auth_required");
+    // Public metadata and public HTTPS cloning intentionally work before a
+    // device login. Private GitHub repositories still require the stored or
+    // environment-managed OAuth token.
+    if (repo.private && !token) throw githubError("github_auth_required");
   } else if (source === "git-url") {
     cloneUrl = publicGitUrl(url);
     name = repositoryNameFromUrl(cloneUrl);

@@ -277,13 +277,32 @@ export class RealSupervisor {
     });
   }
 
+  async _preferredModel(id) {
+    const known = this.info.get(id)?.model;
+    if (known) return known;
+    // `listSessions()` records model changes, but a session reached through a
+    // direct route may only have gone through `_discover()`. Preserve an
+    // explicit model recorded in that transcript before falling back to the
+    // configured default for newly model-less sessions.
+    try {
+      await SDK();
+      const manager = this._managerFor(id);
+      const recorded = modelRefFromEntries(manager.getBranch?.() || []);
+      if (recorded) {
+        this.info.set(id, { ...(this.info.get(id) || {}), model: recorded });
+        return recorded;
+      }
+    } catch { /* default resolution below handles unavailable/malformed state */ }
+    return this.defaultModel();
+  }
+
   async _attachById(id) {
     const st = this.live.get(id);
     if (st) return st;
     await this._discover(id);
     const file = this.paths.get(id) || this.info.get(id)?.path;
     if (!file) throw new Error("unknown session " + id);
-    return this._attach(id, this._boundCwd(id));
+    return this._attach(id, this._boundCwd(id), await this._preferredModel(id));
   }
 
   async stop(id) {

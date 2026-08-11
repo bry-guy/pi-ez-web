@@ -463,6 +463,14 @@ test("settings can persist a custom local repositories root", async () => {
   assert.equal((await (await get("/api/state")).json()).reposRoot, customRoot);
 });
 
+test("settings reject malformed GitHub owner values", async () => {
+  const r = await post("/api/settings", { githubOwner: "not valid!" });
+  assert.equal(r.status, 400);
+  const body = await r.json();
+  assert.equal(body.error, "invalid_github_owner");
+  assert.match(body.message, /valid GitHub/i);
+});
+
 test("model state distinguishes Automatic from an explicit default", async () => {
   let r = await post("/api/settings", { defaultModel: null });
   assert.equal(r.status, 200);

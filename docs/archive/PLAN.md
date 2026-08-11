@@ -31,7 +31,7 @@ Supersedes the initial plan. Changes from review: worktrees by default (branch-s
 └─────────────────────────────────────┘
 ```
 
-**Server framework: Hono** (tiny, TS-first, built-in SSE helper, runs on plain Node). Requirements are static files, ~10 JSON routes, one SSE endpoint; Fastify's plugin system and schema validation are unused weight, Express is legacy. Bare `node:http` is the acceptable zero-dependency alternative if that value wins. `@earendil-works/pi-coding-agent` is a peer dependency with a caret range.
+**Server framework: Hono** (tiny, TS-first, built-in SSE helper, runs on plain Node). Requirements are static files, ~10 JSON routes, one SSE endpoint; Fastify's plugin system and schema validation are unused weight, Express is legacy. Bare `node:http` is the acceptable zero-dependency alternative if that value wins. `@earendil-works/pi-coding-agent` is a production dependency with a caret range.
 
 ## 2. Client: web components, no htmx, no build step
 

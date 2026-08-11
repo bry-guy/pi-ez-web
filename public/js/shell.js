@@ -25,8 +25,11 @@ export function selectChat(chatId) {
 }
 export async function newChat() {
   const { id } = await api.newChat();
-  await refreshState();
+  // Select immediately: real `/api/state` discovery can be slow, and waiting
+  // here leaves the previous chat active long enough for a prompt to land in
+  // the wrong transcript.
   selectChat(id);
+  await refreshState();
 }
 
 export async function newProjectSession(projectId) {
@@ -164,6 +167,7 @@ class PiSidebar extends HTMLElement {
           <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
         </div>
         <div class="rail-actions">
+          <button class="rail-nav" data-act="projects">Projects</button>
           <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
         </div>
         <div class="rail-scroll">
@@ -222,6 +226,13 @@ class PiSidebar extends HTMLElement {
 class PiHeader extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.render(); });
+    this.onDocumentKeydown = e => {
+      if (e.key === "Escape" && store.state.branchMenuOpen) {
+        e.preventDefault();
+        store.set({ branchMenuOpen: false, branchError: null });
+      }
+    };
+    document.addEventListener("keydown", this.onDocumentKeydown);
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
       if (e.target.matches(".new-branch-input") && e.key === "Enter") { e.preventDefault(); this.createBranch(); return; }
@@ -235,7 +246,10 @@ class PiHeader extends HTMLElement {
     });
     this.render();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    document.removeEventListener("keydown", this.onDocumentKeydown);
+  }
 
   async onClick(e) {
     const t = e.target.closest("[data-act]");

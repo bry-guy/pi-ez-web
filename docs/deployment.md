@@ -2,8 +2,8 @@
 
 The repository includes a production-oriented `Dockerfile` for the real Pi
 server. It runs as the unprivileged `node` user and listens on port `3141`.
-The image installs the Pi SDK explicitly because the application declares it as
-a peer dependency for local development.
+The image installs the Pi SDK from the application's production dependencies,
+so the real supervisor can import it at runtime.
 
 ```sh
 docker build -t pi-ez-web:local .
@@ -19,7 +19,9 @@ these paths stable across container restarts:
 - `worktreeRoot` — Git worktrees created by the app.
 
 The image includes `git` and CA certificates. GitHub private clones use HTTPS
-and a temporary askpass helper; SSH keys are not managed by the app.
+and a temporary askpass helper; public GitHub clones use HTTPS without a token.
+Clone processes ignore global/system Git URL rewrite configuration so a validated
+HTTPS URL cannot silently become SSH. SSH keys are not managed by the app.
 
 For containers, set `PI_WEB_HOME`, `PI_CODING_AGENT_DIR`, and configure
 absolute paths such as `/data/repos` and `/data/worktrees`; do not rely on the

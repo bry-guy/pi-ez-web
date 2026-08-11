@@ -139,6 +139,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-source='github']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-repo-picker").textContent, /bry-guy\/pi-ez-web/);
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.repoPickerOpen, false, "Escape closes the repository picker");
+
+  root.querySelector("[data-act='repo-picker']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
   root.querySelector("[data-source-toggle]").click();
   root.querySelector("[data-source='local']").click();
   const filter = root.querySelector(".modal-filter");
@@ -147,7 +153,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   filter.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, filter);
   root.querySelector("pi-repo-picker [data-act='close']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(store.state.repoPickerOpen, false);
+
+  store.state.repositorySources.sources.find(source => source.id === "github").owner = null;
+  store.set({ repoPickerOpen: true, repoPickerSource: "github" });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(root.querySelector("pi-repo-picker").textContent, /Set a GitHub owner.*or sign in/i);
+  root.querySelector("pi-repo-picker [data-act='close']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
 
   store.set({ view: "settings" });
   assert.match(root.querySelector("pi-settings").textContent, /Default model/);
@@ -155,6 +169,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
+  root.querySelector("pi-settings [data-act='save-repository-settings']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(root.querySelector("pi-settings").textContent, /Repository settings saved/);
+  const defaultToggle = root.querySelector("pi-settings pi-model-picker[data-mode='default'] [data-model-toggle]");
+  defaultToggle.focus();
+  defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  assert.equal(dom.window.document.activeElement?.hasAttribute("data-model-automatic"), true, "Automatic is first in keyboard navigation");
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   store.set({ view: "chat" });
 
   root.querySelector(".model-chip").click();
@@ -182,6 +204,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   sidebar.querySelector("[data-act='collapse']").click();
   assert.equal(store.state.railOpen, true);
   assert.equal(sidebar.dataset.layout, "rail");
+  sidebar.querySelector("[data-act='projects']").click();
+  assert.equal(store.state.view, "projects");
+  store.set({ view: "chat" });
 
   applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });
   assert.equal(store.state.projects[0].sessions[0].id, "sibling");
