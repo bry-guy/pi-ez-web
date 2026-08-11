@@ -324,21 +324,21 @@ header.bar {
 .model-picker { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; }
 .model-chip-caret { margin-left: 3px; font-size: 8px; opacity: 0.7; }
 .model-popover {
-  position: fixed; z-index: 35; width: 292px; max-width: calc(100vw - 24px);
+  position: fixed; z-index: 35; width: 276px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px);
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden;
 }
 .model-popover-head {
   padding: 9px 11px; border-bottom: 1px solid var(--border); font-size: 10px; letter-spacing: 0.09em;
   text-transform: uppercase; color: var(--faint); font-weight: 600;
 }
-.model-list { max-height: 240px; overflow-y: auto; padding: 4px; }
+.model-list { max-height: 220px; overflow-y: auto; padding: 3px; overscroll-behavior: contain; }
 .model-group + .model-group { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
 .model-group-label { padding: 5px 10px 3px; color: var(--faint); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; }
 .model-unavailable { padding: 9px 10px; color: var(--orange); font-size: 11px; line-height: 1.45; border-bottom: 1px solid var(--border); }
 .model-unavailable span { font-family: var(--mono); color: var(--muted); }
 .model-option {
   width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted);
-  padding: 9px 10px; border-radius: 7px; text-align: left; cursor: pointer; font-family: inherit;
+  padding: 7px 9px; border-radius: 7px; text-align: left; cursor: pointer; font-family: inherit;
 }
 .model-option:hover, .model-option:focus-visible { background: var(--surface-2); color: var(--text); }
 .model-option:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
@@ -395,12 +395,15 @@ header.bar {
 .settings-section { margin-top: 18px; }
 .settings-section-title { color: var(--faint); font-family: var(--mono); font-size: 10px; letter-spacing: .09em; text-transform: uppercase; font-weight: 600; }
 .provider-list { display: grid; gap: 8px; margin-top: 8px; }
-.provider-card { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 13px 15px; }
+.provider-card { margin-top: 0; padding: 10px 12px; }
 .provider-card-head { display: flex; align-items: flex-start; gap: 10px; }
 .provider-card-head > div { flex: 1; min-width: 0; }
 .status-dot.off { background: var(--faint); }
-.provider-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.settings-action { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 7px; padding: 6px 9px; font-size: 11.5px; cursor: pointer; }
+.provider-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.settings-action, .settings-save {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 7px;
+  padding: 6px 9px; font-size: 11.5px; cursor: pointer;
+}
 .settings-action:hover, .settings-action:focus-visible { border-color: var(--accent); color: var(--accent); }
 .settings-action.quiet { color: var(--muted); }
 .provider-error { margin-top: 9px; padding: 7px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font-family: var(--mono); font-size: 10.5px; line-height: 1.45; }
@@ -433,10 +436,7 @@ header.bar {
   background: var(--surface-2); color: var(--text); font-family: var(--mono); font-size: 11.5px; outline: none;
 }
 .repos-root-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.settings-save {
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px;
-  padding: 6px 10px; font-size: 12px; cursor: pointer;
-}
+.settings-save { border-radius: 8px; padding: 6px 10px; font-size: 12px; }
 .settings-save:hover, .settings-save:focus-visible { border-color: var(--accent); color: var(--accent); }
 .settings-save:disabled { opacity: .55; cursor: not-allowed; }
 .settings-chip {
@@ -511,7 +511,9 @@ aside.files {
 .git-url-input { flex: 1 1 280px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-family: var(--mono); font-size: 11.5px; outline: none; }
 .git-url-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .modal-help { flex: 1 1 100%; color: var(--faint); font-size: 11px; line-height: 1.5; }
-.github-login-state { padding: 22px 16px; color: var(--muted); font-size: 12px; line-height: 1.6; text-align: center; }
+.github-login-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 2px 6px; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 11.5px; }
+.github-more { display: block; margin: 6px auto 4px; }
+.github-login-state { padding: 18px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; text-align: center; }
 .github-login-state strong { display: block; margin: 12px 0; color: var(--text); font-family: var(--mono); font-size: 21px; letter-spacing: .08em; }
 .github-login-state a { color: var(--accent); }
 .github-login-state .settings-action { margin-top: 12px; }

@@ -31,7 +31,8 @@ server/
   lifecycle.js        explicit close and merge lifecycle
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
   auth-flows.js       server-side Pi OAuth/API-key interaction bridge
-  github.js           GitHub device login, API listing, and private token store
+  github.js           GitHub device login, public/private API listing, and token store
+  version.js           REST API contract/capability marker
   repositories.js     validated HTTPS cloning with temporary GIT_ASKPASS
 public/               index.html + app.css + ES modules; no build step
 test/                 workspaces (real git) · server integration (mock+SSE) · SDK/auth/clone surfaces · DOM gate
@@ -49,11 +50,15 @@ remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
 
 The app supports Local, GitHub, and public HTTPS Git URL repository sources.
-GitHub uses device authorization and stores its token separately from
-`config.json`; private clones use a temporary `GIT_ASKPASS` helper and never
-place credentials in clone URLs or process arguments. AI login flows use a
-short-polling REST API because Pi's provider OAuth implementations are
-server-side Node flows. Transcript SSE remains contract version 1.
+A configured GitHub owner can browse public repositories without signing in;
+GitHub device authorization adds private repositories and stores its token
+separately from `config.json`. Private clones use a temporary `GIT_ASKPASS`
+helper and never place credentials in clone URLs or process arguments. The
+GitHub OAuth client ID is an advanced server deployment setting, not a normal
+user-facing setting. AI login flows use a short-polling REST API because Pi's
+provider OAuth implementations are server-side Node flows. Transcript SSE
+remains contract version 1; REST state is contract version 2 and includes a
+capability marker so stale server processes produce a restart prompt.
 
 ## Invariants
 
@@ -93,6 +98,11 @@ sandbox and must remain inside a trusted LAN/tailnet/VPN.
 
 `POST /api/sessions/:id/name` is intentionally API-only in v1; the UI has no
 rename control. The branch cleanup endpoint is also API-only.
+
+Unnamed sessions display a compact whitespace-normalized truncation of their
+first message; pi-ez-web does not append a session name entry. The server sorts
+project session roots by numeric activity time, including activity in a forked
+child.
 
 The repository picker scans `$HOME/src` by default. Set `reposRoot` in
 `~/.pi-web-ui/config.json`, use `PI_WEB_REPOS_ROOT`, or type an absolute path

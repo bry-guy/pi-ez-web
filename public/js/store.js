@@ -9,6 +9,31 @@ function* iterateSessions(nodes = []) {
   }
 }
 
+function timeValue(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function compareActivity(a, b, field = "updatedAt") {
+  return (timeValue(b[field] || b.activityAt) - timeValue(a[field] || a.activityAt))
+    || String(a.id || "").localeCompare(String(b.id || ""));
+}
+
+function sortSessionNodes(nodes, topLevel = true) {
+  for (const node of nodes || []) sortSessionNodes(node.children || [], false);
+  return (nodes || []).sort((a, b) => compareActivity(a, b, topLevel ? "activityAt" : "updatedAt"));
+}
+
+function findSessionPath(nodes, id, path = []) {
+  for (const node of nodes || []) {
+    const next = [...path, node];
+    if (node.id === id) return next;
+    const hit = findSessionPath(node.children, id, next);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export const store = {
   state: {
     view: "chat",            // chat | projects | settings
@@ -69,6 +94,28 @@ export const store = {
     if (ms > 0) setTimeout(() => {
       if (this._errorToken === token) this.set({ error: null });
     }, ms);
+  },
+  touchSession(id, at = Date.now()) {
+    const stamp = new Date(at).toISOString();
+    for (const project of this.state.projects) {
+      const path = findSessionPath(project.sessions, id);
+      if (!path) continue;
+      const target = path.at(-1);
+      target.updatedAt = stamp;
+      target.when = "now";
+      for (const node of path) node.activityAt = stamp;
+      sortSessionNodes(project.sessions);
+      this.notify("state");
+      return;
+    }
+    const chat = this.state.chats.find(item => item.id === id);
+    if (chat) {
+      chat.updatedAt = stamp;
+      chat.activityAt = stamp;
+      chat.when = "now";
+      this.state.chats.sort((a, b) => compareActivity(a, b));
+      this.notify("state");
+    }
   },
   subscribe(fn) {
     this.listeners.add(fn);

@@ -121,6 +121,16 @@ test("serves the UI", async () => {
   assert.match(css, /pi-sidebar[\s\S]{0,200}display:\s*contents/);
 });
 
+test("state exposes the API contract and health marker", async () => {
+  const state = await (await get("/api/state")).json();
+  assert.equal(state.apiContractVersion, 2);
+  assert.ok(state.capabilities.includes("provider-auth"));
+  assert.equal(state.settings.githubClientId, undefined);
+  const health = await (await get("/api/health")).json();
+  assert.equal(health.ok, true);
+  assert.equal(health.apiContractVersion, 2);
+});
+
 test("repository picker uses the configured local repositories root", async () => {
   const state = await (await get("/api/state")).json();
   assert.equal(state.reposRoot, path.resolve(tmp, "local-repositories"));

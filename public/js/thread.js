@@ -271,21 +271,27 @@ class PiModelPicker extends HTMLElement {
     const a = anchor.getBoundingClientRect();
     const margin = 12;
     const gap = 8;
+    const headerAllowance = 42;
+    const compactListCap = 220;
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
-    const width = Math.min(292, Math.max(0, viewportWidth - margin * 2));
-    const height = popover.getBoundingClientRect().height;
-    const aboveRoom = a.top - margin;
-    const belowRoom = viewportHeight - a.bottom - margin;
-    const above = aboveRoom >= Math.min(height, 240) || aboveRoom >= belowRoom;
+    const width = Math.min(276, Math.max(0, viewportWidth - margin * 2));
+    const aboveRoom = Math.max(0, a.top - margin);
+    const belowRoom = Math.max(0, viewportHeight - a.bottom - margin);
+    const above = aboveRoom >= belowRoom;
+    const sideRoom = above ? aboveRoom : belowRoom;
+    const listHeight = Math.min(compactListCap, Math.max(96, sideRoom - gap - headerAllowance));
+    const maxPopoverHeight = Math.max(140, Math.min(viewportHeight - margin * 2, listHeight + headerAllowance));
+    const height = Math.min(popover.getBoundingClientRect().height || maxPopoverHeight, maxPopoverHeight);
     const left = Math.max(margin, Math.min(a.right - width, viewportWidth - width - margin));
     const top = above
       ? Math.max(margin, a.top - height - gap)
-      : Math.min(viewportHeight - margin - Math.min(height, belowRoom), a.bottom + gap);
+      : Math.min(viewportHeight - margin - height, a.bottom + gap);
     popover.style.left = `${left}px`;
     popover.style.top = `${top}px`;
     popover.style.width = `${width}px`;
-    popover.querySelector(".model-list")?.style.setProperty("max-height", `${Math.max(120, (above ? aboveRoom : belowRoom) - gap)}px`);
+    popover.style.maxHeight = `${maxPopoverHeight}px`;
+    popover.querySelector(".model-list")?.style.setProperty("max-height", `${listHeight}px`);
   }
   render() {
     const current = this.current();

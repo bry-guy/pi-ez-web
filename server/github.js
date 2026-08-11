@@ -139,12 +139,38 @@ export class GitHubClient {
     return response;
   }
 
+  async publicRequest(endpoint, init = {}) {
+    const url = endpoint.startsWith("http") ? endpoint : `${API_URL}${endpoint}`;
+    const response = await this.fetch(url, {
+      ...init,
+      headers: {
+        accept: "application/vnd.github+json",
+        "x-github-api-version": API_VERSION,
+        "user-agent": "pi-ez-web",
+        ...(init.headers || {}),
+      },
+    });
+    if (!response.ok) throw mapGithubFailure(response, await safeJson(response));
+    return response;
+  }
+
   async accountForToken(accessToken) {
     const response = await this.request("/user", { token: accessToken });
     const user = await safeJson(response);
     return {
       id: Number.isSafeInteger(user.id) ? user.id : null,
       login: typeof user.login === "string" ? user.login : null,
+    };
+  }
+
+  mapRepository(repo) {
+    return {
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      owner: repo.owner?.login || null,
+      private: !!repo.private,
+      updatedAt: repo.updated_at || null,
     };
   }
 
@@ -167,14 +193,28 @@ export class GitHubClient {
       const matchesOwner = !cfg.owner || owner.toLowerCase() === cfg.owner.toLowerCase();
       const matchesQuery = !q || repo.name?.toLowerCase().includes(q) || fullName.toLowerCase().includes(q);
       return matchesOwner && matchesQuery;
-    }).map(repo => ({
-      id: repo.id,
-      name: repo.name,
-      fullName: repo.full_name,
-      owner: repo.owner?.login || null,
-      private: !!repo.private,
-      updatedAt: repo.updated_at || null,
-    }));
+    }).map(repo => this.mapRepository(repo));
+    const link = response.headers.get("link") || "";
+    return { repos, nextPage: /<[^>]+>;\s*rel="next"/.test(link) ? Number(page) + 1 : null };
+  }
+
+  async listPublicRepositories({ owner, query = "", page = 1 } = {}) {
+    const account = String(owner || this.config().owner || "").trim();
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(account)) throw coded("github_owner_required");
+    const params = new URLSearchParams({
+      type: "owner",
+      per_page: "100",
+      page: String(Math.max(1, Number(page) || 1)),
+      sort: "updated",
+      direction: "desc",
+    });
+    const response = await this.publicRequest(`/users/${encodeURIComponent(account)}/repos?${params}`);
+    const values = await safeJson(response);
+    const q = String(query || "").trim().toLowerCase();
+    const repos = (Array.isArray(values) ? values : []).filter(repo => {
+      const fullName = repo.full_name || "";
+      return !q || repo.name?.toLowerCase().includes(q) || fullName.toLowerCase().includes(q);
+    }).map(repo => this.mapRepository(repo));
     const link = response.headers.get("link") || "";
     return { repos, nextPage: /<[^>]+>;\s*rel="next"/.test(link) ? Number(page) + 1 : null };
   }
@@ -182,7 +222,10 @@ export class GitHubClient {
   async repository(fullName) {
     const value = validateFullName(fullName);
     const [owner, name] = value.split("/");
-    const response = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+    const endpoint = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+    const response = this.effectiveAuth()
+      ? await this.request(endpoint)
+      : await this.publicRequest(endpoint);
     const repo = await safeJson(response);
     if (repo.full_name !== value || typeof repo.clone_url !== "string") throw coded("github_not_found");
     return {
@@ -298,8 +341,9 @@ export class GitHubDeviceFlowManager {
         return;
       }
       if (result.state === "complete") {
-        let account = null;
-        try { account = await this.client.accountForToken(result.accessToken); } catch { /* account metadata is optional */ }
+        // Validate the token before persisting it. A token that cannot identify
+        // the account must not make the UI claim that GitHub is connected.
+        const account = await this.client.accountForToken(result.accessToken);
         this.client.saveToken({ accessToken: result.accessToken, tokenType: result.tokenType, scope: result.scope, account });
         flow.account = account;
         this.finish(flow, "complete");

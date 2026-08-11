@@ -13,6 +13,7 @@ import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager } from "./github.js";
 import { cloneRepository } from "./repositories.js";
+import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
@@ -52,11 +53,6 @@ function settingsState(cfg, github) {
       source: process.env.PI_WEB_REPOSITORY_SOURCE ? "PI_WEB_REPOSITORY_SOURCE" : "config",
       editable: !process.env.PI_WEB_REPOSITORY_SOURCE,
     },
-    githubClientId: {
-      value: githubCfg.clientId,
-      source: process.env.PI_WEB_GITHUB_CLIENT_ID ? "PI_WEB_GITHUB_CLIENT_ID" : "config",
-      editable: !process.env.PI_WEB_GITHUB_CLIENT_ID,
-    },
     githubOwner: {
       value: githubCfg.owner,
       source: process.env.PI_WEB_GITHUB_OWNER ? "PI_WEB_GITHUB_OWNER" : "config",
@@ -82,6 +78,13 @@ export function buildApi(sup) {
   const githubFlows = new GitHubDeviceFlowManager(github);
 
   // ---------- state ----------
+  api.get("/health", c => c.json({
+    ok: true,
+    apiContractVersion: API_CONTRACT_VERSION,
+    buildId: BUILD_ID,
+    capabilities: API_CAPABILITIES,
+  }));
+
   api.get("/state", async c => {
     const cfg = loadConfig();
     reconcileBindings(cfg, loadBindings());
@@ -100,6 +103,9 @@ export function buildApi(sup) {
       catch (e) { projects.push({ id: p.id, name: p.name, repoPath: p.repoPath, error: String(e.message || e), branches: [], sessions: [], occupied: {}, worktrees: {} }); }
     }
     return c.json({
+      apiContractVersion: API_CONTRACT_VERSION,
+      buildId: BUILD_ID,
+      capabilities: API_CAPABILITIES,
       mode: process.env.PI_WEB_MODE || "real",
       defaultModel: modelState.configuredDefault,
       effectiveDefaultModel: modelState.effectiveDefault,
@@ -124,6 +130,19 @@ export function buildApi(sup) {
   api.get("/providers", async c => c.json({ providers: await sup.listProviders() }));
 
   api.get("/repository-sources", c => c.json(repositorySourceState(loadConfig(), github)));
+  api.get("/github/public-repos", async c => {
+    try {
+      return c.json(await github.listPublicRepositories({
+        owner: c.req.query("owner"),
+        query: c.req.query("q"),
+        page: c.req.query("page"),
+      }));
+    } catch (e) {
+      const statuses = { github_owner_required: 400, github_not_found: 404, github_rate_limited: 403, github_unavailable: 502 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      throw e;
+    }
+  });
   api.get("/github/repos", async c => {
     try {
       return c.json(await github.listRepositories({ query: c.req.query("q"), page: c.req.query("page") }));
@@ -569,14 +588,13 @@ export function buildApi(sup) {
       if (process.env.PI_WEB_GITHUB_OWNER) return err(c, 409, "setting_overridden", { field: "githubOwner", source: "PI_WEB_GITHUB_OWNER" });
       cfg.repositorySources.github.owner = String(body.githubOwner || "").trim() || null;
     }
-    if (body.githubClientId !== undefined) {
-      if (process.env.PI_WEB_GITHUB_CLIENT_ID) return err(c, 409, "setting_overridden", { field: "githubClientId", source: "PI_WEB_GITHUB_CLIENT_ID" });
-      cfg.repositorySources.github.clientId = String(body.githubClientId || "").trim() || null;
-    }
     saveConfig(cfg);
     const modelState = await sup.modelState();
     return c.json({
       ok: true,
+      apiContractVersion: API_CONTRACT_VERSION,
+      buildId: BUILD_ID,
+      capabilities: API_CAPABILITIES,
       defaultModel: modelState.configuredDefault,
       effectiveDefaultModel: modelState.effectiveDefault,
       defaultModelStatus: modelState.status,

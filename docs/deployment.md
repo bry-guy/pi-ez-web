@@ -73,9 +73,12 @@ pi.example.ts.net {
 ```
 
 Ensure the proxy permits long-lived SSE responses. GitHub device login and
-Pi provider login use server-side polling, so no OAuth callback route needs to
-be exposed through Caddy. Restrict access with Tailscale ACLs and, if
-appropriate, an additional Caddy authentication layer.
+provider flow state use server-side polling, so no pi-ez-web OAuth callback route
+needs to be exposed through Caddy. Some Pi provider methods still use fixed
+loopback callbacks; for a remote deployment prefer the device-code method when
+available, or complete the provider's manual redirect/code prompt. Restrict
+access with Tailscale ACLs and, if appropriate, an additional Caddy
+authentication layer.
 The application has no built-in authentication and the agent can execute shell
 commands as its service user, so it must remain inside a trusted tailnet.
 
@@ -85,7 +88,8 @@ stable because Git worktree metadata records absolute paths. Do not introduce a
 second storage tier unless an acceptance test demonstrates a concrete NFS
 failure.
 
-Before treating this as a highly available service, add external session/event
-coordination, a readiness endpoint, and graceful shutdown/drain handling. A
-single persistent pod is the supported deployment shape today; OAuth flow state,
-SSE clients, and workspace locks are in memory.
+The `/api/health` endpoint reports the REST contract and capabilities for
+rollout checks. Before treating this as a highly available service, add external
+session/event coordination and graceful shutdown/drain handling. A single
+persistent pod is the supported deployment shape today; OAuth flow state, SSE
+clients, and workspace locks are in memory.

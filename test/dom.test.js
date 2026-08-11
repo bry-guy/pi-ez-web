@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
 const state = {
+  apiContractVersion: 2,
+  buildId: "test",
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity"],
   mode: "mock",
   defaultModel: "mock/fast",
   models: [
@@ -18,6 +21,12 @@ const state = {
     ],
   }],
   chats: [],
+  providers: [
+    { id: "anthropic", name: "Anthropic", configured: true, sourceLabel: "OAuth", availableModels: 2, authMethods: [{ id: "oauth", label: "Anthropic OAuth" }], canLogout: true },
+    { id: "openai", name: "OpenAI", configured: false, availableModels: 0, authMethods: [{ id: "api_key", label: "OpenAI API key" }], canLogout: false },
+  ],
+  repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
+  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true } },
 };
 const transcript = { sessionId: "s1", seq: 0, streaming: false, records: [] };
 
@@ -53,6 +62,7 @@ async function boot() {
       if (url === "/api/models") return json({ models: state.models });
       if (url === "/api/events") return new Response(": connected v1\n\n", { headers: { "content-type": "text/event-stream" } });
       if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
+      if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
@@ -126,6 +136,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(sourceToggle);
   sourceToggle.click();
   assert.ok(root.querySelector("[data-source='github']"));
+  root.querySelector("[data-source='github']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(root.querySelector("pi-repo-picker").textContent, /bry-guy\/pi-ez-web/);
+  root.querySelector("[data-source-toggle]").click();
   root.querySelector("[data-source='local']").click();
   const filter = root.querySelector(".modal-filter");
   filter.focus();
@@ -137,6 +151,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   store.set({ view: "settings" });
   assert.match(root.querySelector("pi-settings").textContent, /Default model/);
+  assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /OpenAI API key/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
   store.set({ view: "chat" });
 
@@ -144,6 +161,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector(".model-popover"));
   root.querySelector(".model-option[data-model='mock/smart']").click();
   assert.equal(store.state.model, "mock/smart");
+
+  const picker = root.querySelector("pi-model-picker[data-mode='session']");
+  picker.open = true;
+  picker.render();
+  picker.querySelector("[data-model-toggle]").getBoundingClientRect = () => ({ top: 260, bottom: 292, right: 360 });
+  Object.defineProperty(dom.window, "innerHeight", { value: 300, configurable: true });
+  picker.positionPopover();
+  assert.ok(Number.parseInt(picker.querySelector(".model-list").style.maxHeight, 10) <= 220);
+  assert.ok(Number.parseInt(picker.querySelector(".model-popover").style.maxHeight, 10) <= 276);
 
   const sessionRow = root.querySelector("[data-id='s1']");
   sessionRow.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -156,6 +182,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   sidebar.querySelector("[data-act='collapse']").click();
   assert.equal(store.state.railOpen, true);
   assert.equal(sidebar.dataset.layout, "rail");
+
+  applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });
+  assert.equal(store.state.projects[0].sessions[0].id, "sibling");
 
   dom.window.close();
 });

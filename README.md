@@ -56,7 +56,7 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
   "defaultModel": null,
   "repositorySources": {
     "default": "local",
-    "github": { "clientId": null, "owner": null }
+    "github": { "owner": "bry-guy" }
   }
 }
 ```
@@ -66,14 +66,19 @@ provider model. An explicit value must be a usable `provider/modelId` reference.
 Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
 state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for
 example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). The project picker
-supports Local, GitHub, and public HTTPS Git URL sources. GitHub device login
-stores its token in `PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
+supports Local, GitHub, and public HTTPS Git URL sources. With a configured
+owner, public GitHub repositories can be browsed before login; GitHub device
+login adds private repositories and stores its token in
+`PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
 `PI_CODING_AGENT_DIR/auth.json`. Never put either credential in `config.json`.
 
 Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
-`PI_WEB_GITHUB_CLIENT_ID`, `PI_WEB_GITHUB_OWNER`, and
-`PI_WEB_GITHUB_TOKEN`. Environment values take precedence over config and are
-read-only in Settings. The default local repository root is `$HOME/src`. The
+`PI_WEB_GITHUB_CLIENT_ID` (advanced server OAuth-app override),
+`PI_WEB_GITHUB_OWNER`, and `PI_WEB_GITHUB_TOKEN`. The client ID is not a normal
+user setting: until the project ships its own registered OAuth App ID, a
+deployment must provide that public ID through this advanced override.
+Environment values take precedence over config and are read-only in Settings.
+The default local repository root is `$HOME/src`. The
 picker also accepts an absolute or `~/...` repository path directly. Omit
 `worktreeRoot` to use the Pi-adjacent default `~/.pi/worktrees`, or set it to an
 absolute path. Project entries may set `mode` to `manual` (default) or `auto`;

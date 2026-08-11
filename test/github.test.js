@@ -52,6 +52,31 @@ test("GitHub device flow stores token privately and exposes account only", async
   }
 });
 
+test("public GitHub repository listing works without an auth token", async () => {
+  let seenUrl;
+  const client = new GitHubClient({ fetchImpl: async (url, init) => {
+    seenUrl = url;
+    assert.equal(init.headers.authorization, undefined);
+    return jsonResponse([
+      { id: 1, name: "pi-ez-web", full_name: "bry-guy/pi-ez-web", private: false, updated_at: "now", owner: { login: "bry-guy" } },
+      { id: 2, name: "other", full_name: "bry-guy/other", private: false, updated_at: "now", owner: { login: "bry-guy" } },
+    ]);
+  }, configOverride: { clientId: null, owner: "bry-guy" }, authFile: "/tmp/piweb-test-github-does-not-exist" });
+  const result = await client.listPublicRepositories({ query: "pi-ez" });
+  assert.match(seenUrl, /users\/bry-guy\/repos/);
+  assert.deepEqual(result.repos.map(repo => repo.fullName), ["bry-guy/pi-ez-web"]);
+});
+
+test("GitHub repository metadata can resolve a public repo without auth", async () => {
+  const client = new GitHubClient({ fetchImpl: async (url, init) => {
+    assert.equal(init.headers.authorization, undefined);
+    assert.match(url, /repos\/bry-guy\/pi-ez-web/);
+    return jsonResponse({ id: 1, name: "pi-ez-web", full_name: "bry-guy/pi-ez-web", private: false, clone_url: "https://github.com/bry-guy/pi-ez-web.git", owner: { login: "bry-guy" } });
+  }, configOverride: { clientId: null, owner: "bry-guy" }, authFile: "/tmp/piweb-test-github-does-not-exist" });
+  const result = await client.repository("bry-guy/pi-ez-web");
+  assert.equal(result.cloneUrl, "https://github.com/bry-guy/pi-ez-web.git");
+});
+
 test("GitHub repository listing applies owner and query filters", async () => {
   const client = new GitHubClient({ fetchImpl: async (url, init) => {
     assert.match(url, /user\/repos/);

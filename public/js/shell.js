@@ -33,10 +33,14 @@ export async function newProjectSession(projectId) {
   const { id } = await api.newProjectSession(projectId);
   await refreshState();
   const project = store.state.projects.find(p => p.id === projectId);
-  if (project && !findNode(project.sessions, id)) project.sessions.unshift({
-    id, title: "New session", branch: project.branch, workspacePath: project.repoPath,
-    model: store.state.effectiveDefaultModel, when: "now", streaming: false, children: [],
-  });
+  if (project && !findNode(project.sessions, id)) {
+    const now = new Date().toISOString();
+    project.sessions.unshift({
+      id, title: "New session", branch: project.branch, workspacePath: project.repoPath,
+      model: store.state.effectiveDefaultModel, when: "now", updatedAt: now, activityAt: now,
+      streaming: false, children: [],
+    });
+  }
   store.state.openTree[projectId] = true;
   selectSession(projectId, id);
 }

@@ -86,6 +86,7 @@ class PiSettings extends HTMLElement {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
     if (e.target.closest("[data-act='open-github-picker']")) return store.set({ repoPickerOpen: true, repoPickerSource: "github" });
+    if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
     const login = e.target.closest("[data-auth-login]");
     if (login) return this.startAuth(login.dataset.authLogin, login.dataset.authType);
     const logout = e.target.closest("[data-auth-logout]");
@@ -112,7 +113,6 @@ class PiSettings extends HTMLElement {
     const patch = {};
     if (store.state.settings?.defaultRepositorySource?.editable !== false) patch.defaultRepositorySource = this.querySelector("[data-setting='defaultRepositorySource']")?.value;
     if (store.state.settings?.githubOwner?.editable !== false) patch.githubOwner = this.querySelector("[data-setting='githubOwner']")?.value.trim() || null;
-    if (store.state.settings?.githubClientId?.editable !== false) patch.githubClientId = this.querySelector("[data-setting='githubClientId']")?.value.trim() || null;
     if (!Object.keys(patch).length) return;
     try {
       await api.settingsPatch(patch);
@@ -189,17 +189,36 @@ class PiSettings extends HTMLElement {
       store.setError(`Provider logout failed: ${err.error || err.message || err}`);
     }
   }
+  async logoutGithub() {
+    try {
+      await api.githubLogout();
+      await refreshState();
+      store.setError("GitHub disconnected.", 2200);
+    } catch (err) {
+      store.setError(`GitHub disconnect failed: ${err.error || err.message || err}`);
+    }
+  }
   providerCard(provider) {
+    if (provider.id === "openai" && !provider.configured) return "";
     const status = provider.configured
       ? `Connected${provider.sourceLabel ? ` · ${provider.sourceLabel}` : ""}`
       : "Not connected";
-    const login = provider.authMethods?.map(method => `
+    const login = provider.source === "environment" ? "" : provider.authMethods?.map(method => {
+      const label = provider.id === "openai-codex" && method.id === "oauth"
+        ? "Sign in with ChatGPT"
+        : provider.id === "anthropic" && method.id === "oauth"
+          ? "Sign in with Anthropic"
+          : method.id === "api_key"
+            ? `Use ${provider.name} API key`
+            : method.label;
+      return `
       <button class="settings-action" data-auth-login="${esc(provider.id)}" data-auth-type="${esc(method.id)}">
-        ${esc(provider.configured ? `Reconnect with ${method.label}` : method.label)}
-      </button>`).join("") || "";
+        ${esc(provider.configured ? `Reconnect · ${label}` : label)}
+      </button>`;
+    }).join("") || "";
     const logout = provider.canLogout
       ? `<button class="settings-action quiet" data-auth-logout="${esc(provider.id)}">Disconnect</button>` : "";
-    return `<div class="provider-card">
+    return `<div class="settings-card provider-card">
       <div class="provider-card-head">
         <div><div class="sr-title">${esc(provider.name)}</div><div class="sr-sub">${esc(status)} · ${provider.availableModels || 0} available model${provider.availableModels === 1 ? "" : "s"}</div></div>
         <span class="status-dot ${provider.configured ? "" : "off"}"></span>
@@ -232,18 +251,16 @@ class PiSettings extends HTMLElement {
     const modeWarning = invalidModes.length
       ? `<div class="settings-warning">Invalid project mode for ${esc(invalidModes.map(project => project.name).join(", "))}; using manual mode. Edit config.json to set <span class="settings-mono">mode: manual</span> or <span class="settings-mono">mode: auto</span>.</div>`
       : "";
-    const providers = store.state.providers || [];
+    const providers = (store.state.providers || []).filter(provider => provider.id !== "openai" || provider.configured);
     const settings = store.state.settings || {};
     const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "local";
     const sourceEditable = settings.defaultRepositorySource?.editable !== false;
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
-    const clientId = settings.githubClientId?.value || "";
-    const clientIdEditable = settings.githubClientId?.editable !== false;
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
-      : githubStatus?.configured ? "Not connected" : "OAuth not configured";
+      : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
       ${modeWarning}
@@ -265,12 +282,8 @@ class PiSettings extends HTMLElement {
             <div class="sr-main"><div class="sr-title">GitHub owner filter</div><div class="sr-sub">Only repositories owned by this account or organization are shown.</div></div>
             <input class="settings-inline-input" data-setting="githubOwner" value="${esc(owner)}" placeholder="bry-guy" ${ownerEditable ? "" : "disabled"}>
           </div>
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">GitHub OAuth client ID</div><div class="sr-sub">Non-secret OAuth App setting. Environment overrides are read-only.</div></div>
-            <input class="settings-inline-input" data-setting="githubClientId" value="${esc(clientId)}" placeholder="Iv1.…" ${clientIdEditable ? "" : "disabled"}>
-          </div>
-          <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div></div><button class="settings-action" data-act="open-github-picker">Manage</button></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable && clientIdEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable || clientIdEditable ? "" : "disabled"}>Save</button></div>
+          <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div><div class="provider-actions"><button class="settings-action" data-act="open-github-picker">${githubStatus?.authenticated ? "Manage repositories" : "Sign in with GitHub"}</button>${githubStatus?.authenticated && githubStatus.credentialSource === "stored" ? `<button class="settings-action quiet" data-github-logout>Sign out</button>` : ""}</div></div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div>
         </div>
       </section>
       <div class="settings-card">
@@ -398,6 +411,7 @@ class PiRepoPicker extends HTMLElement {
     const source = e.target.closest("[data-source]");
     if (source) { this.chooseSource(source.dataset.source); return; }
     if (e.target.closest("[data-github-login]")) { void this.startGithubLogin(); return; }
+    if (e.target.closest("[data-github-more]")) { void this.loadGithubMore(); return; }
     if (e.target.closest("[data-github-cancel]")) { void this.cancelGithubLogin(); return; }
     if (e.target.closest("[data-git-url-connect]")) { void this.connect("git-url", this.querySelector(".git-url-input")?.value); return; }
     const row = e.target.closest("[data-repo]");
@@ -439,13 +453,20 @@ class PiRepoPicker extends HTMLElement {
     if (source === "git-url") { this.renderResults(); return; }
     if (source === "github") {
       const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
-      if (!status?.authenticated) { this.renderResults(); return; }
+      this.githubNextPage = null;
       try {
-        const result = await api.githubRepos(store.state.repoQuery);
+        const result = status?.authenticated
+          ? await api.githubRepos(store.state.repoQuery)
+          : await api.githubPublicRepos(status?.owner, store.state.repoQuery);
         this.githubRepos = result.repos || [];
         this.githubNextPage = result.nextPage;
+        this.githubPublicOnly = !status?.authenticated;
       } catch (err) {
-        this.errorMsg = err.error === "github_auth_required" ? "Connect GitHub to list repositories." : `Could not load GitHub repositories: ${err.message || err.error || err}`;
+        this.errorMsg = err.error === "github_auth_required"
+          ? "Sign in with GitHub to list private repositories."
+          : err.error === "github_owner_required"
+            ? "Set a default GitHub owner in Settings to browse public repositories."
+            : `Could not load GitHub repositories: ${err.message || err.error || err}`;
         this.githubRepos = [];
       }
       this.renderResults();
@@ -459,6 +480,27 @@ class PiRepoPicker extends HTMLElement {
       store.set({ repos: [] });
     }
     this.renderResults();
+  }
+  async loadGithubMore() {
+    if (!this.githubNextPage || this.githubMoreLoading) return;
+    const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
+    const page = this.githubNextPage;
+    this.githubMoreLoading = true;
+    this.renderResults();
+    try {
+      const result = status?.authenticated
+        ? await api.githubRepos(store.state.repoQuery, page)
+        : await api.githubPublicRepos(status?.owner, store.state.repoQuery, page);
+      const existing = new Set((this.githubRepos || []).map(repo => repo.fullName));
+      this.githubRepos = [...(this.githubRepos || []), ...(result.repos || []).filter(repo => !existing.has(repo.fullName))];
+      this.githubNextPage = result.nextPage;
+      this.errorMsg = null;
+    } catch (err) {
+      this.errorMsg = `Could not load more GitHub repositories: ${err.message || err.error || err}`;
+    } finally {
+      this.githubMoreLoading = false;
+      this.renderResults();
+    }
   }
   async startGithubLogin() {
     if (this.githubFlow) return;
@@ -567,17 +609,22 @@ class PiRepoPicker extends HTMLElement {
     }
     if (source === "github") {
       const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
-      if (!status?.configured) {
-        list.innerHTML = `<div class="modal-empty">GitHub OAuth is not configured on the server.</div>`;
-        return;
-      }
-      if (!status.authenticated) {
-        list.innerHTML = `<div class="modal-empty">Connect GitHub to list public and private repositories.<br><button class="settings-action" data-github-login>Connect GitHub</button>${this.errorMsg ? `<div class="provider-error">${esc(this.errorMsg)}</div>` : ""}</div>`;
-        return;
-      }
       const q = store.state.repoQuery.trim().toLowerCase();
-      const rows = (this.githubRepos || []).filter(repo => !q || repo.name.toLowerCase().includes(q) || repo.fullName.toLowerCase().includes(q)).map(repo => `<div class="repo-row" role="button" tabindex="0" data-repo="${esc(repo.fullName)}" data-full-name="${esc(repo.fullName)}"><div class="rr-main"><div class="rr-name">${esc(repo.name)}</div><div class="rr-meta"><span>${esc(repo.fullName)}</span></div></div><span class="rr-vis">${repo.private ? "private" : "public"}</span></div>`).join("");
-      list.innerHTML = `${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${rows || `<div class="modal-empty">No GitHub repositories ${q ? "match" : "are available"}.</div>`}`;
+      const rows = (this.githubRepos || [])
+        .filter(repo => !q || repo.name.toLowerCase().includes(q) || repo.fullName.toLowerCase().includes(q))
+        .map(repo => `<div class="repo-row" role="button" tabindex="0" data-repo="${esc(repo.fullName)}" data-full-name="${esc(repo.fullName)}"><div class="rr-main"><div class="rr-name">${esc(repo.name)}</div><div class="rr-meta"><span>${esc(repo.fullName)}</span></div></div><span class="rr-vis">${repo.private ? "private" : "public"}</span></div>`).join("");
+      const login = !status?.authenticated
+        ? `<div class="github-login-banner"><span>${status?.configured ? "Sign in to include private repositories." : "Sign in to access GitHub repositories."}</span><button class="settings-action" data-github-login>Sign in with GitHub</button></div>`
+        : "";
+      const setup = !status?.configured && !status?.owner
+        ? `<div class="modal-empty">GitHub sign-in needs server app setup. Set the advanced <span class="settings-mono">PI_WEB_GITHUB_CLIENT_ID</span> override.</div>`
+        : "";
+      const empty = !rows && !this.errorMsg && !setup && !this.githubNextPage
+        ? `<div class="modal-empty">No public GitHub repositories ${q ? "match" : `were found for ${esc(status?.owner || "this owner")}`}.</div>` : "";
+      const more = this.githubNextPage
+        ? `<button class="settings-action github-more" data-github-more ${this.githubMoreLoading ? "disabled" : ""}>${this.githubMoreLoading ? "Loading…" : "Load more repositories"}</button>`
+        : "";
+      list.innerHTML = `${login}${setup}${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${rows || empty}${more}`;
       return;
     }
     const raw = store.state.repoQuery.trim();

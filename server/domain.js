@@ -69,16 +69,26 @@ export async function projectState(project, sup) {
     while (parent?.closed) parent = parent.parentSessionId && byId.get(parent.parentSessionId);
     (parent ? parent.children : roots).push(node);
   }
-  const toNode = n => ({
-    id: n.id,
-    title: titleOf(n),
-    branch: pathToBranch[n.cwd] || null,
-    workspacePath: n.cwd || null,
-    streaming: sup.isStreaming(n.id),
-    model: n.model || null,
-    when: rel(n.modified),
-    children: n.children.sort(byRecency).map(toNode),
-  });
+  const toNode = n => {
+    const children = n.children.sort(byRecency).map(toNode);
+    const updatedAt = isoTime(n.modified);
+    const activityAt = children.reduce((latest, child) => newerTimestamp(latest, child.activityAt), updatedAt);
+    return {
+      id: n.id,
+      title: titleOf(n),
+      branch: pathToBranch[n.cwd] || null,
+      workspacePath: n.cwd || null,
+      streaming: sup.isStreaming(n.id),
+      model: n.model || null,
+      when: rel(n.modified),
+      updatedAt,
+      activityAt,
+      children,
+    };
+  };
+
+  const sessions = roots.sort((a, b) => compareTimestamp(treeActivity(b), treeActivity(a))).map(toNode);
+  const updatedAt = all.reduce((latest, session) => newerTimestamp(latest, isoTime(session.modified)), null);
 
   return {
     id: project.id,
@@ -89,8 +99,9 @@ export async function projectState(project, sup) {
     branches: ws.listBranches(project.repoPath),
     worktrees,
     occupied,
-    sessions: roots.sort(byRecency).map(toNode),
-    updated: all.length ? rel(all.map(s => s.modified).sort().pop()) : "—",
+    sessions,
+    updated: updatedAt ? rel(updatedAt) : "—",
+    updatedAt,
     worktreeRoot: worktreeRoot(cfg),
     mode: projectMode(project),
     modeInvalid: project.mode !== undefined && project.mode !== "manual" && project.mode !== "auto",
@@ -114,15 +125,53 @@ export async function chatsState(sup) {
   const closed = loadClosed();
   const list = discovered.filter(s => !closed.has(s.id));
   return list
-    .sort((a, b) => String(b.modified).localeCompare(String(a.modified)))
-    .map(s => ({ id: s.id, title: titleOf(s), when: rel(s.modified), streaming: sup.isStreaming(s.id), model: s.model || null }));
+    .sort((a, b) => compareTimestamp(b.modified, a.modified))
+    .map(s => ({
+      id: s.id,
+      title: titleOf(s),
+      when: rel(s.modified),
+      updatedAt: isoTime(s.modified),
+      activityAt: isoTime(s.modified),
+      streaming: sup.isStreaming(s.id),
+      model: s.model || null,
+    }));
 }
 
 export function titleOf(s) {
-  return s.name || (s.firstMessage ? s.firstMessage.slice(0, 48) : "New session");
+  return s.name || truncateSessionStart(s.firstMessage);
 }
 
-function byRecency(a, b) { return String(b.modified).localeCompare(String(a.modified)); }
+export function truncateSessionStart(value, max = 48) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, max) : "New session";
+}
+
+export function timestampValue(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function isoTime(value) {
+  const timestamp = timestampValue(value);
+  return timestamp ? new Date(timestamp).toISOString() : null;
+}
+
+export function compareTimestamp(a, b) {
+  const delta = timestampValue(a) - timestampValue(b);
+  return delta || String(a || "").localeCompare(String(b || ""));
+}
+
+export function newerTimestamp(a, b) {
+  return timestampValue(a) >= timestampValue(b) ? (a || null) : (b || null);
+}
+
+function treeActivity(node) {
+  return (node.children || []).reduce((latest, child) => newerTimestamp(latest, treeActivity(child)), node.modified);
+}
+
+function byRecency(a, b) { return compareTimestamp(b.modified, a.modified); }
 
 export function rel(ts) {
   if (!ts) return "";

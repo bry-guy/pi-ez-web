@@ -439,7 +439,19 @@ export class RealSupervisor {
 
   async loginProvider(providerId, authType, interaction) {
     const runtime = await this._modelRuntime();
-    await runtime.login(providerId, authType, interaction);
+    const loginInteraction = providerId === "openai-codex" && authType === "oauth"
+      ? {
+        ...interaction,
+        // The web app may be remote from the browser. Prefer the SDK's
+        // device-code path so users do not have to make localhost:1455
+        // reachable through a proxy.
+        prompt: prompt => {
+          const device = prompt?.type === "select" && prompt.options?.find(option => option.id === "device_code");
+          return device ? Promise.resolve(device.id) : interaction.prompt(prompt);
+        },
+      }
+      : interaction;
+    await runtime.login(providerId, authType, loginInteraction);
     await runtime.refresh({ providers: [providerId], allowNetwork: true, force: true });
     await runtime.getAvailable(providerId).catch(() => []);
     this.models = null;
