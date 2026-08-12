@@ -13,11 +13,13 @@ const script = `
   const providersResponse = await fetch(base + '/api/providers');
   const providers = await providersResponse.json();
   const created = await (await fetch(base + '/api/chats', { method: 'POST' })).json();
+  const commandsResponse = await fetch(base + '/api/sessions/' + created.id + '/commands');
+  const commands = await commandsResponse.json();
   const message = await fetch(base + '/api/sessions/' + created.id + '/message', {
     method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({text:'hello'})
   });
   const transcript = await (await fetch(base + '/api/sessions/' + created.id + '/transcript')).json();
-  console.log(JSON.stringify({providersStatus: providersResponse.status, providers, created, messageStatus: message.status, message: await message.json(), transcript}));
+  console.log(JSON.stringify({providersStatus: providersResponse.status, providers, created, commandsStatus: commandsResponse.status, commands, messageStatus: message.status, message: await message.json(), transcript}));
   server.closeAllConnections?.(); server.close();
 `;
 
@@ -55,6 +57,9 @@ test("real sessions can be created without provider credentials", () => {
     assert.equal(result.providersStatus, 200);
     assert.ok(result.providers.providers.some(provider => provider.id === "anthropic"));
     assert.ok(result.created.id);
+    assert.equal(result.commandsStatus, 200);
+    assert.ok(result.commands.commands.some(command => command.name === "settings"));
+    assert.ok(result.commands.commands.some(command => command.name === "name"));
     assert.equal(result.messageStatus, 409);
     assert.equal(result.message.error, "model_required");
     assert.deepEqual(result.transcript.records, []);

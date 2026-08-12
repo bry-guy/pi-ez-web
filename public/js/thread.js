@@ -350,6 +350,7 @@ class PiModelPicker extends HTMLElement {
 class PiComposer extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<div class="composer-outer"><div class="composer-pad"><div class="composer">
+      <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
       <textarea rows="2"></textarea>
       <div class="composer-foot">
         <div class="composer-hint"></div>
@@ -363,8 +364,25 @@ class PiComposer extends HTMLElement {
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
-    this.ta.addEventListener("input", () => { store.state.draft = this.ta.value; });
+    this.ta.addEventListener("input", () => {
+      store.state.draft = this.ta.value;
+      void this.syncCommands();
+    });
+    this.addEventListener("click", e => {
+      const option = e.target.closest("[data-command-index]");
+      if (!option) return;
+      this.commandIndex = Number(option.dataset.commandIndex);
+      this.chooseCommand();
+    });
     this.ta.addEventListener("keydown", e => {
+      if (this.commandOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
+        if (e.key === "Escape") { e.preventDefault(); this.closeCommands(); return; }
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
+        const query = this.commandQuery();
+        const exact = query && this.commands.some(command => command.name.toLowerCase() === query) && this.ta.value === `/${query}`;
+        if (e.key === "Enter" && exact) { e.preventDefault(); this.closeCommands(); this.send(e.altKey ? "followUp" : undefined); return; }
+        if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); this.chooseCommand(); return; }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         this.send(e.altKey ? "followUp" : undefined);
@@ -373,9 +391,65 @@ class PiComposer extends HTMLElement {
     this.sendBtn.addEventListener("click", () => this.send());
     this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.sync(); });
+    this.commands = [];
+    this.allCommands = [];
+    this.commandRequest = 0;
+    this.commandOpen = false;
+    this.commandIndex = 0;
+    this.commandSessionId = null;
     this.sync();
   }
   disconnectedCallback() { this.unsub?.(); }
+
+  commandQuery() {
+    const match = this.ta.value.match(/^\/([^\s]*)$/);
+    return match ? match[1].toLowerCase() : null;
+  }
+  async syncCommands() {
+    const query = this.commandQuery();
+    const id = store.activeKey();
+    if (query === null || !id) { this.closeCommands(); return; }
+    const request = ++this.commandRequest;
+    try {
+      if (id !== this.commandSessionId) {
+        const result = await api.commands(id);
+        if (request !== this.commandRequest || id !== store.activeKey() || this.commandQuery() === null) return;
+        this.allCommands = result.commands || [];
+        this.commandSessionId = id;
+      }
+      if (request !== this.commandRequest || id !== store.activeKey() || this.commandQuery() === null) return;
+      this.commands = this.allCommands.filter(command => !query || command.name.toLowerCase().includes(query));
+      this.commandIndex = 0;
+      this.commandOpen = this.commands.length > 0;
+      this.renderCommands();
+    } catch {
+      if (request === this.commandRequest) this.closeCommands();
+    }
+  }
+  closeCommands() {
+    this.commandOpen = false;
+    this.renderCommands();
+  }
+  moveCommand(delta) {
+    if (!this.commands.length) return;
+    this.commandIndex = (this.commandIndex + delta + this.commands.length) % this.commands.length;
+    this.renderCommands();
+  }
+  chooseCommand() {
+    const command = this.commands[this.commandIndex];
+    if (!command) return;
+    if (!this.ta.value.startsWith("/")) return;
+    this.ta.value = `/${command.name} `;
+    store.state.draft = this.ta.value;
+    this.closeCommands();
+    this.ta.focus();
+  }
+  renderCommands() {
+    const popover = this.querySelector(".command-popover");
+    if (!popover) return;
+    popover.classList.toggle("hidden", !this.commandOpen);
+    popover.innerHTML = this.commands.map((command, index) => `<button class="command-option ${index === this.commandIndex ? "current" : ""}" data-command-index="${index}"><span>/${esc(command.name)}</span><small>${esc(command.description || command.source || "")}</small></button>`).join("");
+  }
 
   async send(forcedMode) {
     const id = store.activeKey();
@@ -391,7 +465,15 @@ class PiComposer extends HTMLElement {
     const streaming = store.transcript(id).streaming;
     const mode = forcedMode || (streaming ? "steer" : "prompt");
     try {
-      await api.message(id, text, mode);
+      if (text.startsWith("/")) {
+        const result = await api.command(id, text, mode);
+        if (result.action === "settings") {
+          store.set({ view: "settings" });
+          return;
+        }
+      } else {
+        await api.message(id, text, mode);
+      }
     } catch (err) {
       if (err.error === "workspace_busy") {
         await refreshState().catch(refreshErr => store.setError(`Could not refresh state: ${refreshErr.message || refreshErr}`));
@@ -419,6 +501,15 @@ class PiComposer extends HTMLElement {
     const lock = store.workspaceBusy(id);
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
+    const activeId = store.activeKey();
+    if (activeId !== this.commandSessionId) {
+      this.commandSessionId = null;
+      this.commands = [];
+      this.allCommands = [];
+      this.closeCommands();
+    }
+    if (this.commandQuery() !== null && activeId) void this.syncCommands();
+    else this.renderCommands();
     const error = store.state.error;
     const nQueued = store.state.queued[id] || 0;
     this.hint.classList.toggle("busy", !!lock);

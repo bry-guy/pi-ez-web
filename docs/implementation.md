@@ -23,8 +23,9 @@ npm run dev            # PI_WEB_MODE=mock
 ```
 server/
   index.js            entry: Hono app, static UI, startup worktree prune
-  routes.js           REST + SSE + bang execution
-  workspaces.js       git: worktree-per-branch, occupied rules, safe fork transfer
+  routes.js           REST + SSE + slash commands + bang execution
+  commands.js         Pi-native slash-command discovery and parsing
+  workspaces.js       git: worktree-per-branch, remote branches, occupied rules, safe fork transfer
   domain.js           /api/state assembly (projects, session trees, occupied map)
   events.js           SSE hub (event contract v1 + sequence snapshots)
   lifecycle.js        explicit close and merge lifecycle
@@ -34,6 +35,7 @@ server/
   version.js           REST API contract/capability marker
   repositories.js     validated HTTPS cloning with temporary GIT_ASKPASS
 public/               index.html + app.css + ES modules; no build step
+                         marked + DOMPurify are served locally for safe GFM replies
 test/                 workspaces (real git) · server integration (mock+SSE) · SDK/auth/clone surfaces · DOM gate
 scripts/verify-real.js  credentialed end-to-end smoke
 docs/archive/CHECKLIST.md  archived real-browser click-through gate
@@ -57,9 +59,13 @@ arguments. Clone processes ignore global/system Git URL rewrite configuration
 so validated public HTTPS URLs cannot turn into SSH. The
 GitHub OAuth client ID is an advanced server deployment setting, not a normal
 user-facing setting. AI login flows use a short-polling REST API because Pi's
-provider OAuth implementations are server-side Node flows. Transcript SSE
-remains contract version 1; REST state is contract version 2 and includes a
-capability marker so stale server processes produce a restart prompt.
+provider OAuth implementations are server-side Node flows. Assistant replies
+use locally served `marked` GFM parsing followed by DOMPurify sanitization;
+raw model HTML is not rendered. The composer discovers Pi slash commands and
+passes them to the SDK, with `/settings` and `/name` handled as first-class web
+actions. Transcript SSE remains contract version 1; REST state is contract
+version 2 and includes a capability marker so stale server processes produce a
+restart prompt.
 
 ## Invariants
 
@@ -97,8 +103,12 @@ The DOM suite is a jsdom floor; use a real browser for visual and interaction
 validation because jsdom does not paint pixels. The real server has no auth or
 sandbox and must remain inside a trusted LAN/tailnet/VPN.
 
-`POST /api/sessions/:id/name` is intentionally API-only in v1; the UI has no
-rename control. The branch cleanup endpoint is also API-only.
+`GET /api/sessions/:id/commands` and `POST /api/sessions/:id/command` expose
+Pi's command surface to the web composer. `/settings` changes the web view and
+`/name <name>` updates Pi session metadata; other discovered commands pass
+through Pi's SDK command handling. Branch popovers include local, worktree,
+default, and fetched remote refs; selecting a remote ref creates a local
+worktree branch from that ref. The branch cleanup endpoint remains API-only.
 
 Unnamed sessions display a compact whitespace-normalized truncation of their
 first message; pi-ez-web does not append a session name entry. The server sorts

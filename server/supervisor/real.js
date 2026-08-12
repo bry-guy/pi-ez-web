@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
+import { commandInfo, parseSlashCommand } from "../commands.js";
 
 let sdk = null;
 async function SDK() {
@@ -277,6 +278,35 @@ export class RealSupervisor {
     });
   }
 
+  async commands(id) {
+    const st = await this._attachById(id);
+    return commandInfo({
+      commands: st.session.extensionRunner?.getRegisteredCommands?.() || [],
+      prompts: st.session.promptTemplates || [],
+      skills: st.session.resourceLoader?.getSkills?.().skills || [],
+    });
+  }
+
+  async command(id, text, mode) {
+    const parsed = parseSlashCommand(text);
+    if (!parsed) throw Object.assign(new Error("invalid_slash_command"), { code: "invalid_slash_command" });
+    if (parsed.name === "settings") return { action: "settings" };
+    if (parsed.name === "name") {
+      if (!parsed.args.trim()) throw Object.assign(new Error("usage: /name <name>"), { code: "command_usage" });
+      await this.setName(id, parsed.args.trim());
+      return { action: "session_meta", name: parsed.args.trim() };
+    }
+    const st = await this._attachById(id);
+    const commands = await this.commands(id);
+    const known = commands.some(command => command.name === parsed.name);
+    if (!known) throw Object.assign(new Error("unknown_slash_command"), { code: "unknown_slash_command" });
+    const options = st.session.isStreaming
+      ? { source: "rpc", streamingBehavior: mode === "followUp" ? "followUp" : "steer" }
+      : { source: "rpc" };
+    await st.session.prompt(parsed.text, options);
+    return { action: "handled", name: parsed.name };
+  }
+
   async _preferredModel(id) {
     const known = this.info.get(id)?.model;
     if (known) return known;
@@ -509,18 +539,21 @@ export class RealSupervisor {
   }
 
   async setName(id, name) {
+    const normalized = String(name || "").trim();
     const st = this.live.get(id);
     if (st) {
-      st.session.setSessionName(name);
+      st.session.setSessionName(normalized);
+      this.info.set(id, { ...(this.info.get(id) || {}), name: normalized || null });
+      this.hub.emit(id, "session_meta", { name: normalized || null });
       return;
     }
     if (!await this._discover(id)) throw new Error("unknown session " + id);
     await SDK();
     const manager = this._managerFor(id);
-    manager.appendSessionInfo(String(name || ""));
+    manager.appendSessionInfo(normalized);
     const info = this.info.get(id) || {};
-    this.info.set(id, { ...info, name: String(name || "") || null });
-    this.hub.emit(id, "session_meta", { name: String(name || "") || null });
+    this.info.set(id, { ...info, name: normalized || null });
+    this.hub.emit(id, "session_meta", { name: normalized || null });
   }
 
   async fork(parentId, atRecordId, { cwd, name }) {

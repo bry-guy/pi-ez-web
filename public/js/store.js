@@ -24,6 +24,21 @@ function sortSessionNodes(nodes, topLevel = true) {
   return (nodes || []).sort((a, b) => compareActivity(a, b, topLevel ? "activityAt" : "updatedAt"));
 }
 
+const UNREAD_STORAGE_KEY = "pi-ez-web:unread";
+function unreadFromStorage() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(UNREAD_STORAGE_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).filter(([, unread]) => unread === true))
+      : {};
+  } catch {
+    return {};
+  }
+}
+function persistUnread(unread) {
+  try { globalThis.localStorage?.setItem(UNREAD_STORAGE_KEY, JSON.stringify(unread)); } catch { /* storage is optional */ }
+}
+
 function findSessionPath(nodes, id, path = []) {
   for (const node of nodes || []) {
     const next = [...path, node];
@@ -77,11 +92,27 @@ export const store = {
     reposRootSource: "default", // default | config | environment
     files: [],
     queued: {},              // sessionId -> follow-up count (queue_update)
+    unread: unreadFromStorage(), // sessionId -> completed reply not yet read
     transcripts: {},         // sessionId -> { records, streaming, seq }
   },
   listeners: new Set(),
   set(patch) {
     Object.assign(this.state, typeof patch === "function" ? patch(this.state) : patch);
+    this.notify("state");
+  },
+  isReading(id) {
+    return !!id && this.state.view === "chat" && this.activeKey() === id;
+  },
+  markRead(id) {
+    if (!id || !this.state.unread[id]) return;
+    delete this.state.unread[id];
+    persistUnread(this.state.unread);
+    this.notify("state");
+  },
+  markUnread(id) {
+    if (!id || this.isReading(id) || this.state.unread[id]) return;
+    this.state.unread[id] = true;
+    persistUnread(this.state.unread);
     this.notify("state");
   },
   notify(what) {

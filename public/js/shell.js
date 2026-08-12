@@ -12,6 +12,7 @@ export function selectSession(projectId, sessionId) {
     filesOpen: store.state.filesOpen, files: [], fileError: null,
     branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
+  store.markRead(sessionId);
   openTranscript(sessionId);
 }
 export function selectChat(chatId) {
@@ -21,6 +22,7 @@ export function selectChat(chatId) {
     branchMenuOpen: false, filesOpen: false, files: [], fileError: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
+  store.markRead(chatId);
   openTranscript(chatId);
 }
 export async function newChat() {
@@ -130,11 +132,12 @@ class PiSidebar extends HTMLElement {
       const open = !!store.state.openTree[n.id];
       const sel = store.state.sessionId === n.id && !store.state.chatId && store.state.view === "chat";
       const streaming = store.transcript(n.id).streaming;
+      const unread = !!store.state.unread[n.id];
       out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
-        <div class="row ${sel ? "active " : ""}${streaming ? "streaming" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
+        <div class="row ${sel ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
           <span class="caret">${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
-          <span class="live-dot" aria-label="Streaming"></span>
+          <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>
           <button class="row-close" data-act="close-row" data-kind="session" data-id="${esc(n.id)}"
             data-label="${esc(n.title)}" data-branch="${esc(n.branch || "")}" title="Close session">×</button>
         </div></div>`);
@@ -212,11 +215,15 @@ class PiSidebar extends HTMLElement {
     }
     const chatRows = s.chats
       .filter(cRow => !q || cRow.title.toLowerCase().includes(q))
-      .map(cRow => `<div class="row ${s.chatId === cRow.id ? "active" : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
-        <span class="lbl">${esc(cRow.title)}</span><span class="when">${esc(cRow.when)}</span>
+      .map(cRow => {
+        const streaming = cRow.streaming || store.transcript(cRow.id).streaming;
+        const unread = !!s.unread[cRow.id];
+        return `<div class="row ${s.chatId === cRow.id ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
+        <span class="lbl">${esc(cRow.title)}</span><span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span><span class="when">${esc(cRow.when)}</span>
         <button class="row-close" data-act="close-row" data-kind="chat" data-id="${esc(cRow.id)}"
           data-label="${esc(cRow.title)}" data-branch="" title="Close chat">×</button>
-      </div>`).join("");
+      </div>`;
+      }).join("");
     this.querySelector(".projects-list").innerHTML = projRows.join("");
     this.querySelector(".chats-list").innerHTML = chatRows;
   }
@@ -259,7 +266,7 @@ class PiHeader extends HTMLElement {
     else if (act === "branch-menu") store.set(s => ({ branchMenuOpen: !s.branchMenuOpen, branchError: null }));
     else if (act === "close-branch-menu") store.set({ branchMenuOpen: false, branchError: null });
     else if (act === "files") this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
-    else if (act === "switch-branch") this.switchBranch(t.dataset.branch);
+    else if (act === "switch-branch") this.switchBranch(t.dataset.branch, t.dataset.remoteBranch || null);
     else if (act === "create-branch") this.createBranch();
     else if (act === "merge") {
       const branch = this.sessionBranch();
@@ -267,16 +274,19 @@ class PiHeader extends HTMLElement {
     }
   }
 
-  async switchBranch(branch) {
+  async switchBranch(branch, remoteBranch = null) {
     const id = store.state.sessionId;
     try {
-      await api.branch(id, branch, false);
+      await api.branch(id, branch, !!remoteBranch, remoteBranch);
       store.set({ branchMenuOpen: false, branchError: null });
       await refreshState();
     } catch (err) {
       const msg = err.error === "branch_occupied"
         ? `branch in use by ${err.byTitle || err.bySessionId}`
-        : err.error === "session_streaming" ? "session is mid-turn" : (err.error || "failed");
+        : err.error === "session_streaming" ? "session is mid-turn"
+          : err.error === "branch_exists" ? `that branch already exists${err.remoteBranch ? ` (${err.remoteBranch})` : ""}`
+            : err.error === "invalid_remote_branch" ? "remote branch is no longer available"
+              : (err.error || "failed");
       store.set({ branchError: msg });
     }
   }
@@ -336,7 +346,7 @@ class PiHeader extends HTMLElement {
 
     this.innerHTML = `<header class="bar">
       ${mobile() ? `<button class="hamburger" data-act="drawer" title="Menu">
-        <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true"><rect width="14" height="1.6" y="0" fill="currentColor"/><rect width="14" height="1.6" y="5.2" fill="currentColor"/><rect width="14" height="1.6" y="10.4" fill="currentColor"/></svg>
+        <svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>
       </button>` : ""}
       <div class="bar-main">
         <div class="bar-title">${esc(title)}</div>
@@ -355,18 +365,37 @@ class PiHeader extends HTMLElement {
   }
 
   popover(p, current) {
-    const rows = p.branches.map(b => {
+    const localRows = (p.branches || []).map(b => {
       const occ = p.occupied[b];
       const occupiedByOther = occ && occ.sessionId !== store.state.sessionId;
       const occStreaming = occupiedByOther && store.transcript(occ.sessionId).streaming;
       const cls = ["branch-row", b === current ? "current" : "", occupiedByOther ? "occupied" : ""].join(" ");
+      const kind = b === p.branch ? "default" : p.worktrees?.[b] ? "worktree" : "local";
       return `<div class="${cls}" ${occupiedByOther ? "" : `role="button" tabindex="0" data-act="switch-branch" data-branch="${esc(b)}"`}
         title="${occupiedByOther ? "in use by " + esc(occ.title) : ""}">
         <span class="check">${b === current ? "✓" : ""}</span>
         <span class="bn">${esc(b)}</span>
-        <span class="bm">${occupiedByOther ? (occStreaming ? "in use · streaming" : "in use") : (b === p.branch ? "default" : "")}</span>
+        <span class="bm">${occupiedByOther ? (occStreaming ? "in use · streaming" : "in use") : kind}</span>
       </div>`;
-    }).join("");
+    });
+    const remoteRows = (p.remoteBranches || []).map(remote => {
+      const slash = remote.indexOf("/");
+      const local = slash >= 0 ? remote.slice(slash + 1) : remote;
+      const localExists = (p.branches || []).includes(local);
+      const occ = p.occupied[local];
+      const occupiedByOther = occ && occ.sessionId !== store.state.sessionId;
+      const cls = ["branch-row", occupiedByOther || localExists ? "occupied" : ""].join(" ");
+      const action = occupiedByOther || localExists
+        ? ""
+        : `role="button" tabindex="0" data-act="switch-branch" data-branch="${esc(local)}" data-remote-branch="${esc(remote)}"`;
+      return `<div class="${cls}" ${action}
+        title="${occupiedByOther ? "in use by " + esc(occ.title) : localExists ? "local branch already exists for " + esc(remote) : "Create a local branch from " + esc(remote)}">
+        <span class="check">${localExists ? "·" : ""}</span>
+        <span class="bn">${esc(remote)}</span>
+        <span class="bm">${occupiedByOther ? "in use" : localExists ? "local exists" : "remote"}</span>
+      </div>`;
+    });
+    const rows = [...localRows, ...remoteRows].join("");
     return `
       <div class="popover-scrim" data-act="close-branch-menu"></div>
       <div class="branch-pop">

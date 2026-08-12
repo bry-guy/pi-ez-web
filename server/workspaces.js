@@ -30,6 +30,27 @@ export function listBranches(repoPath) {
   } catch { return []; }
 }
 
+export function listRemoteBranches(repoPath) {
+  try {
+    return git(repoPath, "branch", "--remotes", "--format=%(refname:short)")
+      .split("\n")
+      .map(s => s.trim())
+      .filter(branch => branch && !branch.endsWith("/HEAD"));
+  } catch { return []; }
+}
+
+export function localBranchForRemote(remoteBranch) {
+  const value = String(remoteBranch || "").trim();
+  const slash = value.indexOf("/");
+  return slash >= 0 ? value.slice(slash + 1) : value;
+}
+
+export function remoteBranchForLocal(repoPath, branch) {
+  const local = String(branch || "").trim();
+  if (!local) return null;
+  return listRemoteBranches(repoPath).find(remote => localBranchForRemote(remote) === local) || null;
+}
+
 // Git reports canonical paths on macOS (for example /private/var/... even when
 // the caller used /var/...). Keep the path spelling supplied by the caller so
 // configured project paths, session cwd values, and discovered worktrees still

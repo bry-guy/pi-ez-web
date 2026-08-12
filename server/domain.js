@@ -97,6 +97,7 @@ export async function projectState(project, sup) {
     source: project.source || { type: "local" },
     branch: ws.currentBranch(project.repoPath),
     branches: ws.listBranches(project.repoPath),
+    remoteBranches: ws.listRemoteBranches(project.repoPath),
     worktrees,
     occupied,
     sessions,

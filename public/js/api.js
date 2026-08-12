@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands"];
 const JH = { "content-type": "application/json" };
 
 function validateStateContract(state) {
@@ -70,8 +70,10 @@ export const api = {
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
   fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
-  branch: (id, branch, create = false) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create }) }).then(j),
+  branch: (id, branch, create = false, fromRef = undefined) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create, ...(fromRef ? { fromRef } : {}) }) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
+  commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
+  command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
   settings: (defaultModel, reposRoot) => {
     const body = {};
     if (defaultModel !== undefined) body.defaultModel = defaultModel;
@@ -276,6 +278,8 @@ export function applyEvent(evt, replay = false) {
     case "turn_end": {
       t.streaming = false;
       delete store.state.queued[evt.sessionId];
+      const hasAssistantText = [...recs].reverse().some(record => record.role === "assistant" && record.text);
+      if (evt.reason !== "stopped" || hasAssistantText) store.markUnread(evt.sessionId);
       if (evt.reason === "stopped") {
         const empty = [...recs].reverse().find(r => r.role === "assistant" && r.streaming && !r.text);
         if (empty) recs.splice(recs.indexOf(empty), 1);

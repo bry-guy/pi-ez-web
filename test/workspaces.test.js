@@ -28,6 +28,14 @@ test("repo detection and branch listing", () => {
   assert.equal(ws.isGitRepo(tmp), false);
   assert.equal(ws.currentBranch(repo), "main");
   assert.deepEqual(ws.listBranches(repo), ["main"]);
+  assert.deepEqual(ws.listRemoteBranches(repo), []);
+});
+
+test("remote branch listing preserves remote names and supports local mapping", () => {
+  git(repo, "update-ref", "refs/remotes/origin/feature/remote-ui", "HEAD");
+  assert.deepEqual(ws.listRemoteBranches(repo), ["origin/feature/remote-ui"]);
+  assert.equal(ws.localBranchForRemote("origin/feature/remote-ui"), "feature/remote-ui");
+  assert.equal(ws.remoteBranchForLocal(repo, "feature/remote-ui"), "origin/feature/remote-ui");
 });
 
 test("worktree map includes the checkout", () => {

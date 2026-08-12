@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appHome, loadConfig, newId } from "../config.js";
+import { WEB_PI_COMMANDS, parseSlashCommand } from "../commands.js";
 
 const MOCK_MODELS = [
   { id: "mock/fast", provider: "mock", label: "Mock Fast" },
@@ -82,6 +83,18 @@ export class MockSupervisor {
   }
   async loginProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
   async logoutProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
+  async commands() { return WEB_PI_COMMANDS.map(command => ({ ...command })); }
+  async command(id, text) {
+    const parsed = parseSlashCommand(text);
+    if (!parsed) throw Object.assign(new Error("invalid_slash_command"), { code: "invalid_slash_command" });
+    if (parsed.name === "settings") return { action: "settings" };
+    if (parsed.name === "name") {
+      if (!parsed.args.trim()) throw Object.assign(new Error("usage: /name <name>"), { code: "command_usage" });
+      await this.setName(id, parsed.args.trim());
+      return { action: "session_meta", name: parsed.args.trim() };
+    }
+    throw Object.assign(new Error("unknown_slash_command"), { code: "unknown_slash_command" });
+  }
 
   async createSession({ cwd, name, model }) {
     const s = {

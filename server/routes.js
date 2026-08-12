@@ -329,6 +329,35 @@ export function buildApi(sup) {
 
   // ---------- session ops ----------
 
+  api.get("/sessions/:id/commands", async c => {
+    try { return c.json({ commands: await sup.commands(c.req.param("id")) }); }
+    catch (e) {
+      if (String(e?.message || "").startsWith("unknown session")) return err(c, 404, "no_such_session");
+      throw e;
+    }
+  });
+
+  api.post("/sessions/:id/command", async c => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const text = typeof body?.text === "string" ? body.text : "";
+    const mode = body?.mode || "prompt";
+    if (!text.trim().startsWith("/")) return err(c, 400, "invalid_slash_command");
+    const cwd = await sessionWorkspace(id, sup);
+    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
+    if (busyBy) return err(c, 409, "workspace_busy", { bySessionId: busyBy });
+    try {
+      const result = await sup.command(id, text.trim(), mode);
+      if (result.action === "settings") return c.json({ ok: true, action: "settings" });
+      return c.json({ ok: true, ...result });
+    } catch (e) {
+      const statuses = { model_required: 409, unknown_slash_command: 400, invalid_slash_command: 400, command_usage: 400 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      if (String(e?.message || "").startsWith("unknown session")) return err(c, 404, "no_such_session");
+      throw e;
+    }
+  });
+
   api.post("/sessions/:id/message", async c => {
     const id = c.req.param("id");
     const { text, mode = "prompt" } = await c.req.json();
@@ -408,7 +437,7 @@ export function buildApi(sup) {
   api.post("/sessions/:id/name", async c => {
     const { name } = await c.req.json();
     await sup.setName(c.req.param("id"), name);
-    return c.json({ ok: true });
+    return c.json({ ok: true, name: String(name || "").trim() || null });
   });
 
   // Branch switch / create: re-home the session to that branch's workspace.
@@ -416,7 +445,7 @@ export function buildApi(sup) {
   // worktree is bound to another session is a 409.
   api.post("/sessions/:id/branch", async c => {
     const id = c.req.param("id");
-    const { branch: rawBranch, create = false } = await c.req.json();
+    const { branch: rawBranch, create = false, fromRef = null } = await c.req.json();
     const branch = slug(rawBranch || "");
     if (!branch) return err(c, 400, "bad_branch");
     if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
@@ -427,10 +456,19 @@ export function buildApi(sup) {
     const { project } = found;
     const cfg = loadConfig();
 
-    if (!create && !ws.listBranches(project.repoPath).includes(branch)) return err(c, 404, "no_such_branch");
+    const localBranches = ws.listBranches(project.repoPath);
+    const remoteBranches = ws.listRemoteBranches(project.repoPath);
+    const remoteSource = fromRef || null;
+    if (!create && !localBranches.includes(branch)) return err(c, 404, "no_such_branch");
+    if (remoteSource && (!create || !remoteBranches.includes(remoteSource))) return err(c, 400, "invalid_remote_branch");
+    if (remoteSource && localBranches.includes(branch)) return err(c, 409, "branch_exists");
+    if (create && !remoteSource && !localBranches.includes(branch)) {
+      const matchingRemote = ws.remoteBranchForLocal(project.repoPath, branch);
+      if (matchingRemote) return err(c, 409, "branch_exists", { remoteBranch: matchingRemote });
+    }
     const target = ws.ensureWorkspace({
       repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg),
-      projectId: project.id, branch, fromRef: create ? "HEAD" : undefined,
+      projectId: project.id, branch, fromRef: create ? (fromRef || "HEAD") : undefined,
     });
     if (target === cwd) return c.json({ ok: true, branch, workspacePath: target });
 

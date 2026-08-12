@@ -4,5 +4,6 @@ export const API_CAPABILITIES = Object.freeze([
   "github-device-auth",
   "repository-sources",
   "session-activity",
+  "slash-commands",
 ]);
 export const BUILD_ID = process.env.PI_WEB_BUILD_ID || "development";

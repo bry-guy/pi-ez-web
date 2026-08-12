@@ -129,8 +129,9 @@ aside.rail {
 .row.active { background: var(--accent-soft); color: var(--text); font-weight: 500; }
 .row .caret { font-family: var(--mono); font-size: 10px; width: 12px; flex: 0 0 12px; color: var(--faint); }
 .row .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pi-orange); flex: 0 0 auto; opacity: 0; }
-.row.streaming .live-dot { opacity: 1; animation: piBlink 1.05s steps(1) infinite; }
+.row .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pi-orange); flex: 0 0 auto; opacity: 0; }
+.row.streaming .live-dot { opacity: 1; animation: piBlink 2.4s steps(1) infinite; }
+.row.unread:not(.streaming) .live-dot { opacity: 1; animation: none; background: var(--orange); }
 .row .count, .row .when { font-family: var(--mono); font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .row .when { font-size: 10.5px; }
 .row-add { border: 0; background: transparent; padding: 1px 4px; line-height: 1; cursor: pointer; flex: 0 0 auto; }
@@ -201,7 +202,8 @@ header.bar {
   padding: 9px 11px; border-bottom: 1px solid var(--border);
   font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); font-weight: 600;
 }
-.branch-pop .pop-list { max-height: 210px; overflow-y: auto; padding: 4px; }
+.branch-pop .pop-list { max-height: 300px; overflow-y: auto; padding: 4px; }
+.branch-pop .pop-list::before { content: "local and remote"; display: block; padding: 5px 9px 4px; color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .branch-row {
   display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px; cursor: pointer;
   font-family: var(--mono); font-size: 12px; color: var(--muted);
@@ -213,7 +215,8 @@ header.bar {
 .branch-row.occupied:hover { background: transparent; }
 .branch-row .check { width: 11px; flex: 0 0 11px; color: var(--orange); }
 .branch-row .bn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.branch-row .bm { color: var(--faint); font-size: 10.5px; flex: 0 0 auto; }
+.branch-row .bm { color: var(--faint); font-size: 10.5px; flex: 0 0 auto; text-transform: lowercase; }
+.branch-row[data-remote-branch] .bm { color: var(--accent); }
 .branch-pop .pop-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; gap: 6px; }
 .branch-pop input {
   flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--border);
@@ -230,7 +233,7 @@ header.bar {
 /* ---------- screens ---------- */
 .screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .scrollable { flex: 1; overflow-y: auto; }
-.col-pad { max-width: 760px; margin: 0 auto; padding: 28px 28px 8px; }
+.col-pad { width: 80%; max-width: none; margin: 0 auto; padding: 28px 0 8px; }
 .screen-title { font-size: 20px; font-weight: 500; letter-spacing: -0.015em; }
 
 /* ---------- transcript ---------- */
@@ -347,27 +350,40 @@ header.bar {
 .diff-line.hunk { color: var(--faint); }
 
 /* ---------- composer ---------- */
-.composer-outer { border-top: 1px solid var(--border); background: var(--bg); }
-.composer-pad { max-width: 760px; margin: 0 auto; padding: 14px 28px 20px; }
+.composer-outer { border-top: 0; background: var(--bg); }
+.composer-pad { width: 80%; max-width: none; margin: 0 auto; padding: 14px 0 20px; }
 .composer {
-  border: 1px solid var(--border); background: var(--surface); border-radius: 14px;
+  position: relative; border: 1px solid var(--border); background: var(--surface-2); border-radius: 14px;
   box-shadow: var(--shadow); overflow: visible;
 }
 .composer textarea {
   width: 100%; border: 0; outline: none; resize: none; background: transparent;
-  padding: 11px 13px 4px; font-size: 14.5px; line-height: 1.55; font-family: inherit; display: block;
+  padding: 13px 15px 5px; font-size: 14.5px; line-height: 1.55; font-family: inherit; display: block;
 }
 .composer textarea:focus { box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.command-popover {
+  position: absolute; left: 10px; right: 10px; bottom: calc(100% - 1px); z-index: 25;
+  max-height: min(320px, 42vh); overflow-y: auto; padding: 5px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow);
+}
+.command-option {
+  display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 8px 10px; border: 0;
+  border-radius: 7px; background: transparent; color: var(--text); text-align: left; cursor: pointer;
+  font-family: var(--mono); font-size: 12px;
+}
+.command-option small { flex: 1; overflow: hidden; color: var(--muted); font-family: inherit; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.command-option:hover, .command-option.current { background: var(--surface-2); color: var(--accent); }
+.command-option.current small { color: var(--muted); }
 .composer-foot { display: flex; align-items: center; gap: 8px; padding: 4px 10px 9px 13px; }
 .composer-hint {
-  flex: 1; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .composer-hint.busy { color: var(--orange); }
 .composer-hint.error { color: var(--red); }
 .model-chip {
-  border: 0; background: transparent; padding: 5px 7px; border-radius: 7px;
-  font-family: var(--mono); font-size: 11px; color: var(--faint); cursor: pointer;
+  border: 0; background: transparent; padding: 6px 8px; border-radius: 7px;
+  font-family: var(--mono); font-size: 12px; color: var(--faint); cursor: pointer;
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .model-picker { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; }
@@ -399,13 +415,13 @@ header.bar {
 .model-empty span { font-size: 11px; color: var(--faint); }
 .send-btn {
   border: 0; background: var(--accent); color: var(--accent-ink); border-radius: 9px;
-  width: 32px; height: 32px; cursor: pointer; font-size: 15px; line-height: 1; flex: 0 0 auto;
+  width: 36px; height: 36px; cursor: pointer; font-size: 17px; line-height: 1; flex: 0 0 auto;
 }
 .send-btn:hover { filter: brightness(1.1); }
 .send-btn:disabled { opacity: 0.5; cursor: default; }
 .stop-btn {
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px;
-  padding: 6px 11px; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--surface-3); color: var(--text); border-radius: 8px;
+  padding: 7px 12px; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; gap: 7px;
 }
 .stop-btn:hover { border-color: var(--red); color: var(--red); }
 .stop-btn .sq { width: 8px; height: 8px; background: currentColor; border-radius: 2px; display: inline-block; }
@@ -579,8 +595,8 @@ aside.files {
   aside.rail {
     position: absolute; inset: 0 auto 0 0; width: 290px; z-index: 10; box-shadow: var(--shadow);
   }
-  .col-pad { max-width: 100%; padding: 18px 14px 8px; }
-  .composer-pad { max-width: 100%; padding: 10px 12px 14px; }
+  .col-pad { width: 80%; max-width: none; padding: 18px 0 8px; }
+  .composer-pad { width: 80%; max-width: none; padding: 10px 0 14px; }
   .modal { width: 100%; height: 80%; max-height: none; }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }
   aside.files {
@@ -646,3 +662,22 @@ aside.files {
 }
 .reload-card { width: 360px; max-width: 100%; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .reload-card .primary-btn { margin-top: 18px; justify-content: center; }
+
+/* UI chrome is intentionally a touch larger than transcript text. */
+.rail-nav { font-size: 12.5px; }
+.sec-label { font-size: 12px; }
+.row { font-size: 14px; }
+.row.mono { font-size: 13.5px; }
+.row .count, .row .when { font-size: 12px; }
+.bar-title { font-size: 15px; }
+.bar-sub { font-size: 12px; }
+.branch-chip { font-size: 12px; }
+.hamburger { width: 36px; height: 36px; }
+.ghost-btn { font-size: 15px; }
+.settings-action, .settings-save { font-size: 12.5px; }
+.settings-section-title { font-size: 11px; }
+.settings-select, .settings-inline-input, .repos-root-input { font-size: 12.5px; }
+.card-name { font-size: 14.5px; }
+.card-blurb, .proj-sub { font-size: 13px; }
+.card-meta { font-size: 12px; }
+.connect-btn { font-size: 14px; }

@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 2,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands"],
   mode: "mock",
   defaultModel: "mock/fast",
   models: [
@@ -16,7 +16,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main"], worktrees: { main: "/tmp/demo" }, occupied: {}, updated: "now",
+    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, occupied: {}, updated: "now",
     sessions: [
       { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
       { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
@@ -71,6 +71,12 @@ async function boot() {
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
+      if (url === "/api/sessions/s1/commands") return json({ commands: [
+        { name: "settings", description: "Open settings", source: "pi" },
+        { name: "model", description: "Select a model", source: "pi" },
+        { name: "name", description: "Set the session display name", source: "pi" },
+      ] });
+      if (url === "/api/sessions/s1/command") return json({ ok: true, action: "session_meta" });
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
@@ -107,6 +113,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
   assert.equal(root.querySelector(".branch-pop"), null); // does not reappear
+
+  store.set({ branchMenuOpen: true });
+  assert.match(root.querySelector(".branch-pop")?.textContent || "", /origin\/feature\/remote-ui/);
+  store.set({ branchMenuOpen: false });
 
   store.state.transcripts.s1 ||= { records: [], streaming: false, seq: -1 };
   store.state.transcripts.s1.streaming = true;
@@ -226,6 +236,20 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });
   assert.equal(store.state.projects[0].sessions[0].id, "sibling");
 
+  const composer = root.querySelector("pi-composer");
+  const textarea = composer.querySelector("textarea");
+  textarea.value = "/";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(composer.querySelector(".command-popover").classList.contains("hidden"), false);
+  textarea.value = "/na";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(composer.querySelectorAll(".command-option").length, 1);
+  assert.match(composer.querySelector(".command-option").textContent, /\/name/);
+  composer.querySelector(".command-option").click();
+  assert.equal(textarea.value, "/name ");
+
   store.state.transcripts.s1 = {
     records: [{ id: "md1", role: "assistant", text: "## A readable reply\n\nA **bold** point and `inline code`.\n\n- one\n- two", streaming: true }],
     streaming: true,
@@ -237,6 +261,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelectorAll(".markdown-content li").length, 2);
   applyEvent({ v: 1, seq: 102, sessionId: "s1", type: "text_delta", messageId: "md1", delta: "\n\n> Streaming stays formatted." });
   assert.match(root.querySelector(".markdown-content blockquote")?.textContent || "", /Streaming stays formatted/);
+
+  store.state.unread = {};
+  store.set({ view: "settings" });
+  applyEvent({ v: 1, seq: 103, sessionId: "sibling", type: "turn_end", reason: "done" });
+  assert.equal(store.state.unread.sibling, true);
+  store.set({ view: "chat", projectId: "p1", sessionId: "sibling", chatId: null });
+  store.markRead("sibling");
+  assert.equal(store.state.unread.sibling, undefined);
 
   dom.window.close();
 });

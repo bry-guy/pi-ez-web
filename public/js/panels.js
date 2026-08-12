@@ -480,6 +480,7 @@ class PiRepoPicker extends HTMLElement {
         not_a_git_repo: "Not a git repository.",
         github_auth_required: "Connect GitHub before selecting a private repository.",
         repository_exists: "That repository already exists in the repository root.",
+        branch_exists: "That branch already exists.",
         clone_failed: "Git could not clone this repository.",
         invalid_git_url: "Use a public HTTPS Git URL.",
       };

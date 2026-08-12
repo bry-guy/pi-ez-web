@@ -132,6 +132,7 @@ test("state exposes the API contract and health marker", async () => {
   const state = await (await get("/api/state")).json();
   assert.equal(state.apiContractVersion, 2);
   assert.ok(state.capabilities.includes("provider-auth"));
+  assert.ok(state.capabilities.includes("slash-commands"));
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
@@ -299,6 +300,24 @@ test("project creation: first session on the checkout branch", async () => {
   assert.equal(p.sessions[0].id, firstSessionId);
   assert.equal(p.sessions[0].branch, "main");
   assert.equal(p.sessions[0].model, "mock/fast");
+  assert.deepEqual(p.remoteBranches, []);
+});
+
+test("slash command discovery supports /settings and /name", async () => {
+  const commands = await (await get(`/api/sessions/${firstSessionId}/commands`)).json();
+  assert.deepEqual(commands.commands.map(command => command.name), ["settings", "name"]);
+  const settings = await post(`/api/sessions/${firstSessionId}/command`, { text: "/settings" });
+  assert.deepEqual(await settings.json(), { ok: true, action: "settings" });
+  const named = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name Web session" });
+  assert.equal(named.status, 200);
+  assert.equal((await named.json()).name, "Web session");
+  assert.equal((await (await get(`/api/sessions/${firstSessionId}/meta`)).json()).name, "Web session");
+  const invalid = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name" });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error, "command_usage");
+  const unknown = await post(`/api/sessions/${firstSessionId}/command`, { text: "/not-a-command" });
+  assert.equal(unknown.status, 400);
+  assert.equal((await unknown.json()).error, "unknown_slash_command");
 });
 
 test("dirty checkout fork is refused without stashing the checkout", async () => {
@@ -321,6 +340,30 @@ test("branch create re-homes the session to a new worktree", async () => {
   assert.equal(p.sessions[0].branch, "feat/json");
   assert.equal(p.occupied["feat/json"].sessionId, firstSessionId);
   assert.equal(p.occupied.main, undefined); // main is free again
+});
+
+test("remote branch selection creates from the fetched ref", async () => {
+  git(repo, "update-ref", "refs/remotes/origin/feature/remote-ui", "HEAD");
+  const state = await (await get("/api/state")).json();
+  const p = state.projects.find(x => x.id === projectId);
+  assert.ok(p.remoteBranches.includes("origin/feature/remote-ui"));
+
+  const selected = await post(`/api/sessions/${firstSessionId}/branch`, {
+    branch: "remote-ui", create: true, fromRef: "origin/feature/remote-ui",
+  });
+  assert.equal(selected.status, 200);
+  const selectedBody = await selected.json();
+  assert.equal(ws.currentBranch(selectedBody.workspacePath), "remote-ui");
+  assert.equal(git(selectedBody.workspacePath, "rev-parse", "HEAD").trim(), git(repo, "rev-parse", "HEAD").trim());
+
+  const duplicate = await post(`/api/sessions/${firstSessionId}/branch`, {
+    branch: "remote-ui", create: true, fromRef: "origin/feature/remote-ui",
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal((await duplicate.json()).error, "branch_exists");
+
+  const restored = await post(`/api/sessions/${firstSessionId}/branch`, { branch: "feat/json" });
+  assert.equal(restored.status, 200);
 });
 
 test("project state exposes streaming and bang respects the workspace lock", async () => {
