@@ -38,11 +38,15 @@ Chats and project sessions can be created before a provider is configured. The
 first prompt asks you to connect a model provider when no usable model is
 available. Assistant replies render GitHub-flavored Markdown (headings, lists,
 tables, links, quotes, and code blocks); model-supplied HTML is removed and the
-rendered output is sanitized. Settings provides Anthropic OAuth/API-key login,
-OpenAI ChatGPT/Codex OAuth, OpenAI API-key login, and the default-model selector. Branch switching,
-the file tree, and forking appear only inside a **project** session — connect a
-repo first (the `+` next to PROJECTS, or the Projects screen). Plain chats
-intentionally have none of those affordances.
+rendered output is sanitized. The composer discovers Pi extension, prompt-template,
+and skill commands, while `/settings` and `/name <name>` are web-native actions.
+Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
+OpenAI API-key login, and the default-model selector. Branch switching, the file
+tree, and forking appear only inside a **project** session — connect a repo first
+(the `+` next to PROJECTS, or the Projects screen). Project branch menus show
+local worktrees plus already-fetched remote refs; selecting a remote ref creates
+a local branch/worktree from it. Plain chats intentionally have none of those
+affordances.
 
 ## Install and configure
 
