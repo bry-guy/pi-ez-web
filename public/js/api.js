@@ -278,7 +278,8 @@ export function applyEvent(evt, replay = false) {
     case "turn_end": {
       t.streaming = false;
       delete store.state.queued[evt.sessionId];
-      const hasAssistantText = [...recs].reverse().some(record => record.role === "assistant" && record.text);
+      const lastAssistant = [...recs].reverse().find(record => record.role === "assistant");
+      const hasAssistantText = !!lastAssistant?.text;
       if (evt.reason !== "stopped" || hasAssistantText) store.markUnread(evt.sessionId);
       if (evt.reason === "stopped") {
         const empty = [...recs].reverse().find(r => r.role === "assistant" && r.streaming && !r.text);
