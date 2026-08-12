@@ -36,8 +36,10 @@ npm start
 
 Chats and project sessions can be created before a provider is configured. The
 first prompt asks you to connect a model provider when no usable model is
-available. Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex
-OAuth, OpenAI API-key login, and the default-model selector. Branch switching,
+available. Assistant replies render GitHub-flavored Markdown (headings, lists,
+tables, links, quotes, and code blocks); model-supplied HTML is removed and the
+rendered output is sanitized. Settings provides Anthropic OAuth/API-key login,
+OpenAI ChatGPT/Codex OAuth, OpenAI API-key login, and the default-model selector. Branch switching,
 the file tree, and forking appear only inside a **project** session — connect a
 repo first (the `+` next to PROJECTS, or the Projects screen). Plain chats
 intentionally have none of those affordances.

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
+import { marked } from "marked";
+import createDOMPurify from "dompurify";
 
 const state = {
   apiContractVersion: 2,
@@ -56,6 +58,8 @@ async function boot() {
     MouseEvent: dom.window.MouseEvent,
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     EventSource: class { close() {} },
+    marked,
+    DOMPurify: createDOMPurify(dom.window),
     fetch: async (input, options = {}) => {
       const url = String(input);
       if (url === "/api/state") return json(state);
@@ -221,6 +225,18 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });
   assert.equal(store.state.projects[0].sessions[0].id, "sibling");
+
+  store.state.transcripts.s1 = {
+    records: [{ id: "md1", role: "assistant", text: "## A readable reply\n\nA **bold** point and `inline code`.\n\n- one\n- two", streaming: true }],
+    streaming: true,
+    seq: 101,
+  };
+  store.set({ chatId: null, projectId: "p1", sessionId: "s1", view: "chat" });
+  assert.equal(root.querySelector(".markdown-content h2")?.textContent, "A readable reply");
+  assert.equal(root.querySelector(".markdown-content strong")?.textContent, "bold");
+  assert.equal(root.querySelectorAll(".markdown-content li").length, 2);
+  applyEvent({ v: 1, seq: 102, sessionId: "s1", type: "text_delta", messageId: "md1", delta: "\n\n> Streaming stays formatted." });
+  assert.match(root.querySelector(".markdown-content blockquote")?.textContent || "", /Streaming stays formatted/);
 
   dom.window.close();
 });

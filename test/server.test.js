@@ -114,6 +114,13 @@ test("unknown API failures return structured JSON with a request id", async () =
 test("serves the UI", async () => {
   const html = await (await get("/")).text();
   assert.match(html, /<pi-app>/);
+  assert.match(html, /\/vendor\/marked\.umd\.js/);
+  assert.match(html, /\/vendor\/dompurify\.min\.js/);
+  const markedAsset = await (await get("/vendor/marked.umd.js")).text();
+  const purifierAsset = await (await get("/vendor/dompurify.min.js")).text();
+  assert.match(markedAsset, /marked/);
+  assert.match(purifierAsset, /DOMPurify/);
+  assert.equal((await get("/node_modules/marked/package.json")).status, 404, "node_modules is not generally web-accessible");
   const css = await (await get("/app.css")).text();
   assert.match(css, /--pi-orange/);
   // Custom elements default to display:inline; without this rule the sidebar,

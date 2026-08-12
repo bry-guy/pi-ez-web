@@ -34,7 +34,12 @@ export function createApp() {
     return c.json({ error: "internal_error", requestId }, 500);
   });
   app.route("/api", buildApi(sup));
-  app.use("/*", serveStatic({ root: path.relative(process.cwd(), path.join(here, "..", "public")) || "./public" }));
+  const root = path.join(here, "..");
+  // Expose only the two browser assets needed for rich, sanitized Markdown;
+  // do not make node_modules generally web-accessible.
+  app.get("/vendor/marked.umd.js", serveStatic({ root, path: "node_modules/marked/lib/marked.umd.js" }));
+  app.get("/vendor/dompurify.min.js", serveStatic({ root, path: "node_modules/dompurify/dist/purify.min.js" }));
+  app.use("/*", serveStatic({ root: path.join(root, "public") }));
   return { app, sup };
 }
 

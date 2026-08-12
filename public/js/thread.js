@@ -1,4 +1,5 @@
 import { api, openTranscript, refreshState } from "./api.js";
+import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
 import { esc, selectSession } from "./shell.js";
 
@@ -59,7 +60,9 @@ class PiThread extends HTMLElement {
     const recs = store.transcript().records;
     const last = [...recs].reverse().find(r => r.role === "assistant" && r.streaming);
     if (!holder || !last) return this.render();
-    holder.childNodes[0].nodeValue = last.text;
+    const body = holder.querySelector(".markdown-content");
+    if (!body) return this.render();
+    body.innerHTML = renderMarkdown(last.text);
     const think = this.querySelector(".pi-think");
     if (think && last.text) this.render(); // thinking -> streaming transition
     this.autoscroll();
@@ -103,7 +106,7 @@ class PiThread extends HTMLElement {
       if (thinking) {
         return `<div class="msg"><div class="pi-think"><span style="animation:${PI_ANIMS[store.state.animIdx % PI_ANIMS.length]}">π</span></div></div>`;
       }
-      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}>${esc(m.text)}${caret ? `<span class="caret-bar"></span>` : ""}</div></div>`;
+      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${caret ? `<span class="caret-bar"></span>` : ""}</div></div>`;
     }
     if (m.role === "tool") {
       const open = this.isOpen(m.id);
