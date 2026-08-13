@@ -22,6 +22,11 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   }
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
+  assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
+  assert.match(dockerfile, /FNOX_VERSION=v1\.25\.1/);
+  assert.match(dockerfile, /OP_VERSION=v2\.34\.0/);
+  assert.match(dockerfile, /OPENTOFU_VERSION=1\.11\.5/);
+  assert.match(dockerfile, /KUBECTL_VERSION=v1\.34\.5/);
   assert.match(dockerfile, /sha256sum --check --strict/);
   assert.match(dockerfile, /openssh-client/);
   assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
