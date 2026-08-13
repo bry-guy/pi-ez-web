@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"];
 const JH = { "content-type": "application/json" };
 
 function validateStateContract(state) {
@@ -74,6 +74,7 @@ export const api = {
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
   command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  hook: (id, name) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   settings: (defaultModel, reposRoot) => {
     const body = {};
     if (defaultModel !== undefined) body.defaultModel = defaultModel;

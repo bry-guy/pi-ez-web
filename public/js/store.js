@@ -78,6 +78,7 @@ export const store = {
     models: [],              // registry-backed { id, provider, label }
     animIdx: 0,
     error: null,             // transient composer/action error
+    hookResult: null,        // last configured project hook result
     fatalError: null,        // unrecoverable wire-contract error
     fileError: null,
     // server data

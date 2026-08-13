@@ -43,7 +43,9 @@ class PiThread extends HTMLElement {
     if (!id) return;
     const rec = store.transcript().records.find(r => r.id === recordId);
     try {
-      const { id: childId } = await api.fork(id, recordId);
+      const result = await api.fork(id, recordId);
+      store.set({ hookResult: result.setup || null });
+      const childId = result.id;
       await refreshState();
       store.state.openTree[id] = true;
       selectSession(store.state.projectId, childId);

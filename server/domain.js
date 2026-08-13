@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chatsDir, loadBindings, loadClosed, loadConfig, projectMode, saveBindings, worktreeRoot } from "./config.js";
 import * as ws from "./workspaces.js";
+import { publicHooks } from "./hooks.js";
 
 export async function sessionWorkspace(sessionId, sup) {
   const bindings = loadBindings();
@@ -106,6 +107,7 @@ export async function projectState(project, sup) {
     worktreeRoot: worktreeRoot(cfg),
     mode: projectMode(project),
     modeInvalid: project.mode !== undefined && project.mode !== "manual" && project.mode !== "auto",
+    hooks: publicHooks(cfg, project),
   };
 }
 

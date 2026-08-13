@@ -187,6 +187,25 @@ header.bar {
 .branch-chip:disabled:hover { border-color: transparent; }
 .branch-chip .bname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-chip .bcaret { font-size: 8px; opacity: 0.75; }
+.hook-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  border-radius: 5px; padding: 1px 6px; font: 10px var(--mono); cursor: pointer;
+}
+.hook-btn:hover { border-color: var(--accent); color: var(--accent); }
+.hook-btn:disabled { opacity: .5; cursor: default; }
+.hook-result {
+  position: absolute; top: calc(100% - 4px); right: 14px; z-index: 32; width: min(520px, calc(100% - 28px));
+  max-height: 320px; overflow: auto; padding: 9px 11px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); font-family: var(--mono); font-size: 11px;
+}
+.hook-result.ok { border-color: var(--accent); }
+.hook-result.failed { border-color: var(--red); }
+.hook-result-head { display: flex; align-items: center; gap: 9px; }
+.hook-result-head strong { color: var(--text); }
+.hook-result-head span { color: var(--muted); }
+.hook-result-head .ghost-btn { margin-left: auto; }
+.hook-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; color: var(--muted); }
+.hook-result .hook-stderr { color: var(--red); }
 .hamburger {
   border: 1px solid var(--border); background: var(--surface); border-radius: 8px; width: 32px; height: 32px;
   cursor: pointer; color: var(--text); display: grid; place-items: center; flex: 0 0 auto;

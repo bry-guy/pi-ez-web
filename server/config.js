@@ -14,7 +14,8 @@ const configPath = () => path.join(appHome(), "config.json");
 const bindingsPath = () => path.join(appHome(), "bindings.json");
 
 const DEFAULTS = {
-  projects: [], // { id, name, repoPath, setup? }
+  projects: [], // { id, name, repoPath, hooks?, mode? }
+  projectHooks: {}, // deployment-wide hook defaults, overridden per project
   worktreeRoot: null, // null -> worktreeRootDefault()
   reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
@@ -24,6 +25,17 @@ const DEFAULTS = {
     github: { clientId: null, owner: null },
   },
 };
+
+export function normalizeHooks(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const hooks = {};
+  for (const [name, command] of Object.entries(value)) {
+    if (!/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(name)) continue;
+    if (command === null) hooks[name] = null;
+    else if (typeof command === "string" && command.trim()) hooks[name] = command.trim();
+  }
+  return hooks;
+}
 
 function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); }
@@ -58,6 +70,7 @@ export function loadConfig() {
     ...DEFAULTS,
     ...raw,
     projects,
+    projectHooks: normalizeHooks(raw.projectHooks),
     repositorySources: {
       ...DEFAULTS.repositorySources,
       ...sources,

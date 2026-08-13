@@ -9,7 +9,7 @@ export function selectSession(projectId, sessionId) {
   const node = findNode(project?.sessions, sessionId);
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
-    filesOpen: store.state.filesOpen, files: [], fileError: null,
+    filesOpen: store.state.filesOpen, files: [], fileError: null, hookResult: null,
     branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   store.markRead(sessionId);
@@ -19,7 +19,7 @@ export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
-    branchMenuOpen: false, filesOpen: false, files: [], fileError: null,
+    branchMenuOpen: false, filesOpen: false, files: [], fileError: null, hookResult: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   store.markRead(chatId);
@@ -271,14 +271,29 @@ class PiHeader extends HTMLElement {
     else if (act === "merge") {
       const branch = this.sessionBranch();
       store.set({ confirm: { type: "merge", id: store.state.sessionId, branch } });
+    } else if (act === "hook") {
+      this.runHook(t.dataset.hook);
+    } else if (act === "close-hook-result") {
+      store.set({ hookResult: null });
+    }
+  }
+
+  async runHook(name) {
+    const id = store.state.sessionId;
+    if (!id || !name) return;
+    try {
+      const result = await api.hook(id, name);
+      store.set({ hookResult: result });
+    } catch (err) {
+      store.set({ hookResult: { hook: name, ok: false, exit: err.status || 1, stdout: err.stdout || "", stderr: err.stderr || err.message || err.error || "Hook failed." } });
     }
   }
 
   async switchBranch(branch, remoteBranch = null) {
     const id = store.state.sessionId;
     try {
-      await api.branch(id, branch, !!remoteBranch, remoteBranch);
-      store.set({ branchMenuOpen: false, branchError: null });
+      const result = await api.branch(id, branch, !!remoteBranch, remoteBranch);
+      store.set({ branchMenuOpen: false, branchError: null, hookResult: result.setup || null });
       await refreshState();
     } catch (err) {
       const msg = err.error === "branch_occupied"
@@ -295,8 +310,8 @@ class PiHeader extends HTMLElement {
     if (!name) { store.set({ branchError: "enter a branch name" }); return; }
     const id = store.state.sessionId;
     try {
-      await api.branch(id, name, true);
-      store.set({ branchMenuOpen: false, newBranch: "", branchError: null });
+      const result = await api.branch(id, name, true);
+      store.set({ branchMenuOpen: false, newBranch: "", branchError: null, hookResult: result.setup || null });
       await refreshState();
     } catch (err) {
       store.set({ branchError: err.error === "branch_occupied" ? "branch in use" : (err.error || "failed") });
@@ -337,6 +352,7 @@ class PiHeader extends HTMLElement {
           <span class="bname">${esc(branch)}</span><span class="bcaret">▾</span>
         </button>
         ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge this branch" ${blocked ? "disabled" : ""}>merge</button>` : ""}
+        ${Object.entries(p.hooks || {}).filter(([, enabled]) => enabled).map(([name]) => `<button class="hook-btn" data-act="hook" data-hook="${esc(name)}" title="Run ${esc(name)} hook" ${blocked ? "disabled" : ""}>${esc(name)}</button>`).join("")}
       </div>` : "";
 
     const pop = inProject && s.branchMenuOpen ? this.popover(p, branch) : "";
@@ -344,6 +360,8 @@ class PiHeader extends HTMLElement {
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${s.filesOpen ? "»" : "«"}</button>` : "";
 
+    const hookResult = store.state.hookResult;
+    const hookPanel = hookResult ? `<div class="hook-result ${hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(hookResult.hook || "hook")}</strong><span>exit ${esc(hookResult.exit)}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${hookResult.stdout ? `<pre>${esc(hookResult.stdout)}</pre>` : ""}${hookResult.stderr ? `<pre class="hook-stderr">${esc(hookResult.stderr)}</pre>` : ""}</div>` : "";
     this.innerHTML = `<header class="bar">
       ${mobile() ? `<button class="hamburger" data-act="drawer" title="Menu">
         <svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>
@@ -354,6 +372,7 @@ class PiHeader extends HTMLElement {
       </div>
       ${filesBtn}
       ${pop}
+      ${hookPanel}
     </header>`;
     if (preserveBranchInput) {
       const input = this.querySelector(".new-branch-input");

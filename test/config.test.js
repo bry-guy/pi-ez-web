@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, githubConfig, loadBindings, loadConfig, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -22,6 +22,10 @@ after(() => {
 test("worktree root defaults beside Pi and respects an explicit override", () => {
   assert.equal(worktreeRoot({}), path.join(os.homedir(), ".pi", "worktrees"));
   assert.equal(worktreeRoot({ worktreeRoot: "/x" }), "/x");
+});
+
+test("project hooks normalize commands and allow explicit removal", () => {
+  assert.deepEqual(normalizeHooks({ setup: " mise install ", check: null, "bad name": "ignored", empty: "  " }), { setup: "mise install", check: null });
 });
 
 test("project modes default to manual and preserve only valid values", () => {

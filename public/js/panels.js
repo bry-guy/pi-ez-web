@@ -473,6 +473,7 @@ class PiRepoPicker extends HTMLElement {
       await refreshState();
       store.state.openTree[result.id] = true;
       selectSession(result.id, result.sessionId);
+      store.set({ hookResult: result.setup || null });
     } catch (err) {
       this.connecting = false;
       const messages = {

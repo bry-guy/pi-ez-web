@@ -133,6 +133,7 @@ test("state exposes the API contract and health marker", async () => {
   assert.equal(state.apiContractVersion, 2);
   assert.ok(state.capabilities.includes("provider-auth"));
   assert.ok(state.capabilities.includes("slash-commands"));
+  assert.ok(state.capabilities.includes("project-hooks"));
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
@@ -288,6 +289,29 @@ test("bang runs in the workspace and lands in the transcript", async () => {
 });
 
 let projectId, firstSessionId;
+test("project hooks run in the checkout and can be invoked manually", async () => {
+  const hookRepo = makeRepo("hook-repo");
+  const hookFile = path.join(hookRepo, "hook-ran.txt");
+  const res = await (await post("/api/projects", {
+    repoPath: hookRepo,
+    hooks: {
+      setup: "printf setup > hook-ran.txt",
+      check: "printf check >> hook-ran.txt",
+    },
+  })).json();
+  assert.equal(res.setup.ok, true);
+  assert.equal(fs.readFileSync(hookFile, "utf8"), "setup");
+  const state = await (await get("/api/state")).json();
+  const hooked = state.projects.find(x => x.id === res.id);
+  assert.deepEqual(hooked.hooks, { setup: true, check: true });
+  const check = await post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+  assert.equal(check.status, 200);
+  assert.equal((await check.json()).ok, true);
+  assert.equal(fs.readFileSync(hookFile, "utf8"), "setupcheck");
+  const missing = await post(`/api/sessions/${res.sessionId}/hooks/missing`, {});
+  assert.equal(missing.status, 404);
+});
+
 test("project creation: first session on the checkout branch", async () => {
   const res = await (await post("/api/projects", { repoPath: repo })).json();
   projectId = res.id;

@@ -54,6 +54,10 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
 
 ```json
 {
+  "projectHooks": {
+    "setup": "mise install && mise run bootstrap",
+    "check": "mise run check"
+  },
   "projects": [
     { "id": "my-project", "name": "my-project", "repoPath": "/path/to/my-project" }
   ],
@@ -103,7 +107,11 @@ The default local repository root is `$HOME/src`. The picker also accepts an
 absolute or `~/...` repository path directly. Omit `worktreeRoot` to use the
 Pi-adjacent default `~/.pi/worktrees`, or set it to an absolute path. Project
 entries may set `mode` to `manual` (default) or `auto`; change that in
-`config.json` for now. Auto-mode branch names: colliding sessions with the same
+`config.json` for now. Project hooks are inherited from `projectHooks` and may
+be overridden per project with a `hooks` object, for example
+`"hooks": { "setup": "./script/install", "check": "./script/check" }`.
+Configured hooks run in the project checkout/worktree and can be run from the
+branch header. Auto-mode branch names: colliding sessions with the same
 opening message get `-2`, `-3`…; fork children get `.1`, `.2`. Pi-web's config,
 bindings, chats, and UI state remain under `~/.pi-web-ui`; existing worktrees
 are discovered in place and are not moved. Plain chats use private scratch
@@ -134,4 +142,4 @@ mise reset         # clear mock state
 
 With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults. `mise kill` also accepts a port directly (`mise kill -- 3141`).
 
-See [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.
+See the [runtime environment roadmap](docs/roadmap.md), [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.

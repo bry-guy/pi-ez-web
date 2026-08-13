@@ -21,5 +21,14 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
     assert.notEqual(lock.packages[`node_modules/${dependency}`].dev, true);
   }
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
+  assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
+  assert.match(dockerfile, /sha256sum --check --strict/);
+  assert.match(dockerfile, /openssh-client/);
+  assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
   assert.doesNotMatch(dockerfile, /npm install --no-save/);
+});
+
+test("project hook capability is advertised by the server", () => {
+  const version = fs.readFileSync(path.join(root, "server/version.js"), "utf8");
+  assert.match(version, /project-hooks/);
 });

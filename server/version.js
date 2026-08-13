@@ -5,5 +5,6 @@ export const API_CAPABILITIES = Object.freeze([
   "repository-sources",
   "session-activity",
   "slash-commands",
+  "project-hooks",
 ]);
 export const BUILD_ID = process.env.PI_WEB_BUILD_ID || "development";

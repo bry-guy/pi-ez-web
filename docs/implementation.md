@@ -32,6 +32,8 @@ server/
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
   auth-flows.js       server-side Pi OAuth/API-key interaction bridge
   github.js           GitHub device login, public/private API listing, and token store
+  hooks.js             configurable project hook resolution and execution
+  git-credential-helper.js  host-restricted GitHub credential helper
   version.js           REST API contract/capability marker
   repositories.js     validated HTTPS cloning with temporary GIT_ASKPASS
 public/               index.html + app.css + ES modules; no build step
@@ -50,7 +52,7 @@ scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
 
-The app supports Local, GitHub, and public HTTPS Git URL repository sources.
+The app supports Local, GitHub, and public HTTPS Git URL repository sources. Projects can inherit deployment-wide `projectHooks` and override them with a per-project `hooks` object; configured hooks run in the selected project checkout/worktree and expose their result through the branch header.
 A configured GitHub owner can browse and clone public repositories without
 signing in; GitHub device authorization adds private repositories and stores
 its token separately from `config.json`. Private clones use a temporary

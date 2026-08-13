@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 2,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"],
   mode: "mock",
   defaultModel: "mock/fast",
   models: [
@@ -16,7 +16,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, occupied: {}, updated: "now",
+    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, occupied: {}, hooks: { check: true }, updated: "now",
     sessions: [
       { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
       { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },

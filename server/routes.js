@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHooks, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
@@ -13,6 +13,7 @@ import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
 import { cloneRepository } from "./repositories.js";
+import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
@@ -301,14 +302,20 @@ export function buildApi(sup) {
       }
     }
     if (cfg.projects.some(p => p.repoPath === repoPath)) return err(c, 409, "project_exists");
-    const project = { id: newId("p"), name: body.name || path.basename(repoPath), repoPath, source: sourceInfo };
+    const project = {
+      id: newId("p"), name: body.name || path.basename(repoPath), repoPath, source: sourceInfo,
+      hooks: normalizeHooks(body.hooks),
+      mode: body.mode === "auto" || body.mode === "manual" ? body.mode : undefined,
+    };
     cfg.projects.push(project);
     saveConfig(cfg);
     ws.prune(repoPath);
     // First session lives on the checkout's branch — the checkout is its workspace.
     const { id: sessionId } = await sup.createSession({ cwd: repoPath });
     hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id } });
-    return c.json({ id: project.id, sessionId, repoPath, cloned });
+    const setup = projectHooks(cfg, project).setup;
+    const setupResult = setup ? hookResult(await runHook(setup, { cwd: repoPath }), "setup") : null;
+    return c.json({ id: project.id, sessionId, repoPath, cloned, setup: setupResult });
   });
 
   api.post("/projects/:id/sessions", async c => {
@@ -466,11 +473,12 @@ export function buildApi(sup) {
       const matchingRemote = ws.remoteBranchForLocal(project.repoPath, branch);
       if (matchingRemote) return err(c, 409, "branch_exists", { remoteBranch: matchingRemote });
     }
+    const existingTarget = ws.listWorktrees(project.repoPath)[branch] || null;
     const target = ws.ensureWorkspace({
       repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg),
       projectId: project.id, branch, fromRef: create ? (fromRef || "HEAD") : undefined,
     });
-    if (target === cwd) return c.json({ ok: true, branch, workspacePath: target });
+    if (target === cwd) return c.json({ ok: true, branch, workspacePath: target, setup: null });
 
     // occupied?
     const bindings = loadBindings();
@@ -484,7 +492,9 @@ export function buildApi(sup) {
     bindings[id] = { branch, workspacePath: target };
     saveBindings(bindings);
     hub.emit(id, "session_meta", { branch });
-    return c.json({ ok: true, branch, workspacePath: target });
+    const setup = !existingTarget && projectHooks(cfg, project).setup;
+    const setupResult = setup ? hookResult(await runHook(setup, { cwd: target }), "setup") : null;
+    return c.json({ ok: true, branch, workspacePath: target, setup: setupResult });
   });
 
   // Fork: point-in-time conversation + code. New branch + worktree from the
@@ -512,9 +522,8 @@ export function buildApi(sup) {
       if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
       throw e;
     }
-    if (project.setup) {
-      await new Promise(res => execFile("/bin/sh", ["-c", project.setup], { cwd: workspacePath }, () => res()));
-    }
+    const setup = projectHooks(cfg, project).setup;
+    const setupResult = setup ? hookResult(await runHook(setup, { cwd: workspacePath }), "setup") : null;
     let childId;
     try {
       ({ id: childId } = await sup.fork(id, atRecordId, { cwd: workspacePath }));
@@ -527,7 +536,22 @@ export function buildApi(sup) {
     hub.emit(childId, "session_forked", {
       session: { id: childId, branch }, parentSessionId: id, atEntryId: atRecordId,
     });
-    return c.json({ id: childId, branch, workspacePath });
+    return c.json({ id: childId, branch, workspacePath, setup: setupResult });
+  });
+
+  // Configured project hooks run in the current session workspace. Hook names
+  // are deployment-defined; this endpoint does not invent a fixed vocabulary.
+  api.post("/sessions/:id/hooks/:name", async c => {
+    const id = c.req.param("id");
+    const name = c.req.param("name");
+    const cwd = await sessionWorkspace(id, sup);
+    if (!cwd) return err(c, 404, "no_workspace");
+    const found = findProjectByWorkspace(cwd);
+    if (!found) return err(c, 404, "no_project_for_session");
+    const command = projectHooks(loadConfig(), found.project)[name];
+    if (!command) return err(c, 404, "no_such_hook");
+    const result = hookResult(await runHook(command, { cwd }), name);
+    return c.json(result);
   });
 
   // Bang: user-initiated local shell in the session's workspace. Distinct from
