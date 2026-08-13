@@ -44,12 +44,11 @@ class PiThread extends HTMLElement {
     const rec = store.transcript().records.find(r => r.id === recordId);
     try {
       const result = await api.fork(id, recordId);
-      store.set({ hookResult: result.setup || null });
       const childId = result.id;
       await refreshState();
       store.state.openTree[id] = true;
       selectSession(store.state.projectId, childId);
-      store.set({ draft: rec?.text || "" });
+      store.set({ draft: rec?.text || "", hookResult: result.setup || null });
     } catch (err) {
       store.setError(`Fork failed: ${err.error || err.message || err}`);
     }
