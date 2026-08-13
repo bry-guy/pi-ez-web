@@ -33,6 +33,10 @@ export function runHook(command, { cwd, env = process.env, spawnImpl = spawn } =
       return;
     }
     const child = spawnImpl("/bin/sh", ["-c", command], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    if (!child || typeof child.on !== "function") {
+      resolve({ exit: 1, stdout: "", stderr: "hook runner failed", command });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", chunk => { stdout += chunk; });
