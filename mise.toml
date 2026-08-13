@@ -4,7 +4,7 @@ node = "22"
 
 [tasks.bootstrap]
 description = "Install JavaScript dependencies"
-run = "npm install"
+run = "npm ci"
 
 [tasks.dev]
 description = "Start the mock server with isolated local state"

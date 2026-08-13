@@ -2,12 +2,16 @@ import { spawn } from "node:child_process";
 import { normalizeHooks } from "./config.js";
 
 function redacted(value) {
-  return String(value ?? "")
+  let text = String(value ?? "")
     .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
     .replace(/gh[oprsu]_[A-Za-z0-9_]+/g, "[redacted]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "sk-[redacted]")
     .replace(/(OP_SERVICE_ACCOUNT_TOKEN\s*=\s*)[^\s]+/gi, "$1[redacted]")
     .replace(/([?&](?:code|state|access_token|refresh_token)=)[^&\s]+/gi, "$1[redacted]");
+  for (const secret of [process.env.OP_SERVICE_ACCOUNT_TOKEN, process.env.PI_WEB_GITHUB_TOKEN]) {
+    if (secret) text = text.split(secret).join("[redacted]");
+  }
+  return text;
 }
 
 export function projectHooks(cfg, project) {

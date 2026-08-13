@@ -289,6 +289,25 @@ test("bang runs in the workspace and lands in the transcript", async () => {
 });
 
 let projectId, firstSessionId;
+test("project hook output redacts the operator token", async () => {
+  const hookRepo = makeRepo("secret-hook-repo");
+  const previous = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  process.env.OP_SERVICE_ACCOUNT_TOKEN = "test-secret-token";
+  try {
+    const res = await (await post("/api/projects", {
+      repoPath: hookRepo,
+      hooks: { check: "printf '%s' \"$OP_SERVICE_ACCOUNT_TOKEN\"" },
+    })).json();
+    const check = await post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+    const body = await check.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.stdout, "[redacted]");
+  } finally {
+    if (previous === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    else process.env.OP_SERVICE_ACCOUNT_TOKEN = previous;
+  }
+});
+
 test("project hooks run in the checkout and can be invoked manually", async () => {
   const hookRepo = makeRepo("hook-repo");
   const hookFile = path.join(hookRepo, "hook-ran.txt");
