@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: pi-ez-web
+  namespace: argocd
+spec:
+  description: Private pi-ez-web application
+  sourceRepos:
+    - https://github.com/bry-guy/pi-ez-web.git
+  destinations:
+    - namespace: pi-web
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: ""
+      kind: PersistentVolume
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

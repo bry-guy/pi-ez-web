@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pi-ez-web
+  namespace: argocd
+spec:
+  project: pi-ez-web
+  source:
+    repoURL: https://github.com/bry-guy/pi-ez-web.git
+    targetRevision: main
+    path: deploy/k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pi-web
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

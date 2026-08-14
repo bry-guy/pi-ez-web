@@ -53,11 +53,14 @@ strategy) and persistent volumes for the paths above. Configure `runAsUser`
 and `fsGroup` so the `node` user can write the state, repository, and worktree
 volumes.
 
-Keep cluster-specific Kubernetes resources outside this application repository,
-for example in `~/dev/infra`: PVC and storage-class choices, Tailscale
-Operator configuration, Caddy/Ingress, hostnames, ACLs, and secrets are
-site-specific. This repository documents the image and its storage contract;
-it does not need to contain the k3s manifests.
+The owned application resources live in `deploy/k8s/`, and the Argo CD
+bootstrap resources live in `deploy/argocd/`. The release workflow builds a
+private GHCR image, records its immutable digest in `deploy/k8s/kustomization.yaml`,
+and Argo CD reconciles the committed desired state. The namespace pull Secret
+and runtime/operator Secrets are materialized out of band through fnox and
+1Password; no secret values belong in Git or image layers. Site-specific
+platform wiring such as Caddy routes, kubeconfigs, and the secret-sync task
+remains in the platform repository.
 
 A typical path is:
 
@@ -93,7 +96,7 @@ failure.
 The `/api/health` endpoint reports the REST contract, capabilities, and
 commit-derived build ID for rollout checks. The browser polls health after SSE
 loss and reloads once a new build is healthy, which supports a single-pod
-self-deployment that replaces the current process. Before treating this as a
-highly available service, add external session/event coordination and graceful
-shutdown/drain handling. A single persistent pod is the supported deployment
-shape today; OAuth flow state, SSE clients, and workspace locks are in memory.
+GitOps rollout. Before treating this as a highly available service, add
+external session/event coordination and graceful shutdown/drain handling. A
+single persistent pod is the supported deployment shape today; OAuth flow
+state, SSE clients, and workspace locks are in memory.

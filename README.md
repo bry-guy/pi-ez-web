@@ -144,4 +144,4 @@ With the mock server running, `mise dev-project` registers the current checkout 
 
 See the [runtime environment roadmap](docs/roadmap.md), [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.
 
-The site-specific operator deployment and asynchronous self-deploy workflow are documented in the infra repository's `selfhost/platform/pi-ez-web/README.md`.
+The private-GHCR GitOps deployment is defined in [`deploy/k8s/`](deploy/k8s/) and bootstrapped through [`deploy/argocd/`](deploy/argocd/). Site-specific operator credentials and k3s tasks are documented in the infra repository's `selfhost/platform/pi-ez-web/README.md`.

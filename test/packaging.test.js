@@ -37,3 +37,18 @@ test("project hook capability is advertised by the server", () => {
   const version = fs.readFileSync(path.join(root, "server/version.js"), "utf8");
   assert.match(version, /project-hooks/);
 });
+
+test("k3s deployment uses private image GitOps wiring", () => {
+  const deployment = fs.readFileSync(path.join(root, "deploy/k8s/deployment.yaml"), "utf8");
+  const kustomization = fs.readFileSync(path.join(root, "deploy/k8s/kustomization.yaml"), "utf8");
+  const application = fs.readFileSync(path.join(root, "deploy/argocd/app-pi-ez-web.yaml"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
+
+  assert.match(deployment, /imagePullSecrets:[\s\S]*name: ghcr-pull/);
+  assert.doesNotMatch(deployment, /localhost\/pi-ez-web|:latest/);
+  assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
+  assert.match(kustomization, /digest: sha256:/);
+  assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);
+  assert.match(workflow, /packages: write/);
+  assert.match(workflow, /docker\/login-action/);
+});
