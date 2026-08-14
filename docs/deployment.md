@@ -90,8 +90,10 @@ stable because Git worktree metadata records absolute paths. Do not introduce a
 second storage tier unless an acceptance test demonstrates a concrete NFS
 failure.
 
-The `/api/health` endpoint reports the REST contract and capabilities for
-rollout checks. Before treating this as a highly available service, add external
-session/event coordination and graceful shutdown/drain handling. A single
-persistent pod is the supported deployment shape today; OAuth flow state, SSE
-clients, and workspace locks are in memory.
+The `/api/health` endpoint reports the REST contract, capabilities, and
+commit-derived build ID for rollout checks. The browser polls health after SSE
+loss and reloads once a new build is healthy, which supports a single-pod
+self-deployment that replaces the current process. Before treating this as a
+highly available service, add external session/event coordination and graceful
+shutdown/drain handling. A single persistent pod is the supported deployment
+shape today; OAuth flow state, SSE clients, and workspace locks are in memory.

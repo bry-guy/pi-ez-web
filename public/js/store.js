@@ -85,6 +85,8 @@ export const store = {
     projects: [],
     chats: [],
     mode: "real",
+    buildId: null,
+    reconnecting: false,
     providers: [],
     repositorySources: null,
     settings: null,

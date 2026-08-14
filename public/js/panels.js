@@ -779,6 +779,7 @@ class PiApp extends HTMLElement {
         </main>
         <pi-files></pi-files>
         <div class="drawer-scrim hidden"></div>
+        <div class="connection-status hidden" data-connection-status>Reconnecting to pi-ez-web…</div>
         <pi-repo-picker></pi-repo-picker>
         <pi-confirm></pi-confirm>
         <div class="reload-prompt hidden" data-reload-prompt>
@@ -838,6 +839,8 @@ class PiApp extends HTMLElement {
     const v = store.state.view;
     for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
+    const connection = this.querySelector("[data-connection-status]");
+    connection.classList.toggle("hidden", !store.state.reconnecting || !!store.state.fatalError);
     const prompt = this.querySelector("[data-reload-prompt]");
     prompt.classList.toggle("hidden", !store.state.fatalError);
     if (store.state.fatalError) this.querySelector("[data-reload-message]").textContent = store.state.fatalError;

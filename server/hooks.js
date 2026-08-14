@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { normalizeHooks } from "./config.js";
+import { normalizeHookSets, normalizeHooks } from "./config.js";
 
 function redacted(value) {
   let text = String(value ?? "")
@@ -15,8 +15,10 @@ function redacted(value) {
 }
 
 export function projectHooks(cfg, project) {
+  const named = project?.name ? normalizeHookSets(cfg.projectHookSets)[project.name] : null;
   return {
     ...normalizeHooks(cfg.projectHooks),
+    ...normalizeHooks(named),
     ...(project?.setup ? { setup: project.setup } : {}),
     ...normalizeHooks(project?.hooks),
   };

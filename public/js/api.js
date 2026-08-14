@@ -37,7 +37,8 @@ const j = async (r) => {
 };
 
 export const api = {
-  state: () => fetch("/api/state").then(j),
+  state: () => fetch("/api/state", { cache: "no-store" }).then(j),
+  health: () => fetch(`/api/health?probe=${Date.now()}`, { cache: "no-store" }).then(j),
   models: () => fetch("/api/models").then(j),
   providers: () => fetch("/api/providers").then(j),
   authStart: (providerId, type) => fetch(`/api/providers/${encodeURIComponent(providerId)}/login`, { method: "POST", headers: JH, body: JSON.stringify({ type }) }).then(j),
@@ -93,6 +94,8 @@ export async function refreshState() {
     projects: s.projects,
     chats: s.chats,
     mode: s.mode,
+    buildId: s.buildId || null,
+    reconnecting: false,
     defaultModel: s.defaultModel || null,
     effectiveDefaultModel: s.effectiveDefaultModel || null,
     defaultModelStatus: s.defaultModelStatus || "automatic",
@@ -179,9 +182,63 @@ export async function openTranscript(id) {
 
 // --- SSE ---
 let es = null;
+let recoveryTimer = null;
+let recoveryAttempt = 0;
+let recoveryInFlight = false;
+let reloadIssued = false;
+
+function stopRecovery() {
+  if (recoveryTimer) clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  recoveryAttempt = 0;
+  store.set({ reconnecting: false });
+}
+
+function scheduleRecovery(delay) {
+  if (recoveryTimer || reloadIssued) return;
+  recoveryTimer = setTimeout(() => {
+    recoveryTimer = null;
+    void recoverConnection();
+  }, delay);
+}
+
+async function recoverConnection() {
+  if (reloadIssued || recoveryInFlight) return;
+  recoveryInFlight = true;
+  try {
+    const health = await api.health();
+    if (!health?.ok) throw new Error("health check failed");
+    if (store.state.buildId && health.buildId && health.buildId !== store.state.buildId) {
+      reloadIssued = true;
+      location.reload();
+      return;
+    }
+    await refreshState();
+    stopRecovery();
+  } catch {
+    recoveryAttempt += 1;
+    const delay = Math.min(10000, 500 * (2 ** Math.min(recoveryAttempt, 4)));
+    scheduleRecovery(delay);
+  } finally {
+    recoveryInFlight = false;
+  }
+}
+
+function startRecovery() {
+  if (recoveryTimer || recoveryInFlight || reloadIssued) return;
+  store.set({ reconnecting: true });
+  scheduleRecovery(250);
+}
+
 export function connectSSE() {
   if (es) es.close();
-  es = new EventSource("/api/events");
+  es = new EventSource(`/api/events?build=${encodeURIComponent(store.state.buildId || "")}`);
+  es.onopen = () => {
+    if (!recoveryTimer && !recoveryInFlight) return;
+    if (recoveryTimer) clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    void recoverConnection();
+  };
   es.onmessage = (m) => {
     let evt;
     try { evt = JSON.parse(m.data); } catch { return; }
@@ -194,10 +251,11 @@ export function connectSSE() {
     applyEvent(evt);
   };
   es.onerror = () => {
-    // Enter the buffer-before-fetch path immediately; EventSource will
-    // reconnect itself, and the snapshot seq filters already-applied events.
+    // EventSource reconnects by itself, while the health poller handles a
+    // rollout that replaces this process and eventually reloads on a new build.
     const id = store.activeKey();
     if (id) void openTranscript(id);
+    startRecovery();
   };
 }
 

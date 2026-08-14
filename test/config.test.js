@@ -28,6 +28,11 @@ test("project hooks normalize commands and allow explicit removal", () => {
   assert.deepEqual(normalizeHooks({ setup: " mise install ", check: null, "bad name": "ignored", empty: "  " }), { setup: "mise install", check: null });
 });
 
+test("named project hook sets normalize deployment defaults", () => {
+  saveConfig({ projectHookSets: { infra: { check: " mise run check ", "bad name": "ignored" }, "": { setup: "ignored" } } });
+  assert.deepEqual(loadConfig().projectHookSets, { infra: { check: "mise run check" } });
+});
+
 test("project modes default to manual and preserve only valid values", () => {
   assert.equal(projectMode({}), "manual");
   assert.equal(projectMode({ mode: "auto" }), "auto");

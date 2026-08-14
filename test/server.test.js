@@ -289,6 +289,15 @@ test("bang runs in the workspace and lands in the transcript", async () => {
 });
 
 let projectId, firstSessionId;
+test("named project hooks apply before per-project overrides", async () => {
+  const hookRepo = makeRepo("named-hook-repo");
+  saveConfig({ projectHookSets: { named: { check: "printf named", setup: "printf setup" } } });
+  const res = await (await post("/api/projects", { name: "named", repoPath: hookRepo, hooks: { check: "printf override" } })).json();
+  assert.equal(res.setup.stdout, "setup");
+  const check = await post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+  assert.equal((await check.json()).stdout, "override");
+});
+
 test("project hook output redacts the operator token", async () => {
   const hookRepo = makeRepo("secret-hook-repo");
   const previous = process.env.OP_SERVICE_ACCOUNT_TOKEN;

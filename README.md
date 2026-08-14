@@ -143,3 +143,5 @@ mise reset         # clear mock state
 With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults. `mise kill` also accepts a port directly (`mise kill -- 3141`).
 
 See the [runtime environment roadmap](docs/roadmap.md), [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.
+
+The site-specific operator deployment and asynchronous self-deploy workflow are documented in the infra repository's `selfhost/platform/pi-ez-web/README.md`.

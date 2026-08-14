@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHooks, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
@@ -654,6 +654,10 @@ export function buildApi(sup) {
         if (e.code === "invalid_github_owner") return err(c, 400, e.code, { message: e.message });
         throw e;
       }
+    }
+    if (body.projectHookSets !== undefined) {
+      if (!body.projectHookSets || typeof body.projectHookSets !== "object" || Array.isArray(body.projectHookSets)) return err(c, 400, "invalid_project_hook_sets");
+      cfg.projectHookSets = normalizeHookSets(body.projectHookSets);
     }
     saveConfig(cfg);
     const modelState = await sup.modelState();
