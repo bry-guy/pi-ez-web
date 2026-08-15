@@ -3,19 +3,12 @@ import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
 import { esc, selectSession } from "./shell.js";
 
-const PI_ANIMS = [
-  "piImplode 4.6s cubic-bezier(.7,0,.3,1) infinite",
-  "piOrbit 4.6s cubic-bezier(.65,0,.35,1) infinite",
-  "piBreathe 4.6s ease-in-out infinite",
-];
-
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => {
       if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
-      else if (w === "anim") this.swapAnim();
     });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
@@ -69,11 +62,6 @@ class PiThread extends HTMLElement {
     this.autoscroll();
   }
 
-  swapAnim() {
-    const el = this.querySelector(".pi-think span");
-    if (el) el.style.animation = PI_ANIMS[store.state.animIdx % PI_ANIMS.length];
-  }
-
   autoscroll() {
     const sc = this.closest(".scrollable") || this;
     if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
@@ -105,7 +93,7 @@ class PiThread extends HTMLElement {
       const thinking = m.streaming && !m.text;
       const caret = m.streaming && m.text;
       if (thinking) {
-        return `<div class="msg"><div class="pi-think"><span style="animation:${PI_ANIMS[store.state.animIdx % PI_ANIMS.length]}">π</span></div></div>`;
+        return `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`;
       }
       return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${caret ? `<span class="caret-bar"></span>` : ""}</div></div>`;
     }

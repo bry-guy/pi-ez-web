@@ -66,8 +66,12 @@ textarea, input, button { font: inherit; color: inherit; }
   44%      { transform: scale(0.5); opacity: 0.3; filter: blur(0.9px); }
   72%      { transform: scale(1.2); opacity: 1; filter: blur(0); }
 }
+@keyframes piDotPulse {
+  0%, 60%, 100% { transform: translateY(0); opacity: .42; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .pi-think span { animation: piBreathe 4.6s ease-in-out infinite !important; }
+  .pi-think span { animation: none !important; opacity: .75; }
 }
 
 /* ---------- shell ---------- */
@@ -328,11 +332,17 @@ header.bar {
   display: inline-block; width: 8px; height: 16px; background: var(--pi-orange); border-radius: 1px;
   vertical-align: -3px; margin-left: 2px; animation: piBlink 1.05s steps(1) infinite;
 }
-.pi-think { display: flex; align-items: center; justify-content: flex-start; width: 30px; height: 30px; }
-.pi-think span {
-  display: inline-block; font-family: var(--mono); font-size: 24px; line-height: 1; color: var(--pi-orange);
-  transform-origin: 50% 50%; will-change: transform, opacity;
+.pi-think {
+  display: flex; align-items: center; justify-content: flex-start; gap: 4px;
+  width: 40px; height: 30px;
 }
+.pi-think span {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--pi-orange);
+  animation: piDotPulse 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+.pi-think span:nth-child(2) { animation-delay: .16s; }
+.pi-think span:nth-child(3) { animation-delay: .32s; }
 
 /* tool / diff / bang blocks */
 .block { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
@@ -372,8 +382,10 @@ header.bar {
 .composer-outer { border-top: 0; background: var(--bg); }
 .composer-pad { width: 80%; max-width: none; margin: 0 auto; padding: 14px 0 20px; }
 .composer {
-  position: relative; border: 1px solid var(--border); background: var(--surface-2); border-radius: 14px;
-  box-shadow: var(--shadow); overflow: visible;
+  position: relative; border: 0; background: var(--surface-2); border-radius: 14px;
+  /* Let elevation, rather than another outline, separate the composer from the page. */
+  box-shadow: 0 2px 4px oklch(0 0 0 / 0.34), 0 14px 32px oklch(0 0 0 / 0.38);
+  overflow: visible;
 }
 .composer textarea {
   width: 100%; border: 0; outline: none; resize: none; background: transparent;
