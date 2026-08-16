@@ -1,6 +1,6 @@
 name: Publish pi-ez-web image
 
-on: push
+on: [push]
 
 permissions:
   contents: write
