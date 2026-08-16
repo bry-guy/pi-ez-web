@@ -3,6 +3,9 @@ import { CONTRACT_VERSION, store } from "./store.js";
 const API_CONTRACT_VERSION = 2;
 const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"];
 const JH = { "content-type": "application/json" };
+export function formatDuration(durationMs) {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+}
 
 function validateStateContract(state) {
   const advertised = new Set(Array.isArray(state?.capabilities) ? state.capabilities : []);
@@ -67,7 +70,9 @@ export const api = {
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
-  message: (id, text, mode = "prompt") => fetch(`/api/sessions/${id}/message`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  message: (id, text, mode = "prompt", images = []) => fetch(`/api/sessions/${id}/message`, {
+    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images }),
+  }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
   fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
@@ -311,7 +316,7 @@ export function applyEvent(evt, replay = false) {
       const r = byId(recs, evt.toolId);
       if (r) {
         r.out = evt.output || "";
-        r.meta = [evt.meta, evt.durationMs != null ? (evt.durationMs / 1000).toFixed(1) + "s" : ""].filter(Boolean).join(" · ");
+        r.meta = [evt.meta, evt.durationMs != null ? formatDuration(evt.durationMs) : ""].filter(Boolean).join(" · ");
       }
       break;
     }
@@ -331,7 +336,7 @@ export function applyEvent(evt, replay = false) {
       break;
     case "bang_end": {
       const r = byId(recs, evt.bangId);
-      if (r) { r.out = evt.stdout || ""; r.meta = `exit ${evt.exit} · ${(evt.durationMs / 1000).toFixed(1)}s`; }
+      if (r) { r.out = evt.stdout || ""; r.meta = `exit ${evt.exit} · ${formatDuration(evt.durationMs)}`; }
       break;
     }
     case "turn_end": {

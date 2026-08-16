@@ -103,7 +103,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   const send = root.querySelector(".send-btn");
   assert.equal(send.disabled, true);
-  assert.match(root.querySelector(".composer-hint").textContent, /branch busy — Sibling session is taking a turn/);
+  assert.match(root.querySelector(".composer textarea").placeholder, /steering message/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
   store.set({ branchMenuOpen: true });          // user had the menu open
   store.state.transcripts.sibling.streaming = true;
@@ -122,7 +122,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.transcripts.s1.streaming = true;
   store.notify("transcript");
   applyEvent({ v: 1, seq: 99, sessionId: "s1", type: "queue_update", followUp: 1 });
-  assert.match(root.querySelector(".composer-hint").textContent, /1 follow-up queued/);
+  assert.match(root.querySelector(".composer textarea").placeholder, /steering message/);
   applyEvent({ v: 1, seq: 100, sessionId: "s1", type: "turn_end", reason: "done" });
   assert.equal(store.state.queued.s1, undefined);
   assert.equal(send.disabled, false);

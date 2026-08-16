@@ -157,7 +157,7 @@ export class RealSupervisor {
       case "entry_appended": {
         const entry = evt.entry;
         if (entry?.type === "message" && entry.message?.role === "user") {
-          const record = { id: entry.id, role: "user", text: contentText(entry.message.content) };
+          const record = { id: entry.id, role: "user", text: contentText(entry.message.content), images: contentImages(entry.message.content) };
           st.liveRecords.clear();
           st.liveRecords.set(record.id, record);
           st.assistantParent = entry.id;
@@ -216,7 +216,7 @@ export class RealSupervisor {
         const record = st.liveRecords.get(evt.toolCallId);
         if (record) {
           record.out = output;
-          record.meta = [evt.isError ? "error" : "", durationMs ? (durationMs / 1000).toFixed(1) + "s" : ""].filter(Boolean).join(" · ");
+          record.meta = [evt.isError ? "error" : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
         }
         hub.emit(id, "tool_end", {
           toolId: evt.toolCallId, ok: !evt.isError, output,
@@ -264,14 +264,14 @@ export class RealSupervisor {
     return { id };
   }
 
-  async message(id, text, mode) {
+  async message(id, text, mode, images = []) {
     const st = await this._attachById(id);
     if (!isUsableModel(st.session.model)) {
       throw Object.assign(new Error("model_required"), { code: "model_required" });
     }
-    if (mode === "steer" && st.session.isStreaming) return st.session.steer(text);
-    if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text);
-    st.session.prompt(text).catch(err => {
+    if (mode === "steer" && st.session.isStreaming) return st.session.steer(text, images);
+    if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text, images);
+    st.session.prompt(text, { images }).catch(err => {
       if (st.turnEnded) return;
       st.turnEnded = true;
       this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "errored", error: String(err?.message || err) });
@@ -621,6 +621,9 @@ function modelRefFromEntries(entries) {
 }
 
 function assistantRecordId(parentId) { return `a:${parentId || "root"}`; }
+export function formatDuration(durationMs) {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+}
 
 function snapshotRecords(st) {
   const records = entriesToRecords(st.session.sessionManager.getBranch?.() || []);
@@ -644,7 +647,12 @@ export function entriesToRecords(entries) {
     if (entry.type !== "message") continue;
     const message = entry.message || {};
     if (message.role === "user") {
-      records.push({ id: entry.id, role: "user", text: contentText(message.content) });
+      records.push({
+        id: entry.id,
+        role: "user",
+        text: contentText(message.content),
+        images: contentImages(message.content),
+      });
       continue;
     }
     if (message.role === "assistant") {
@@ -726,4 +734,11 @@ function contentText(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map(c => c?.text ?? "").join("");
   return "";
+}
+
+function contentImages(content) {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(c => c?.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string")
+    .map(c => ({ type: "image", data: c.data, mimeType: c.mimeType }));
 }

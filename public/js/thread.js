@@ -86,7 +86,7 @@ class PiThread extends HTMLElement {
           <button class="fork-btn" data-fork="${esc(m.id)}" title="Fork">
             <span class="sigil">⑂</span><span class="word">fork</span>
           </button>
-          <div class="bubble">${esc(m.text)}</div>
+          <div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>
         </div></div>`;
     }
     if (m.role === "assistant") {
@@ -340,16 +340,21 @@ class PiComposer extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<div class="composer-outer"><div class="composer-pad"><div class="composer">
       <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
+      <div class="composer-attachments"></div>
       <textarea rows="2"></textarea>
       <div class="composer-foot">
-        <div class="composer-hint"></div>
+        <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+        <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images">＋</button>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
         <button class="send-btn" title="Send">↑</button>
       </div>
     </div></div></div>`;
     this.ta = this.querySelector("textarea");
-    this.hint = this.querySelector(".composer-hint");
+    this.attachments = [];
+    this.attachmentsEl = this.querySelector(".composer-attachments");
+    this.imageInput = this.querySelector(".image-input");
+    this.attachBtn = this.querySelector(".attach-btn");
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
@@ -357,7 +362,22 @@ class PiComposer extends HTMLElement {
       store.state.draft = this.ta.value;
       void this.syncCommands();
     });
+    this.attachBtn.addEventListener("click", () => this.imageInput.click());
+    this.imageInput.addEventListener("change", () => {
+      void this.addFiles(this.imageInput.files);
+      this.imageInput.value = "";
+    });
+    this.ta.addEventListener("paste", e => {
+      const files = [...(e.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
+      if (files.length) { e.preventDefault(); void this.addFiles(files); }
+    });
     this.addEventListener("click", e => {
+      const removeImage = e.target.closest("[data-remove-image]");
+      if (removeImage) {
+        this.attachments.splice(Number(removeImage.dataset.removeImage), 1);
+        this.renderAttachments();
+        return;
+      }
       const option = e.target.closest("[data-command-index]");
       if (!option) return;
       this.commandIndex = Number(option.dataset.commandIndex);
@@ -440,11 +460,31 @@ class PiComposer extends HTMLElement {
     popover.innerHTML = this.commands.map((command, index) => `<button class="command-option ${index === this.commandIndex ? "current" : ""}" data-command-index="${index}"><span>/${esc(command.name)}</span><small>${esc(command.description || command.source || "")}</small></button>`).join("");
   }
 
+  async addFiles(files) {
+    for (const file of [...(files || [])]) {
+      if (!file.type.startsWith("image/") || this.attachments.length >= 4) continue;
+      if (file.size > 6_000_000) { store.setError("Images must be smaller than 6 MB."); continue; }
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      this.attachments.push({ type: "image", data, mimeType: file.type, name: file.name });
+    }
+    this.renderAttachments();
+  }
+  renderAttachments() {
+    this.attachmentsEl.innerHTML = this.attachments.map((image, index) => `<div class="attachment-thumb"><img src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="${esc(image.name || "Attached image")}"><button type="button" data-remove-image="${index}" aria-label="Remove image">×</button></div>`).join("");
+  }
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || !text || store.workspaceBusy(id)) return;
+    if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id)) return;
+    const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
     this.ta.value = "";
+    this.attachments = [];
+    this.renderAttachments();
     store.state.draft = "";
     if (text.startsWith("!")) {
       try { await api.bang(id, text.slice(1).trim()); }
@@ -461,7 +501,7 @@ class PiComposer extends HTMLElement {
           return;
         }
       } else {
-        await api.message(id, text, mode);
+        await api.message(id, text, mode, images);
       }
     } catch (err) {
       if (err.error === "workspace_busy") {
@@ -474,10 +514,14 @@ class PiComposer extends HTMLElement {
       } else if (err.error === "model_required") {
         store.set({ draft: text });
         this.ta.value = text;
+        this.attachments = images;
+        this.renderAttachments();
         store.setError("No model is available. Connect a provider or choose one in Settings.");
       } else {
         store.set({ draft: text });
         this.ta.value = text;
+        this.attachments = images;
+        this.renderAttachments();
         store.setError(`Send failed: ${err.error || err.message || err}`);
       }
     }
@@ -501,14 +545,11 @@ class PiComposer extends HTMLElement {
     else this.renderCommands();
     const error = store.state.error;
     const nQueued = store.state.queued[id] || 0;
-    this.hint.classList.toggle("busy", !!lock);
-    this.hint.classList.toggle("error", !!error);
-    this.hint.textContent = error || (lock
-      ? `branch busy — ${lock.title} is taking a turn`
-      : t.streaming
-        ? (nQueued ? `${nQueued} follow-up${nQueued > 1 ? "s" : ""} queued · Enter steers`
-          : "Enter steers · Alt+Enter queues a follow-up")
-        : "Enter to send · Shift+Enter for a new line");
+    this.ta.classList.toggle("busy", t.streaming || !!lock);
+    this.ta.classList.toggle("error", !!error);
+    this.ta.placeholder = error || (t.streaming
+      ? "Enter a steering message, alt+enter a follow-up…"
+      : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     this.sendBtn.classList.toggle("hidden", t.streaming);
     this.sendBtn.disabled = !!lock;

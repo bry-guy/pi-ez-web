@@ -18,6 +18,7 @@ import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
+const formatDuration = durationMs => durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
 
 // Collisions count like humans do: foo, foo-2, foo-3.
 // The `.N` namespace is reserved for fork children (see forkWorkspace).
@@ -367,8 +368,14 @@ export function buildApi(sup) {
 
   api.post("/sessions/:id/message", async c => {
     const id = c.req.param("id");
-    const { text, mode = "prompt" } = await c.req.json();
-    if (!text?.trim()) return err(c, 400, "empty_message");
+    const { text, mode = "prompt", images = [] } = await c.req.json();
+    const messageText = typeof text === "string" ? text.trim() : "";
+    if (!messageText && !Array.isArray(images)) return err(c, 400, "empty_message");
+    if (!messageText && images.length === 0) return err(c, 400, "empty_message");
+    if (!Array.isArray(images) || images.length > 4 || images.some(image =>
+      image?.type !== "image" || typeof image.data !== "string" || !/^image\/(png|jpeg|webp|gif)$/.test(image.mimeType || "") ||
+      image.data.length > 8_000_000
+    )) return err(c, 400, "invalid_images");
     const cwd = await sessionWorkspace(id, sup);
     // one-active-turn-per-workspace backstop (external/legacy sessions sharing a cwd)
     const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
@@ -385,7 +392,7 @@ export function buildApi(sup) {
           sessionId !== id && binding?.workspacePath === found.project.repoPath);
         if (occupier) {
           const meta = await sup.meta(occupier[0]);
-          const suggestedBranch = suggestedSessionBranch(found.project.repoPath, text.trim());
+          const suggestedBranch = suggestedSessionBranch(found.project.repoPath, messageText);
           return err(c, 409, "checkout_occupied", {
             suggestedBranch, bySessionId: occupier[0], byTitle: titleOf(meta || { firstMessage: "another session" }),
           });
@@ -395,7 +402,7 @@ export function buildApi(sup) {
       }
     }
     try {
-      await sup.message(id, text.trim(), mode);
+      await sup.message(id, messageText, mode, images);
       return c.json({ ok: true });
     } catch (e) {
       if (e.code === "model_required") {
@@ -577,7 +584,7 @@ export function buildApi(sup) {
       });
     });
     const durationMs = Date.now() - t0;
-    const meta = `exit ${exit} · ${(durationMs / 1000).toFixed(1)}s`;
+    const meta = `exit ${exit} · ${formatDuration(durationMs)}`;
     hub.emit(id, "bang_end", { bangId, exit, durationMs, stdout: out });
     await sup.bangRecord(id, { id: bangId, role: "bang", cmd, meta, out });
     return c.json({ exit, durationMs });
