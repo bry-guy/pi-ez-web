@@ -6,13 +6,6 @@ permissions:
   contents: write
   packages: write
 
-env:
-  SOURCE_REF: ${{ github.ref_name }}
-
-concurrency:
-  group: pi-ez-web-image-${{ github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -35,10 +28,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_ref="$GITHUB_REF_NAME"
           source_sha="$(git rev-parse HEAD)"
-          slug="$(printf '%s' "$SOURCE_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed 's/-$//')"
+          slug="$(printf '%s' "$source_ref" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed 's/-$//')"
           slug="${slug:-ref}"
-          if [[ "$SOURCE_REF" == main ]]; then
+          if [[ "$source_ref" == main ]]; then
             tag="sha-${source_sha:0:12}"
           else
             tag="branch-${slug}-${source_sha:0:12}"
@@ -46,7 +40,8 @@ jobs:
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$tag" >> "$GITHUB_OUTPUT"
-          echo "Building $SOURCE_REF at $source_sha as $tag"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "Building $source_ref at $source_sha as $tag"
 
       - id: meta
         uses: docker/metadata-action@v5
@@ -69,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           digest="${{ steps.build.outputs.digest }}"
-          if [[ "$SOURCE_REF" == main ]]; then
+          if [[ "$GITHUB_REF_NAME" == main ]]; then
             python3 scripts/update-image-digest.py \
               ghcr.io/${{ github.repository_owner }}/pi-ez-web \
               "$digest"
@@ -92,7 +87,7 @@ PY
 
       - name: Commit deployment digest
         run: |
-          if [[ "$SOURCE_REF" == main ]]; then
+          if [[ "$GITHUB_REF_NAME" == main ]]; then
             target=deploy/k8s/kustomization.yaml
           else
             target=deploy/k8s-preview/kustomization.yaml
@@ -103,5 +98,5 @@ PY
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add "$target"
-          git commit -m "chore(deploy): update ${SOURCE_REF} image digest [skip ci]"
+          git commit -m "chore(deploy): update ${GITHUB_REF_NAME} image digest [skip ci]"
           git push
