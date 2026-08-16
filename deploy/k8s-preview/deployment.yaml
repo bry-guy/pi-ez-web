@@ -181,7 +181,7 @@ spec:
       volumes:
         - name: state
           persistentVolumeClaim:
-            claimName: pi-ez-web-state
+            claimName: pi-ez-web-state-parent
         - name: operator-secrets
           secret:
             secretName: pi-ez-web-operator
