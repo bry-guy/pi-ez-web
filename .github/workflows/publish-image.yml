@@ -25,10 +25,10 @@ permissions:
   packages: write
 
 env:
-  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+  SOURCE_REF: ${{ github.event.inputs.source_ref || github.ref_name }}
 
 concurrency:
-  group: pi-ez-web-image-${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+  group: pi-ez-web-image-${{ github.event.inputs.source_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || github.ref_name }}
+          ref: ${{ github.event.inputs.source_ref || github.ref_name }}
           fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
