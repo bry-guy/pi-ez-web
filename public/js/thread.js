@@ -347,7 +347,7 @@ class PiComposer extends HTMLElement {
         <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images">＋</button>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
-        <button class="send-btn" title="Send">↑</button>
+        <button class="send-btn" type="button" title="Send" aria-label="Send message">↑</button>
       </div>
     </div></div></div>`;
     this.ta = this.querySelector("textarea");
@@ -384,7 +384,7 @@ class PiComposer extends HTMLElement {
       this.chooseCommand();
     });
     this.ta.addEventListener("keydown", e => {
-      if (this.commandOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
+      if (this.commandOpen && this.commandQuery() !== null && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
         if (e.key === "Escape") { e.preventDefault(); this.closeCommands(); return; }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
         const query = this.commandQuery();
@@ -397,7 +397,10 @@ class PiComposer extends HTMLElement {
         this.send(e.altKey ? "followUp" : undefined);
       }
     });
-    this.sendBtn.addEventListener("click", () => this.send());
+    this.sendBtn.addEventListener("click", e => {
+      e.preventDefault();
+      void this.send();
+    });
     this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.sync(); });
     this.commands = [];
