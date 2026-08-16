@@ -253,7 +253,7 @@ export class GitHubClient {
     const response = await this.fetch(DEVICE_URL, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: clientId, scope: "repo read:user" }),
+      body: new URLSearchParams({ client_id: clientId, scope: "repo workflow read:user" }),
     });
     const body = await safeJson(response);
     if (!response.ok || !body.device_code || !body.user_code || !body.verification_uri) {

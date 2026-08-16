@@ -12,13 +12,22 @@ on:
       - scripts/update-image-digest.py
       - .github/workflows/publish-image.yml
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch or ref to build (defaults to the workflow ref)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
   packages: write
 
+env:
+  SOURCE_REF: ${{ inputs.source_ref || github.ref_name }}
+
 concurrency:
-  group: pi-ez-web-image
+  group: pi-ez-web-image-${{ inputs.source_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +36,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.source_ref || github.ref_name }}
+          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
 
@@ -37,12 +47,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve source revision and image tag
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          slug="$(printf '%s' "$SOURCE_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed 's/-$//')"
+          slug="${slug:-ref}"
+          if [[ "$SOURCE_REF" == main ]]; then
+            tag="sha-${source_sha:0:12}"
+          else
+            tag="branch-${slug}-${source_sha:0:12}"
+          fi
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$tag" >> "$GITHUB_OUTPUT"
+          echo "Building $SOURCE_REF at $source_sha as $tag"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/pi-ez-web
-          tags: |
-            type=raw,value=sha-${{ github.sha }}
+          tags: type=raw,value=${{ steps.source.outputs.tag }}
 
       - id: build
         uses: docker/build-push-action@v6
@@ -52,15 +79,17 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            PI_WEB_BUILD_ID=${{ github.sha }}
+            PI_WEB_BUILD_ID=${{ steps.source.outputs.sha }}
 
-      - name: Update deployment digest
+      - name: Update production deployment digest
+        if: env.SOURCE_REF == 'main'
         run: |
           python3 scripts/update-image-digest.py \
             ghcr.io/${{ github.repository_owner }}/pi-ez-web \
             "${{ steps.build.outputs.digest }}"
 
-      - name: Commit deployment digest
+      - name: Commit production deployment digest
+        if: env.SOURCE_REF == 'main'
         run: |
           if git diff --quiet -- deploy/k8s/kustomization.yaml; then
             exit 0
