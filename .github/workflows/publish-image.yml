@@ -2,16 +2,6 @@ name: Publish pi-ez-web image
 
 on:
   push:
-    branches: ['**']
-    paths:
-      - Dockerfile
-      - package.json
-      - package-lock.json
-      - public/**
-      - server/**
-      - scripts/update-image-digest.py
-      - deploy/k8s-preview/**
-      - .github/workflows/publish-image.yml
   workflow_dispatch:
     inputs:
       source_ref:
