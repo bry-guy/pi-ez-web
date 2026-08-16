@@ -175,10 +175,11 @@ spec:
             - name: operator-secrets
               mountPath: /run/secrets/pi-ez-web-operator
               readOnly: true
-      # Preview state is intentionally ephemeral and isolated from production.
+      # Preview state is persistent but isolated from production.
       volumes:
         - name: state
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: pi-ez-web-state
         - name: operator-secrets
           secret:
             secretName: pi-ez-web-operator

@@ -5,6 +5,7 @@ namePrefix: preview-
 commonLabels:
   selfhost.bry-guy.net/preview: "true"
 resources:
+  - storage.yaml
   - deployment.yaml
   - service.yaml
 images:
