@@ -1,0 +1,41 @@
+name: Container image
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute immutable image tag
+        id: image
+        shell: bash
+        run: |
+          # Keep the tag Docker-compatible and bounded even for long branch names.
+          slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40)"
+          slug="${slug:-ref}"
+          slug="$(printf '%s' "$slug" | cut -c1-40 | sed 's/-$//')"
+          echo "tag=branch-${slug}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:branch-${slug}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          build-args: PI_WEB_BUILD_ID=${{ github.sha }}

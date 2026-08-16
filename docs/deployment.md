@@ -13,6 +13,11 @@ docker run --rm -p 3141:3141 pi-ez-web:local
 A real deployment must provide Pi credentials and persistent storage. Keep
 these paths stable across container restarts:
 
+The repository also contains `deploy/k8s-preview`, an ephemeral-state preview
+workload. The infra repository creates an Argo CD Application for a selected
+branch and overrides its GHCR image with that branch commit's immutable tag;
+preview resources are name-prefixed so they do not select the production pod.
+
 - `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, and chat scratch space.
 - `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
 - `reposRoot` — the checked-out repositories.

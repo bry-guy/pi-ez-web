@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-ez-web
+  labels:
+    app.kubernetes.io/name: pi-ez-web
+    app.kubernetes.io/part-of: selfhost
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pi-ez-web
+  template:
+    metadata:
+      annotations:
+        selfhost.bry-guy.net/nfs-selinux-context: container_file_t
+      labels:
+        app.kubernetes.io/name: pi-ez-web
+        app.kubernetes.io/part-of: selfhost
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-pull
+      initContainers:
+        - name: initialize-state
+          image: ghcr.io/bry-guy/pi-ez-web:preview-placeholder
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - -e
+            - |
+              const fs = require('node:fs');
+              const { execFileSync } = require('node:child_process');
+              const dirs = ['/data/pi-ez-web', '/data/pi-ez-agent', '/data/pi-ez-workspaces', '/data/pi-ez-worktrees', '/data/pi-ez-operator-home'];
+              for (const dir of dirs) fs.mkdirSync(dir, { recursive: true });
+              const env = { ...process.env, HOME: '/data/pi-ez-operator-home' };
+              for (const [key, value] of [['user.name', 'Bryan Smith'], ['user.email', 'bryan@bry-guy.net'], ['credential.helper', '/usr/local/bin/pi-ez-web-git-credential-helper']]) {
+                execFileSync('git', ['config', '--global', key, value], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+              }
+              const config = '/data/pi-ez-web/config.json';
+              let value = {};
+              try {
+                const parsed = JSON.parse(fs.readFileSync(config, 'utf8'));
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) value = parsed;
+              } catch {}
+              value.reposRoot ||= '/data/pi-ez-workspaces';
+              value.worktreeRoot ||= '/data/pi-ez-worktrees';
+              value.projectHooks = {
+                setup: 'mise trust --yes && mise install && mise run bootstrap',
+                check: 'mise run check',
+                ...(value.projectHooks || {}),
+              };
+              const projectHookSets = { ...(value.projectHookSets || {}) };
+              projectHookSets.infra = {
+                setup: 'mise trust --yes && mise run selfhost:tooling:init',
+                check: 'mise run check',
+                ...(projectHookSets.infra || {}),
+              };
+              delete projectHookSets.infra.deploy;
+              value.projectHookSets = projectHookSets;
+              if (Array.isArray(value.projects)) {
+                for (const project of value.projects) {
+                  if (project && typeof project === 'object') {
+                    project.mode ||= 'auto';
+                    if (project.name === 'pi-ez-web' || String(project.repoPath || '').endsWith('/pi-ez-web')) {
+                      project.hooks ||= { setup: 'mise trust --yes && mise install && mise run bootstrap' };
+                    }
+                  }
+                }
+              }
+              fs.writeFileSync(config, JSON.stringify(value, null, 2) + '\n');
+          env:
+            - name: PI_WEB_HOME
+              value: /data/pi-ez-web
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: state
+              mountPath: /data
+      nodeSelector:
+        selfhost.bry-guy.net/capability-service: "true"
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        # Match the shared NFS volume context; NFS cannot carry per-pod MCS
+        # labels, so this workload remains single-replica and tailnet-only.
+        seLinuxOptions:
+          level: s0
+      containers:
+        - name: pi-ez-web
+          image: ghcr.io/bry-guy/pi-ez-web:preview-placeholder
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: HOME
+              value: /data/pi-ez-operator-home
+            - name: PI_WEB_HOME
+              value: /data/pi-ez-web
+            - name: PI_WEB_REPOS_ROOT
+              value: /data/pi-ez-workspaces
+            # This is a deployment-local, public OAuth client ID. Device Flow
+            # never uses the client secret; keep that only in 1Password.
+            - name: PI_WEB_GITHUB_CLIENT_ID
+              value: Ov23livNQSEmNhsrLEeI
+            - name: PI_CODING_AGENT_DIR
+              value: /data/pi-ez-agent
+            - name: PORT
+              value: "3141"
+            - name: PI_WEB_MODE
+              value: real
+            - name: MISE_ENV
+              value: pi-web
+            - name: KUBECONFIG
+              value: /run/secrets/pi-ez-web-operator/platform-7049-1.yaml
+            - name: OP_SERVICE_ACCOUNT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pi-ez-web-operator
+                  key: op-service-account-token
+            - name: PI_EZ_WEB_REPO_ROOT
+              value: /data/pi-ez-workspaces/pi-ez-web
+          ports:
+            - name: http
+              containerPort: 3141
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: operator-secrets
+              mountPath: /run/secrets/pi-ez-web-operator
+              readOnly: true
+      # Preview state is intentionally ephemeral and isolated from production.
+      volumes:
+        - name: state
+          emptyDir: {}
+        - name: operator-secrets
+          secret:
+            secretName: pi-ez-web-operator
+            defaultMode: 0440
