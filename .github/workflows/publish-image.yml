@@ -70,17 +70,17 @@ jobs:
               "$digest"
           else
             python3 - "$digest" <<'PY'
-import pathlib, re, sys
-path = pathlib.Path("deploy/k8s-preview/kustomization.yaml")
-digest = sys.argv[1]
-text = path.read_text()
-pattern = r'- name: ghcr\.io/bry-guy/pi-ez-web\n\s+newTag: [^\n]+'
-replacement = f'- name: ghcr.io/bry-guy/pi-ez-web\n    newName: ghcr.io/bry-guy/pi-ez-web\n    digest: {digest}'
-updated, count = re.subn(pattern, replacement, text)
-if count != 1:
-    raise SystemExit("expected one pi-ez-web preview image entry")
-path.write_text(updated)
-PY
+          import pathlib, re, sys
+          path = pathlib.Path("deploy/k8s-preview/kustomization.yaml")
+          digest = sys.argv[1]
+          text = path.read_text()
+          pattern = r'- name: ghcr\.io/bry-guy/pi-ez-web\n\s+newTag: [^\n]+'
+          replacement = f'- name: ghcr.io/bry-guy/pi-ez-web\n    newName: ghcr.io/bry-guy/pi-ez-web\n    digest: {digest}'
+          updated, count = re.subn(pattern, replacement, text)
+          if count != 1:
+              raise SystemExit("expected one pi-ez-web preview image entry")
+          path.write_text(updated)
+          PY
           fi
 
       - name: Commit deployment digest
