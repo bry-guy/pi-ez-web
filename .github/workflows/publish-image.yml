@@ -25,10 +25,10 @@ permissions:
   packages: write
 
 env:
-  SOURCE_REF: ${{ inputs.source_ref || github.ref_name }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
 
 concurrency:
-  group: pi-ez-web-image-${{ inputs.source_ref || github.ref_name }}
+  group: pi-ez-web-image-${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
