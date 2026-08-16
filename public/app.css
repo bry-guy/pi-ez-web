@@ -617,6 +617,7 @@ aside.files {
   header.bar { padding-inline: 12px; }
   .bar-main { min-width: 0; }
   .bar-sub { flex-wrap: wrap; width: 100%; }
+  .composer textarea { font-size: 16px; }
   .msg-user-row { min-width: 0; }
   .bubble { max-width: calc(100% - 42px); }
   .modal { width: 100%; height: 80%; max-height: none; }
