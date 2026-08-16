@@ -2,7 +2,7 @@ name: Publish pi-ez-web image
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
     paths:
       - Dockerfile
       - package.json
@@ -10,6 +10,7 @@ on:
       - public/**
       - server/**
       - scripts/update-image-digest.py
+      - deploy/k8s-preview/**
       - .github/workflows/publish-image.yml
   workflow_dispatch:
     inputs:
@@ -81,21 +82,44 @@ jobs:
           build-args: |
             PI_WEB_BUILD_ID=${{ steps.source.outputs.sha }}
 
-      - name: Update production deployment digest
-        if: env.SOURCE_REF == 'main'
+      - name: Update deployment digest
+        shell: bash
         run: |
-          python3 scripts/update-image-digest.py \
-            ghcr.io/${{ github.repository_owner }}/pi-ez-web \
-            "${{ steps.build.outputs.digest }}"
+          set -euo pipefail
+          digest="${{ steps.build.outputs.digest }}"
+          if [[ "$SOURCE_REF" == main ]]; then
+            python3 scripts/update-image-digest.py \
+              ghcr.io/${{ github.repository_owner }}/pi-ez-web \
+              "$digest"
+          else
+            python3 - "$digest" <<'PY'
+import pathlib, re, sys
+path = pathlib.Path("deploy/k8s-preview/kustomization.yaml")
+digest = sys.argv[1]
+text = path.read_text()
+updated, count = re.subn(
+    r'(- name: ghcr\.io/bry-guy/pi-ez-web\n\s+newTag: )[^\n]+',
+    rf'\1{digest}',
+    text,
+)
+if count != 1:
+    raise SystemExit("expected one pi-ez-web preview image entry")
+path.write_text(updated)
+PY
+          fi
 
-      - name: Commit production deployment digest
-        if: env.SOURCE_REF == 'main'
+      - name: Commit deployment digest
         run: |
-          if git diff --quiet -- deploy/k8s/kustomization.yaml; then
+          if [[ "$SOURCE_REF" == main ]]; then
+            target=deploy/k8s/kustomization.yaml
+          else
+            target=deploy/k8s-preview/kustomization.yaml
+          fi
+          if git diff --quiet -- "$target"; then
             exit 0
           fi
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add deploy/k8s/kustomization.yaml
-          git commit -m "chore(deploy): update pi-ez-web image digest [skip ci]"
+          git add "$target"
+          git commit -m "chore(deploy): update ${SOURCE_REF} image digest [skip ci]"
           git push
