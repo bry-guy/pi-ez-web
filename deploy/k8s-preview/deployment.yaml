@@ -85,6 +85,7 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /data
+              subPath: preview
       nodeSelector:
         selfhost.bry-guy.net/capability-service: "true"
       terminationGracePeriodSeconds: 30
@@ -172,6 +173,7 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /data
+              subPath: preview
             - name: operator-secrets
               mountPath: /run/secrets/pi-ez-web-operator
               readOnly: true
