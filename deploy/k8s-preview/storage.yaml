@@ -9,6 +9,7 @@ spec:
   accessModes:
     - ReadWriteMany
   storageClassName: selfhost-bulk-nfs
+  volumeName: pi-web-preview-state-nfs
   resources:
     requests:
       storage: 20Gi
