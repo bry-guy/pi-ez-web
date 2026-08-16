@@ -10,9 +10,14 @@ function manifest(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-test('preview Service selects only preview pods', () => {
+test('production and preview Services select only their own pods', () => {
+  const production = manifest('deploy/k8s/service.yaml');
   const preview = manifest('deploy/k8s-preview/service.yaml');
 
+  assert.match(
+    production,
+    /  selector:\n    app\.kubernetes\.io\/name: pi-ez-web\n    selfhost\.bry-guy\.net\/preview: "false"\n  ports:/,
+  );
   assert.match(
     preview,
     /  selector:\n    app\.kubernetes\.io\/name: pi-ez-web\n    selfhost\.bry-guy\.net\/preview: "true"\n  ports:/,
