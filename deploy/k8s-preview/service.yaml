@@ -9,6 +9,7 @@ spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: pi-ez-web
+    selfhost.bry-guy.net/preview: "true"
   ports:
     - name: http
       port: 3141

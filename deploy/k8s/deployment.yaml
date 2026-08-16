@@ -20,6 +20,7 @@ spec:
       labels:
         app.kubernetes.io/name: pi-ez-web
         app.kubernetes.io/part-of: selfhost
+        selfhost.bry-guy.net/preview: "false"
     spec:
       automountServiceAccountToken: false
       imagePullSecrets:
