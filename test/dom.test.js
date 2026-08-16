@@ -229,8 +229,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   sidebar.querySelector("[data-act='collapse']").click();
   assert.equal(store.state.railOpen, true);
   assert.equal(sidebar.dataset.layout, "rail");
-  sidebar.querySelector("[data-act='projects']").click();
-  assert.equal(store.state.view, "projects");
+  assert.equal(sidebar.querySelector("[data-act='projects']"), null, "projects has no separate navigation entry");
+  assert.equal(root.querySelector("[data-screen='projects']"), null, "projects has no separate screen");
   store.set({ view: "chat" });
 
   applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });

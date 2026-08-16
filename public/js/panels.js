@@ -2,69 +2,6 @@ import { api, refreshState } from "./api.js";
 import { store } from "./store.js";
 import { esc, mobile, selectSession } from "./shell.js";
 
-/* ---------------- projects screen ---------------- */
-class PiProjects extends HTMLElement {
-  connectedCallback() {
-    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
-    this.addEventListener("click", e => this.onClick(e));
-    this.addEventListener("keydown", e => {
-      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-project]")) {
-        e.preventDefault(); e.target.closest("[data-project]").click();
-      }
-    });
-    this.render();
-  }
-  disconnectedCallback() { this.unsub?.(); }
-
-  onClick(e) {
-    const card = e.target.closest("[data-project]");
-    if (card) {
-      const p = store.state.projects.find(x => x.id === card.dataset.project);
-      if (!p) return;
-      store.state.openTree[p.id] = true;
-      if (p.sessions[0]) selectSession(p.id, p.sessions[0].id);
-      return;
-    }
-    if (e.target.closest("[data-act='repo-picker']")) store.set({ repoPickerOpen: true });
-  }
-
-  count(nodes) { return nodes.reduce((n, x) => n + 1 + this.count(x.children), 0); }
-  branches(nodes, set = new Set()) {
-    for (const n of nodes) { if (n.branch) set.add(n.branch); this.branches(n.children, set); }
-    return set;
-  }
-
-  render() {
-    const cards = store.state.projects.map(p => `
-      <div class="card" role="button" tabindex="0" data-project="${esc(p.id)}">
-        <div class="card-top">
-          <div class="card-initial">${esc(p.name.slice(0, 2))}</div>
-          <div class="card-mid">
-            <div class="card-name">${esc(p.name)}</div>
-            <div class="card-blurb">${esc(p.repoPath)}</div>
-          </div>
-          <span class="card-branch">${esc(p.branch || "—")}</span>
-        </div>
-        <div class="card-meta">
-          <span>${this.count(p.sessions)} sessions</span>
-          <span>${this.branches(p.sessions).size || 1} branches</span>
-          <span>${esc(p.mode || "manual")} mode</span>
-          <span>${esc(p.updated || "")}</span>
-        </div>
-      </div>`).join("");
-    this.innerHTML = `<div class="col-pad">
-      <div class="proj-head">
-        <div>
-          <div class="screen-title">Projects</div>
-          <div class="proj-sub">One repo each. Sessions branch inside.</div>
-        </div>
-        <button class="connect-btn" data-act="repo-picker">Connect repo</button>
-      </div>
-      <div class="cards">${cards || `<div class="modal-empty">No projects yet — connect a repo.</div>`}</div>
-    </div>`;
-  }
-}
-
 /* ---------------- settings ---------------- */
 class PiSettings extends HTMLElement {
   connectedCallback() {
@@ -774,7 +711,6 @@ class PiApp extends HTMLElement {
             <div class="scrollable"><div class="col-pad"><pi-thread></pi-thread></div></div>
             <pi-composer></pi-composer>
           </div>
-          <div class="screen" data-screen="projects"><div class="scrollable"><pi-projects></pi-projects></div></div>
           <div class="screen" data-screen="settings"><div class="scrollable"><pi-settings></pi-settings></div></div>
         </main>
         <pi-files></pi-files>
@@ -849,7 +785,6 @@ class PiApp extends HTMLElement {
 }
 
 customElements.define("pi-confirm", PiConfirm);
-customElements.define("pi-projects", PiProjects);
 customElements.define("pi-settings", PiSettings);
 customElements.define("pi-files", PiFiles);
 customElements.define("pi-repo-picker", PiRepoPicker);

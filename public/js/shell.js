@@ -3,6 +3,14 @@ import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
+const icon = name => {
+  const paths = {
+    settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
+    chevronLeft: '<path d="m12.5 4-6 6 6 6"/>',
+    chevronRight: '<path d="m7.5 4 6 6-6 6"/>',
+  };
+  return `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
+};
 
 export function selectSession(projectId, sessionId) {
   const project = store.state.projects.find(p => p.id === projectId);
@@ -106,7 +114,6 @@ class PiSidebar extends HTMLElement {
       e.stopPropagation();
       newProjectSession(t.dataset.id).catch(err => store.setError(`Could not create session: ${err.error || err.message || err}`));
     } else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
-    else if (act === "projects") store.set({ view: "projects", drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
     else if (act === "project-row") {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
@@ -157,9 +164,8 @@ class PiSidebar extends HTMLElement {
           <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
           <div class="mini-gap"></div>
           <button class="mini-btn cta-plus" data-act="new-chat" title="New chat">+</button>
-          <button class="mini-btn quiet" data-act="projects" title="Projects">▤</button>
           <div class="mini-flex"></div>
-          <button class="mini-btn quiet" data-act="settings" title="Settings">⚙</button>
+          <button class="mini-btn quiet" data-act="settings" title="Settings">${icon("settings")}</button>
         </aside>`;
         return;
       }
@@ -167,10 +173,9 @@ class PiSidebar extends HTMLElement {
       this.innerHTML = `<aside class="rail">
         <div class="rail-head">
           <div class="rail-logo">π</div><div class="rail-word">pi</div>
-          <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
+          <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">${icon("chevronLeft")}</button>
         </div>
         <div class="rail-actions">
-          <button class="rail-nav" data-act="projects">Projects</button>
           <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
         </div>
         <div class="rail-scroll">
@@ -183,7 +188,7 @@ class PiSidebar extends HTMLElement {
         </div>
         <div class="rail-foot">
           <div class="avatar">π</div><div class="rail-user">pi-web</div>
-          <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">⚙</button>
+          <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">${icon("settings")}</button>
         </div>
       </aside>`;
     }
@@ -334,7 +339,7 @@ class PiHeader extends HTMLElement {
     const inProject = store.inProject() && p;
     const chat = s.chats.find(x => x.id === s.chatId);
     const node = inProject ? store.findSession(s.sessionId) : null;
-    const title = s.view === "projects" ? "Projects" : s.view === "settings" ? "Settings"
+    const title = s.view === "settings" ? "Settings"
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const branch = inProject ? this.sessionBranch() : null;
     const streaming = store.transcript().streaming;
@@ -358,7 +363,7 @@ class PiHeader extends HTMLElement {
     const pop = inProject && s.branchMenuOpen ? this.popover(p, branch) : "";
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
-        style="${s.filesOpen ? "color:var(--text)" : ""}">${s.filesOpen ? "»" : "«"}</button>` : "";
+        style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
 
     const hookResult = store.state.hookResult;
     const hookPanel = hookResult ? `<div class="hook-result ${hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(hookResult.hook || "hook")}</strong><span>exit ${esc(hookResult.exit)}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${hookResult.stdout ? `<pre>${esc(hookResult.stdout)}</pre>` : ""}${hookResult.stderr ? `<pre class="hook-stderr">${esc(hookResult.stderr)}</pre>` : ""}</div>` : "";

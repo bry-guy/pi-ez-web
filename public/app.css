@@ -20,7 +20,10 @@
   --add-bg: oklch(0.238 0.048 158);
   --del-bg: oklch(0.232 0.046 22);
   --danger: oklch(0.518 0.172 24);
-  --shadow: 0 1px 2px oklch(0 0 0 / 0.4), 0 16px 40px oklch(0 0 0 / 0.45);
+  --hairline: oklch(0.278 0.017 252 / 0.55);
+  --elevation-1: 0 2px 4px oklch(0 0 0 / 0.28), 0 8px 20px oklch(0 0 0 / 0.22);
+  --elevation-2: 0 2px 4px oklch(0 0 0 / 0.34), 0 14px 32px oklch(0 0 0 / 0.38);
+  --shadow: var(--elevation-2);
   --mono: "IBM Plex Mono", monospace;
 }
 * { box-sizing: border-box; }
@@ -81,8 +84,8 @@ main.col { flex: 1; min-width: 0; display: flex; flex-direction: column; backgro
 
 /* ---------- sidebar ---------- */
 aside.rail {
-  width: 266px; flex: 0 0 266px; border-right: 1px solid var(--border);
-  background: var(--surface); display: flex; flex-direction: column;
+  width: 266px; flex: 0 0 266px; border-right: 0;
+  background: var(--surface); box-shadow: 8px 0 24px oklch(0 0 0 / 0.12); display: flex; flex-direction: column;
 }
 .rail-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 10px 16px; }
 .rail-logo {
@@ -94,6 +97,7 @@ aside.rail {
   border: 0; background: transparent; color: var(--faint); cursor: pointer;
   font-family: var(--mono); font-size: 14px; padding: 4px 6px; border-radius: 6px;
 }
+.icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .ghost-btn:hover, .ghost-btn:focus-visible { background: var(--surface-2); color: var(--text); }
 .rail-actions { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 8px; }
 .rail-nav {
@@ -165,12 +169,13 @@ aside.mini {
 .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
 .mini-btn.quiet { border-color: transparent; background: transparent; color: var(--muted); font-size: 14px; }
 .mini-btn.quiet:hover { background: var(--surface-2); color: var(--text); border-color: transparent; }
+.mini-btn .icon { width: 15px; height: 15px; margin: auto; }
 .mini-gap { height: 8px; }
 .mini-flex { flex: 1; }
 
 /* ---------- header ---------- */
 header.bar {
-  display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 0;
   background: var(--bg); min-height: 54px; position: relative;
 }
 .bar-main { min-width: 0; flex: 1; }
@@ -280,7 +285,7 @@ header.bar {
 .fork-btn:hover .word, .fork-btn:focus-visible .word { display: inline; }
 .no-fork .fork-btn { visibility: hidden; pointer-events: none; }
 .bubble {
-  max-width: 82%; background: var(--surface-2); border: 1px solid var(--border);
+  max-width: 82%; background: var(--surface-2); border: 0;
   border-radius: 14px 14px 4px 14px; padding: 10px 14px; font-size: 14.5px; line-height: 1.6; text-wrap: pretty;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
@@ -345,7 +350,7 @@ header.bar {
 .pi-think span:nth-child(3) { animation-delay: .32s; }
 
 /* tool / diff / bang blocks */
-.block { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.block { border: 0; border-radius: 10px; background: var(--surface); box-shadow: var(--elevation-1); overflow: hidden; }
 .block-head {
   display: flex; align-items: center; gap: 9px; padding: 8px 11px; cursor: pointer;
   font-family: var(--mono); font-size: 12px;
@@ -360,7 +365,7 @@ header.bar {
 .block-head .bh-add { color: var(--green); flex: 0 0 auto; }
 .block-head .bh-del { color: var(--red); flex: 0 0 auto; }
 .block pre {
-  margin: 0; border-top: 1px solid var(--border); background: var(--surface-2);
+  margin: 0; border-top: 0; background: var(--surface-2);
   padding: 11px 13px 12px 30px; font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
   color: var(--muted); overflow-x: auto; white-space: pre-wrap;
 }
@@ -384,7 +389,7 @@ header.bar {
 .composer {
   position: relative; border: 0; background: var(--surface-2); border-radius: 14px;
   /* Let elevation, rather than another outline, separate the composer from the page. */
-  box-shadow: 0 2px 4px oklch(0 0 0 / 0.34), 0 14px 32px oklch(0 0 0 / 0.38);
+  box-shadow: var(--elevation-2);
   overflow: visible;
 }
 .composer textarea {
@@ -457,32 +462,6 @@ header.bar {
 .stop-btn:hover { border-color: var(--red); color: var(--red); }
 .stop-btn .sq { width: 8px; height: 8px; background: currentColor; border-radius: 2px; display: inline-block; }
 
-/* ---------- projects screen ---------- */
-.proj-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-.proj-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
-.connect-btn {
-  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 9px;
-  padding: 8px 13px; font-size: 13px; font-weight: 500; cursor: pointer; flex: 0 0 auto;
-}
-.connect-btn:hover { filter: brightness(1.08); }
-.cards { display: flex; flex-direction: column; gap: 10px; }
-.card { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 14px 16px; cursor: pointer; }
-.card:hover, .card:focus-visible { border-color: var(--accent); box-shadow: var(--shadow); }
-.card:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
-.card-top { display: flex; align-items: center; gap: 10px; }
-.card-initial {
-  width: 28px; height: 28px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
-  display: grid; place-items: center; font-family: var(--mono); font-size: 12px; color: var(--muted); flex: 0 0 auto;
-}
-.card-name { font-family: var(--mono); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-blurb { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-mid { flex: 1; min-width: 0; }
-.card-branch {
-  font-family: var(--mono); font-size: 11px; color: var(--orange); background: var(--orange-soft);
-  padding: 2px 7px; border-radius: 5px; flex: 0 0 auto;
-}
-.card-meta { display: flex; gap: 14px; margin-top: 11px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
-
 /* ---------- settings ---------- */
 .settings-warning {
   margin-top: 18px; padding: 10px 12px; border: 1px solid var(--orange); border-radius: 9px;
@@ -551,10 +530,10 @@ header.bar {
 
 /* ---------- file panel ---------- */
 aside.files {
-  width: 288px; flex: 0 0 288px; border-left: 1px solid var(--border); background: var(--surface);
-  display: flex; flex-direction: column;
+  width: 288px; flex: 0 0 288px; border-left: 0; background: var(--surface);
+  box-shadow: -8px 0 24px oklch(0 0 0 / 0.12); display: flex; flex-direction: column;
 }
-.files-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--border); }
+.files-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 0; }
 .files-head .sec-label { flex: 1; }
 .files-scroll { flex: 1; overflow: auto; padding: 8px 6px 14px; }
 .file-row {
@@ -700,21 +679,17 @@ aside.files {
 .reload-card { width: 360px; max-width: 100%; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .reload-card .primary-btn { margin-top: 18px; justify-content: center; }
 
-/* UI chrome is intentionally a touch larger than transcript text. */
-.rail-nav { font-size: 12.5px; }
-.sec-label { font-size: 12px; }
-.row { font-size: 14px; }
-.row.mono { font-size: 13.5px; }
-.row .count, .row .when { font-size: 12px; }
-.bar-title { font-size: 15px; }
-.bar-sub { font-size: 12px; }
-.branch-chip { font-size: 12px; }
-.hamburger { width: 36px; height: 36px; }
-.ghost-btn { font-size: 15px; }
-.settings-action, .settings-save { font-size: 12.5px; }
-.settings-section-title { font-size: 11px; }
-.settings-select, .settings-inline-input, .repos-root-input { font-size: 12.5px; }
-.card-name { font-size: 14.5px; }
-.card-blurb, .proj-sub { font-size: 13px; }
-.card-meta { font-size: 12px; }
-.connect-btn { font-size: 14px; }
+/* UI chrome stays close to transcript scale; hierarchy comes from weight and spacing. */
+.sec-label { font-size: 11px; }
+.row { font-size: 13.5px; }
+.row.mono { font-size: 13px; }
+.row .count, .row .when { font-size: 11.5px; }
+.bar-title { font-size: 14px; }
+.bar-sub { font-size: 11.5px; }
+.branch-chip { font-size: 11.5px; }
+.hamburger { width: 34px; height: 34px; }
+.ghost-btn { font-size: 14px; }
+.settings-action, .settings-save { font-size: 12px; }
+.settings-section-title { font-size: 10.5px; }
+.settings-select, .settings-inline-input, .repos-root-input { font-size: 12px; }
+.connect-btn { font-size: 13.5px; }
