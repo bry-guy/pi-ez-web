@@ -538,6 +538,29 @@ export class RealSupervisor {
     this.hub.emit(id, "session_meta", { model: modelRef });
   }
 
+  async context(id) {
+    const st = await this._attachById(id);
+    const model = st.session.model || {};
+    const window = Number(model.contextWindow) || null;
+    const entry = [...(st.session.sessionManager.getBranch?.() || [])]
+      .reverse().find(item => item?.type === "message" && item.message?.role === "assistant" && item.message?.usage);
+    const usage = entry?.message?.usage;
+    const input = Number(usage?.input) || 0;
+    const cacheRead = Number(usage?.cacheRead) || 0;
+    const cacheWrite = Number(usage?.cacheWrite) || 0;
+    const used = usage ? input + cacheRead + cacheWrite : null;
+    return {
+      window,
+      used,
+      remaining: window && used != null ? Math.max(0, window - used) : null,
+      percent: window && used != null ? Math.min(100, Math.round((used / window) * 100)) : null,
+      input,
+      cacheRead,
+      cacheWrite,
+      model: modelRef(model),
+    };
+  }
+
   async thinking(id) {
     const st = await this._attachById(id);
     return {

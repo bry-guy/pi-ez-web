@@ -78,6 +78,7 @@ export const api = {
   fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
   branch: (id, branch, create = false, fromRef = undefined) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create, ...(fromRef ? { fromRef } : {}) }) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
+  context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),
   thinking: id => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`).then(j),
   setThinking: (id, level) => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`, { method: "POST", headers: JH, body: JSON.stringify({ level }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),

@@ -412,8 +412,24 @@ header.bar {
 .composer, .composer textarea, .composer textarea:focus {
   border: 0 !important; outline: 0 !important; box-shadow: none !important; appearance: none;
 }
-.composer textarea.busy { color: var(--muted); }
-.composer textarea.busy::placeholder { color: var(--faint); opacity: 1; }
+.composer textarea.busy { color: var(--text); }
+.composer textarea.busy::placeholder { color: var(--muted); opacity: 1; }
+pi-context-meter { display: block; padding: 0 13px; }
+.context-meter { position: relative; }
+.context-meter > button {
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 5px 0 3px;
+  border: 0; background: transparent; color: var(--faint); text-align: left; font: 10.5px var(--mono); cursor: pointer;
+}
+.context-meter > button:hover, .context-meter > button:focus-visible { color: var(--muted); outline: 0; }
+.context-meter i { width: 52px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
+.context-meter i b { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.context-meter.warn i b { background: var(--orange); }
+.context-meter.danger i b { background: var(--red); }
+.context-popover {
+  position: absolute; right: 0; bottom: calc(100% + 7px); z-index: 36; display: grid; gap: 5px; min-width: 236px;
+  padding: 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font: 11px var(--mono); box-shadow: var(--elevation-2);
+}
+.context-popover strong { color: var(--text); font-size: 11.5px; }
 .command-popover {
   position: absolute; left: 10px; right: 10px; bottom: calc(100% - 1px); z-index: 25;
   max-height: min(320px, 42vh); overflow-y: auto; padding: 5px;
@@ -490,7 +506,7 @@ header.bar {
   padding: 7px 12px; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; gap: 7px;
 }
 .stop-btn:hover { border-color: var(--red); color: var(--red); }
-.stop-btn .sq { width: 8px; height: 8px; background: currentColor; border-radius: 2px; display: inline-block; }
+.stop-btn .sq { width: 8px; height: 8px; background: var(--red); border-radius: 2px; display: inline-block; }
 
 /* ---------- settings ---------- */
 .settings-warning {

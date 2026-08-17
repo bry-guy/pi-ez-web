@@ -448,6 +448,8 @@ export function buildApi(sup) {
     }
   });
 
+  api.get("/sessions/:id/context", async c => c.json(await sup.context(c.req.param("id"))));
+
   api.get("/sessions/:id/thinking", async c => c.json(await sup.thinking(c.req.param("id"))));
   api.post("/sessions/:id/thinking", async c => {
     const { level } = await c.req.json();

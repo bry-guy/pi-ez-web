@@ -353,6 +353,65 @@ class PiModelPicker extends HTMLElement {
   }
 }
 
+/* ---------------- context window ---------------- */
+const tokenLabel = value => {
+  const tokens = Number(value);
+  if (!Number.isFinite(tokens)) return "—";
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(Math.round(tokens));
+};
+class PiContextMeter extends HTMLElement {
+  connectedCallback() {
+    this.open = false;
+    this.info = null;
+    this.unsub = store.subscribe(w => {
+      if (w === "state" || w === "transcript") this.sync();
+    });
+    this.addEventListener("click", e => {
+      if (e.target.closest("[data-context-toggle]")) {
+        this.open = !this.open;
+        this.render();
+      }
+    });
+    this.sync();
+  }
+  disconnectedCallback() { this.unsub?.(); }
+  async sync() {
+    const id = store.activeKey();
+    const transcript = store.transcript(id);
+    const lastAssistant = [...transcript.records].reverse().find(record => record.role === "assistant");
+    const key = `${id || ""}:${store.state.model || ""}:${transcript.streaming}:${lastAssistant?.id || ""}:${lastAssistant?.text?.length || 0}`;
+    if (!id || key === this.contextKey) return;
+    this.contextKey = key;
+    try {
+      const info = await api.context(id);
+      if (id !== store.activeKey()) return;
+      this.info = info;
+      this.render();
+    } catch {
+      if (id === store.activeKey()) { this.info = null; this.render(); }
+    }
+  }
+  render() {
+    const info = this.info;
+    if (!store.activeKey()) { this.innerHTML = ""; return; }
+    const percent = Number.isFinite(info?.percent) ? info.percent : null;
+    const tone = percent == null ? "unknown" : percent >= 85 ? "danger" : percent >= 70 ? "warn" : "ok";
+    const label = percent == null ? "Context unavailable" : `Context ${tokenLabel(info.used)} / ${tokenLabel(info.window)} · ${percent}%`;
+    const details = info && percent != null ? `<div class="context-popover" role="status">
+      <strong>Context window</strong>
+      <span>${tokenLabel(info.used)} used · ${tokenLabel(info.remaining)} remaining</span>
+      <span>Input ${tokenLabel(info.input)} · cache ${tokenLabel((info.cacheRead || 0) + (info.cacheWrite || 0))}</span>
+      ${info.model ? `<span>${esc(info.model)}</span>` : ""}
+    </div>` : "";
+    this.innerHTML = `<div class="context-meter ${tone}">
+      <button data-context-toggle aria-expanded="${this.open}" title="Context window usage">
+        <span>${label}</span>${percent != null ? `<i><b style="width:${percent}%"></b></i>` : ""}
+      </button>
+      ${this.open ? details : ""}
+    </div>`;
+  }
+}
+
 /* ---------------- thinking effort ---------------- */
 class PiThinkingPicker extends HTMLElement {
   connectedCallback() {
@@ -416,6 +475,7 @@ class PiComposer extends HTMLElement {
       <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
       <div class="composer-attachments"></div>
       <textarea rows="2"></textarea>
+      <pi-context-meter></pi-context-meter>
       <div class="composer-foot">
         <div class="attachment-picker">
           <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
@@ -685,5 +745,6 @@ class PiComposer extends HTMLElement {
 
 customElements.define("pi-thread", PiThread);
 customElements.define("pi-model-picker", PiModelPicker);
+customElements.define("pi-context-meter", PiContextMeter);
 customElements.define("pi-thinking-picker", PiThinkingPicker);
 customElements.define("pi-composer", PiComposer);

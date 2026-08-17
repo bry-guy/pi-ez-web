@@ -140,6 +140,19 @@ export class MockSupervisor {
     this.hub.emit(id, "session_meta", { model });
   }
 
+  async context(id) {
+    const s = this._load(id);
+    if (!s) throw new Error("no such session");
+    const window = 128_000;
+    // Mock transcripts do not receive provider token usage, so use a stable
+    // approximation solely to exercise the same UI contract.
+    const used = Math.min(window, 2_048 + Math.ceil(JSON.stringify(s.records || []).length / 4));
+    return {
+      window, used, remaining: window - used, percent: Math.round((used / window) * 100),
+      input: used, cacheRead: 0, cacheWrite: 0, model: s.model,
+    };
+  }
+
   async thinking(id) {
     const s = this._load(id);
     if (!s) throw new Error("no such session");
