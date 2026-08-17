@@ -367,14 +367,18 @@ class PiThinkingPicker extends HTMLElement {
     if (!id || id === this.sessionId) return;
     this.sessionId = id;
     this.open = false;
-    this.info = null;
+    // Keep the effort control present even when a provider does not advertise
+    // reasoning metadata. Pi will clamp unsupported choices server-side.
+    this.info = { level: "medium", levels: ["off", "low", "medium", "high"], supported: true };
     this.render();
     try {
       const info = await api.thinking(id);
-      if (id !== store.activeKey()) return;
-      this.info = Array.isArray(info.levels) ? info : null;
+      if (id !== store.activeKey() || !Array.isArray(info.levels)) return;
+      this.info = info.levels.length > 1
+        ? info
+        : { ...this.info, level: info.level || this.info.level };
       this.render();
-    } catch { /* unavailable models simply do not expose this control */ }
+    } catch { /* retain the available fallback while a server is restarting */ }
   }
   async choose(level) {
     const id = store.activeKey();
@@ -387,7 +391,7 @@ class PiThinkingPicker extends HTMLElement {
   }
   render() {
     const info = this.info;
-    if (!info?.supported || !info.levels?.length) { this.innerHTML = ""; return; }
+    if (!info?.levels?.length) { this.innerHTML = ""; return; }
     const level = info.level || "off";
     this.innerHTML = `<div class="thinking-picker">
       <button class="thinking-chip" data-thinking-toggle aria-haspopup="listbox" aria-expanded="${this.open}" title="Thinking effort">Think: ${esc(level)} <span class="model-chip-caret">▾</span></button>
