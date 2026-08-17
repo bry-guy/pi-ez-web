@@ -485,8 +485,24 @@ class PiComposer extends HTMLElement {
         this.send(e.altKey ? "followUp" : undefined);
       }
     });
+    this.sendBtn.addEventListener("pointerdown", e => {
+      if (!store.transcript().streaming) return;
+      this.sendHoldTimer = setTimeout(() => {
+        this.sendHoldTimer = null;
+        this.sendHeld = true;
+        void this.send("followUp");
+      }, 500);
+      this.sendBtn.setPointerCapture?.(e.pointerId);
+    });
+    const cancelSendHold = () => {
+      if (this.sendHoldTimer) clearTimeout(this.sendHoldTimer);
+      this.sendHoldTimer = null;
+    };
+    this.sendBtn.addEventListener("pointerup", cancelSendHold);
+    this.sendBtn.addEventListener("pointercancel", cancelSendHold);
     this.sendBtn.addEventListener("click", e => {
       e.preventDefault();
+      if (this.sendHeld) { this.sendHeld = false; return; }
       void this.send();
     });
     this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
@@ -499,7 +515,17 @@ class PiComposer extends HTMLElement {
     this.commandSessionId = null;
     this.sync();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    if (this.sendHoldTimer) clearTimeout(this.sendHoldTimer);
+  }
+
+  scrollToLatest() {
+    const scroller = this.closest("pi-app")?.querySelector(".scrollable");
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+  }
 
   commandQuery() {
     const match = this.ta.value.match(/^\/([^\s]*)$/);
@@ -573,6 +599,7 @@ class PiComposer extends HTMLElement {
     const text = this.ta.value.trim();
     if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id)) return;
     const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
+    this.scrollToLatest();
     this.ta.value = "";
     this.attachments = [];
     this.renderAttachments();
