@@ -437,8 +437,8 @@ header.bar {
 .attachment-menu button { display: block; width: 100%; padding: 8px 9px; border-radius: 7px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; font-size: 12px; }
 .attachment-menu button:hover, .attachment-menu button:focus-visible { background: var(--surface-3); color: var(--text); outline: 0; }
 .model-chip {
-  border: 0; background: transparent; padding: 6px 8px; border-radius: 7px;
-  font-family: var(--mono); font-size: 12px; color: var(--faint); cursor: pointer;
+  border: 0; background: var(--surface-3); padding: 6px 9px; border-radius: 7px;
+  font-family: var(--mono); font-size: 12px; color: var(--muted); cursor: pointer;
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .model-picker { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; }
@@ -471,8 +471,8 @@ header.bar {
 .model-empty { padding: 16px 10px; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.6; }
 .model-empty span { font-size: 11px; color: var(--faint); }
 .thinking-picker { position: relative; flex: 0 1 auto; }
-.thinking-chip { border: 0; border-radius: 7px; background: transparent; color: var(--faint); padding: 6px 8px; font: 12px var(--mono); cursor: pointer; white-space: nowrap; }
-.thinking-chip:hover, .thinking-chip:focus-visible { background: var(--surface-3); color: var(--text); outline: 0; }
+.thinking-chip { border: 0; border-radius: 7px; background: var(--surface-3); color: var(--muted); padding: 6px 9px; font: 12px var(--mono); cursor: pointer; white-space: nowrap; }
+.thinking-chip:hover, .thinking-chip:focus-visible { background: color-mix(in oklch, var(--surface-3) 76%, var(--text)); color: var(--text); outline: 0; }
 .thinking-popover { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 36; min-width: 132px; padding: 6px; border-radius: 10px; background: var(--surface-2); box-shadow: var(--elevation-2); }
 .thinking-popover-head { padding: 5px 7px 7px; color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .thinking-option { display: flex; justify-content: space-between; width: 100%; padding: 7px 8px; border-radius: 7px; background: transparent; color: var(--muted); font: 12px var(--mono); text-align: left; cursor: pointer; }

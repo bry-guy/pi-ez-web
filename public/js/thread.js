@@ -62,15 +62,20 @@ class PiThread extends HTMLElement {
     this.autoscroll();
   }
 
-  autoscroll() {
+  autoscroll(force = false) {
     const sc = this.closest(".scrollable") || this;
-    if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
+    if (force || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
   }
 
   render() {
+    const activeKey = store.activeKey();
+    if (activeKey !== this.renderedKey) {
+      this.renderedKey = activeKey;
+      this.scrollOnNextRender = true;
+    }
     const t = store.transcript();
     const noFork = !!store.state.chatId;
-    if (!store.activeKey()) { this.innerHTML = ""; return; }
+    if (!activeKey) { this.innerHTML = ""; return; }
     const liveAssistant = [...t.records].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
@@ -88,7 +93,8 @@ class PiThread extends HTMLElement {
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
     this.innerHTML = records + indicator;
-    this.autoscroll();
+    this.autoscroll(this.scrollOnNextRender);
+    this.scrollOnNextRender = false;
   }
 
   renderRecord(m, noFork) {
@@ -337,7 +343,7 @@ class PiModelPicker extends HTMLElement {
     const popoverId = this._popoverId ||= `model-popover-${Math.random().toString(36).slice(2, 9)}`;
     this.innerHTML = `<div class="model-picker">
       <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-controls="${popoverId}" aria-expanded="${this.open}"
-        title="Choose model">${esc(chipLabel)} <span class="model-chip-caret">▾</span></button>
+        title="Choose model">${esc(chipLabel)}</button>
       ${this.open ? `<div id="${popoverId}" class="model-popover" role="dialog" aria-label="Choose model">
         <div class="model-popover-head">Choose model</div>
         <div class="model-list" role="listbox">${automatic}${unavailable}${options || empty}</div>
@@ -394,7 +400,7 @@ class PiThinkingPicker extends HTMLElement {
     if (!info?.levels?.length) { this.innerHTML = ""; return; }
     const level = info.level || "off";
     this.innerHTML = `<div class="thinking-picker">
-      <button class="thinking-chip" data-thinking-toggle aria-haspopup="listbox" aria-expanded="${this.open}" title="Thinking effort">Think: ${esc(level)} <span class="model-chip-caret">▾</span></button>
+      <button class="thinking-chip" data-thinking-toggle aria-haspopup="listbox" aria-expanded="${this.open}" title="Thinking effort">${esc(level)}</button>
       ${this.open ? `<div class="thinking-popover" role="listbox" aria-label="Thinking effort">
         <div class="thinking-popover-head">Thinking effort</div>
         ${info.levels.map(item => `<button class="thinking-option ${item === level ? "current" : ""}" role="option" aria-selected="${item === level}" data-thinking-level="${esc(item)}">${esc(item)}${item === level ? " <span>✓</span>" : ""}</button>`).join("")}
