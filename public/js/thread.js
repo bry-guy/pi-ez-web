@@ -347,6 +347,58 @@ class PiModelPicker extends HTMLElement {
   }
 }
 
+/* ---------------- thinking effort ---------------- */
+class PiThinkingPicker extends HTMLElement {
+  connectedCallback() {
+    this.open = false;
+    this.info = null;
+    this.addEventListener("click", e => {
+      const toggle = e.target.closest("[data-thinking-toggle]");
+      if (toggle) { this.open = !this.open; this.render(); return; }
+      const option = e.target.closest("[data-thinking-level]");
+      if (option) void this.choose(option.dataset.thinkingLevel);
+    });
+    this.unsub = store.subscribe(w => { if (w === "state") this.sync(); });
+    this.sync();
+  }
+  disconnectedCallback() { this.unsub?.(); }
+  async sync() {
+    const id = store.activeKey();
+    if (!id || id === this.sessionId) return;
+    this.sessionId = id;
+    this.open = false;
+    this.info = null;
+    this.render();
+    try {
+      const info = await api.thinking(id);
+      if (id !== store.activeKey()) return;
+      this.info = Array.isArray(info.levels) ? info : null;
+      this.render();
+    } catch { /* unavailable models simply do not expose this control */ }
+  }
+  async choose(level) {
+    const id = store.activeKey();
+    if (!id) return;
+    try {
+      this.info = await api.setThinking(id, level);
+      this.open = false;
+      this.render();
+    } catch (err) { store.setError(`Thinking effort change failed: ${err.message || err}`); }
+  }
+  render() {
+    const info = this.info;
+    if (!info?.supported || !info.levels?.length) { this.innerHTML = ""; return; }
+    const level = info.level || "off";
+    this.innerHTML = `<div class="thinking-picker">
+      <button class="thinking-chip" data-thinking-toggle aria-haspopup="listbox" aria-expanded="${this.open}" title="Thinking effort">Think: ${esc(level)} <span class="model-chip-caret">▾</span></button>
+      ${this.open ? `<div class="thinking-popover" role="listbox" aria-label="Thinking effort">
+        <div class="thinking-popover-head">Thinking effort</div>
+        ${info.levels.map(item => `<button class="thinking-option ${item === level ? "current" : ""}" role="option" aria-selected="${item === level}" data-thinking-level="${esc(item)}">${esc(item)}${item === level ? " <span>✓</span>" : ""}</button>`).join("")}
+      </div>` : ""}
+    </div>`;
+  }
+}
+
 /* ---------------- composer ---------------- */
 class PiComposer extends HTMLElement {
   connectedCallback() {
@@ -355,9 +407,17 @@ class PiComposer extends HTMLElement {
       <div class="composer-attachments"></div>
       <textarea rows="2"></textarea>
       <div class="composer-foot">
-        <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
-        <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images">＋</button>
+        <div class="attachment-picker">
+          <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+          <input class="camera-input" type="file" accept="image/*" capture="environment" hidden>
+          <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images" aria-expanded="false">＋</button>
+          <div class="attachment-menu hidden" role="menu">
+            <button type="button" data-attachment-source="files" role="menuitem">Choose images</button>
+            <button type="button" data-attachment-source="camera" role="menuitem">Take photo</button>
+          </div>
+        </div>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
+        <pi-thinking-picker></pi-thinking-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
         <button class="send-btn" type="button" title="Send" aria-label="Send message">↑</button>
       </div>
@@ -366,7 +426,9 @@ class PiComposer extends HTMLElement {
     this.attachments = [];
     this.attachmentsEl = this.querySelector(".composer-attachments");
     this.imageInput = this.querySelector(".image-input");
+    this.cameraInput = this.querySelector(".camera-input");
     this.attachBtn = this.querySelector(".attach-btn");
+    this.attachmentMenu = this.querySelector(".attachment-menu");
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
@@ -374,16 +436,26 @@ class PiComposer extends HTMLElement {
       store.state.draft = this.ta.value;
       void this.syncCommands();
     });
-    this.attachBtn.addEventListener("click", () => this.imageInput.click());
-    this.imageInput.addEventListener("change", () => {
-      void this.addFiles(this.imageInput.files);
-      this.imageInput.value = "";
+    this.attachBtn.addEventListener("click", () => {
+      const open = this.attachmentMenu.classList.toggle("hidden");
+      this.attachBtn.setAttribute("aria-expanded", String(!open));
+    });
+    for (const input of [this.imageInput, this.cameraInput]) input.addEventListener("change", () => {
+      void this.addFiles(input.files);
+      input.value = "";
     });
     this.ta.addEventListener("paste", e => {
       const files = [...(e.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
       if (files.length) { e.preventDefault(); void this.addFiles(files); }
     });
     this.addEventListener("click", e => {
+      const source = e.target.closest("[data-attachment-source]");
+      if (source) {
+        this.attachmentMenu.classList.add("hidden");
+        this.attachBtn.setAttribute("aria-expanded", "false");
+        (source.dataset.attachmentSource === "camera" ? this.cameraInput : this.imageInput).click();
+        return;
+      }
       const removeImage = e.target.closest("[data-remove-image]");
       if (removeImage) {
         this.attachments.splice(Number(removeImage.dataset.removeImage), 1);
@@ -576,4 +648,5 @@ class PiComposer extends HTMLElement {
 
 customElements.define("pi-thread", PiThread);
 customElements.define("pi-model-picker", PiModelPicker);
+customElements.define("pi-thinking-picker", PiThinkingPicker);
 customElements.define("pi-composer", PiComposer);

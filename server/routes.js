@@ -448,6 +448,12 @@ export function buildApi(sup) {
     }
   });
 
+  api.get("/sessions/:id/thinking", async c => c.json(await sup.thinking(c.req.param("id"))));
+  api.post("/sessions/:id/thinking", async c => {
+    const { level } = await c.req.json();
+    return c.json(await sup.setThinking(c.req.param("id"), level));
+  });
+
   api.post("/sessions/:id/name", async c => {
     const { name } = await c.req.json();
     await sup.setName(c.req.param("id"), name);

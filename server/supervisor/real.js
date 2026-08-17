@@ -538,6 +538,23 @@ export class RealSupervisor {
     this.hub.emit(id, "session_meta", { model: modelRef });
   }
 
+  async thinking(id) {
+    const st = await this._attachById(id);
+    return {
+      level: st.session.thinkingLevel,
+      levels: st.session.getAvailableThinkingLevels(),
+      supported: st.session.supportsThinking(),
+    };
+  }
+
+  async setThinking(id, level) {
+    const st = await this._attachById(id);
+    st.session.setThinkingLevel(String(level || "off"));
+    const result = await this.thinking(id);
+    this.hub.emit(id, "session_meta", { thinkingLevel: result.level });
+    return result;
+  }
+
   async setName(id, name) {
     const normalized = String(name || "").trim();
     const st = this.live.get(id);
