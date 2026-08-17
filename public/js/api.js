@@ -198,7 +198,7 @@ function stopRecovery() {
   if (recoveryTimer) clearTimeout(recoveryTimer);
   recoveryTimer = null;
   recoveryAttempt = 0;
-  store.set({ reconnecting: false });
+  store.set({ reconnecting: false, offline: false });
 }
 
 function scheduleRecovery(delay) {
@@ -210,7 +210,7 @@ function scheduleRecovery(delay) {
 }
 
 async function recoverConnection() {
-  if (reloadIssued || recoveryInFlight) return;
+  if (reloadIssued || recoveryInFlight || globalThis.navigator?.onLine === false) return;
   recoveryInFlight = true;
   try {
     const health = await api.health();
@@ -232,9 +232,25 @@ async function recoverConnection() {
 }
 
 function startRecovery() {
+  if (globalThis.navigator?.onLine === false) {
+    store.set({ offline: true, reconnecting: false });
+    return;
+  }
   if (recoveryTimer || recoveryInFlight || reloadIssued) return;
   store.set({ reconnecting: true });
   scheduleRecovery(250);
+}
+
+export function resumeConnection() {
+  if (globalThis.navigator?.onLine === false) {
+    store.set({ offline: true, reconnecting: false });
+    return;
+  }
+  store.set({ offline: false });
+  connectSSE();
+  const id = store.activeKey();
+  if (id) void openTranscript(id);
+  void recoverConnection();
 }
 
 export function connectSSE() {
@@ -261,7 +277,7 @@ export function connectSSE() {
     // EventSource reconnects by itself, while the health poller handles a
     // rollout that replaces this process and eventually reloads on a new build.
     const id = store.activeKey();
-    if (id) void openTranscript(id);
+    if (globalThis.navigator?.onLine !== false && id) void openTranscript(id);
     startRecovery();
   };
 }

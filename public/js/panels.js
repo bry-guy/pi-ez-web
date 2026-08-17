@@ -715,7 +715,10 @@ class PiApp extends HTMLElement {
         </main>
         <pi-files></pi-files>
         <div class="drawer-scrim hidden"></div>
-        <div class="connection-status hidden" data-connection-status>Reconnecting to pi-ez-web…</div>
+        <div class="connection-status hidden" data-connection-status></div>
+        <div class="update-prompt hidden" data-update-prompt>
+          <span>New pi update ready.</span><button class="update-btn" data-act="update">Reload</button>
+        </div>
         <pi-repo-picker></pi-repo-picker>
         <pi-confirm></pi-confirm>
         <div class="reload-prompt hidden" data-reload-prompt>
@@ -726,6 +729,12 @@ class PiApp extends HTMLElement {
     this.scrim.addEventListener("click", () => store.set({ drawerOpen: false }));
     this.addEventListener("click", e => {
       if (e.target.closest("[data-act='reload']")) location.reload();
+      if (e.target.closest("[data-act='update']")) {
+        e.preventDefault();
+        store.set({ updateAvailable: false });
+        if (typeof window.__piApplyUpdate === "function") window.__piApplyUpdate();
+        else location.reload();
+      }
     });
     this.addEventListener("toggle-files", () => {
       const open = !store.state.filesOpen;
@@ -783,7 +792,11 @@ class PiApp extends HTMLElement {
     for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
     const connection = this.querySelector("[data-connection-status]");
-    connection.classList.toggle("hidden", !store.state.reconnecting || !!store.state.fatalError);
+    const offline = store.state.offline;
+    connection.textContent = offline ? "Offline — reconnecting when network returns…" : "Reconnecting to pi-ez-web…";
+    connection.classList.toggle("hidden", (!offline && !store.state.reconnecting) || !!store.state.fatalError);
+    const update = this.querySelector("[data-update-prompt]");
+    update.classList.toggle("hidden", !store.state.updateAvailable || !!store.state.fatalError);
     const prompt = this.querySelector("[data-reload-prompt]");
     prompt.classList.toggle("hidden", !store.state.fatalError);
     if (store.state.fatalError) this.querySelector("[data-reload-message]").textContent = store.state.fatalError;

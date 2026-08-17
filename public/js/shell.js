@@ -3,6 +3,16 @@ import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
+const ACTIVE_SESSION_STORAGE_KEY = "pi-ez-web:active-session";
+function saveActiveSession(value) {
+  try { globalThis.localStorage?.setItem(ACTIVE_SESSION_STORAGE_KEY, JSON.stringify(value)); } catch { /* storage is optional */ }
+}
+function savedActiveSession() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(ACTIVE_SESSION_STORAGE_KEY) || "null");
+    return value && typeof value === "object" ? value : null;
+  } catch { return null; }
+}
 const icon = name => {
   const paths = {
     settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
@@ -20,6 +30,7 @@ export function selectSession(projectId, sessionId) {
     filesOpen: store.state.filesOpen, files: [], fileError: null, hookResult: null,
     branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
+  saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
   openTranscript(sessionId);
 }
@@ -30,8 +41,27 @@ export function selectChat(chatId) {
     branchMenuOpen: false, filesOpen: false, files: [], fileError: null, hookResult: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
+  saveActiveSession({ kind: "chat", id: chatId });
   store.markRead(chatId);
   openTranscript(chatId);
+}
+
+export function restoreLastSelection() {
+  const saved = savedActiveSession();
+  if (!saved?.id) return false;
+  if (saved.kind === "chat" && store.state.chats.some(chat => chat.id === saved.id)) {
+    selectChat(saved.id);
+    return true;
+  }
+  if (saved.kind === "session") {
+    const project = store.state.projects.find(candidate => candidate.id === saved.projectId && findNode(candidate.sessions, saved.id));
+    if (project) {
+      store.state.openTree[project.id] = true;
+      selectSession(project.id, saved.id);
+      return true;
+    }
+  }
+  return false;
 }
 export async function newChat() {
   const { id } = await api.newChat();

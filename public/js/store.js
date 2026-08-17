@@ -87,6 +87,8 @@ export const store = {
     mode: "real",
     buildId: null,
     reconnecting: false,
+    offline: globalThis.navigator?.onLine === false,
+    updateAvailable: false,
     providers: [],
     repositorySources: null,
     settings: null,

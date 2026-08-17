@@ -41,6 +41,7 @@ body {
   margin: 0; background: var(--bg); color: var(--text); overflow-x: hidden;
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--orange); text-decoration: underline; }
@@ -639,8 +640,14 @@ aside.files {
   }
   .col-pad, .composer-pad { width: auto; max-width: none; margin-inline: 0; padding-inline: 16px; }
   .col-pad { padding-top: 18px; padding-bottom: 8px; }
-  .composer-pad { padding-top: 10px; padding-bottom: 14px; }
-  header.bar { padding-inline: 12px; z-index: 40; }
+  .composer-pad { padding-top: 10px; padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+  header.bar {
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-bottom: 12px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    z-index: 40;
+  }
   .hamburger { position: relative; z-index: 41; }
   .bar-main { min-width: 0; }
   .bar-sub { flex-wrap: wrap; width: 100%; }
@@ -707,11 +714,18 @@ aside.files {
 .confirm-cta.danger { background: var(--danger); }
 .confirm-cta:hover { filter: brightness(1.12); }
 .connection-status {
-  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 45;
-  padding: 6px 10px; border: 1px solid var(--orange); border-radius: 8px;
+  position: absolute; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 45;
+  padding: 6px 10px; border-radius: 8px;
   background: var(--orange-soft); color: var(--orange); font: 11px var(--mono);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow); text-align: center;
 }
+.update-prompt {
+  position: absolute; top: max(10px, env(safe-area-inset-top)); right: 14px; z-index: 45;
+  display: flex; align-items: center; gap: 9px; padding: 6px 8px 6px 10px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--text); font: 11px var(--mono); box-shadow: var(--shadow);
+}
+.update-btn { border: 0; border-radius: 6px; padding: 5px 8px; background: var(--accent); color: var(--accent-ink); font: inherit; cursor: pointer; }
+.update-btn:hover, .update-btn:focus-visible { filter: brightness(1.1); outline: 0; }
 .reload-prompt {
   position: absolute; inset: 0; z-index: 50; display: grid; place-items: center;
   background: oklch(0.15 0.02 255 / .92); padding: 22px;
