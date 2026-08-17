@@ -34,6 +34,13 @@ export function createApp() {
     return c.json({ error: "internal_error", requestId }, 500);
   });
   app.route("/api", buildApi(sup));
+  // PWA clients must always revalidate the shell and service worker after a
+  // rollout. The service worker supplies offline fallback itself; HTTP caches
+  // should never pin an older UI or worker in Safari.
+  app.use("/*", async (c, next) => {
+    c.header("cache-control", "no-cache");
+    await next();
+  });
   const root = path.join(here, "..");
   // Expose only the two browser assets needed for rich, sanitized Markdown;
   // do not make node_modules generally web-accessible.
