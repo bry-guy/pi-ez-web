@@ -3,6 +3,24 @@ import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
+const ACTIVE_SESSION_STORAGE_KEY = "pi-ez-web:active-session";
+function saveActiveSession(value) {
+  try { globalThis.localStorage?.setItem(ACTIVE_SESSION_STORAGE_KEY, JSON.stringify(value)); } catch { /* storage is optional */ }
+}
+function savedActiveSession() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(ACTIVE_SESSION_STORAGE_KEY) || "null");
+    return value && typeof value === "object" ? value : null;
+  } catch { return null; }
+}
+const icon = name => {
+  const paths = {
+    settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
+    chevronLeft: '<path d="m12.5 4-6 6 6 6"/>',
+    chevronRight: '<path d="m7.5 4 6 6-6 6"/>',
+  };
+  return `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
+};
 
 export function selectSession(projectId, sessionId) {
   const project = store.state.projects.find(p => p.id === projectId);
@@ -12,6 +30,7 @@ export function selectSession(projectId, sessionId) {
     filesOpen: store.state.filesOpen, files: [], fileError: null, hookResult: null,
     branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
+  saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
   openTranscript(sessionId);
 }
@@ -22,8 +41,27 @@ export function selectChat(chatId) {
     branchMenuOpen: false, filesOpen: false, files: [], fileError: null, hookResult: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
+  saveActiveSession({ kind: "chat", id: chatId });
   store.markRead(chatId);
   openTranscript(chatId);
+}
+
+export function restoreLastSelection() {
+  const saved = savedActiveSession();
+  if (!saved?.id) return false;
+  if (saved.kind === "chat" && store.state.chats.some(chat => chat.id === saved.id)) {
+    selectChat(saved.id);
+    return true;
+  }
+  if (saved.kind === "session") {
+    const project = store.state.projects.find(candidate => candidate.id === saved.projectId && findNode(candidate.sessions, saved.id));
+    if (project) {
+      store.state.openTree[project.id] = true;
+      selectSession(project.id, saved.id);
+      return true;
+    }
+  }
+  return false;
 }
 export async function newChat() {
   const { id } = await api.newChat();
@@ -58,9 +96,20 @@ function findNode(nodes, id) {
   }
   return null;
 }
+function fuzzyMatch(value, query) {
+  if (!query) return true;
+  let i = 0;
+  const text = String(value || "").toLowerCase();
+  for (const char of query.toLowerCase()) {
+    i = text.indexOf(char, i);
+    if (i < 0) return false;
+    i++;
+  }
+  return true;
+}
 function nodeMatches(n, q) {
   if (!q) return true;
-  return n.title.toLowerCase().includes(q) || (n.children || []).some(child => nodeMatches(child, q));
+  return fuzzyMatch(n.title, q) || (n.children || []).some(child => nodeMatches(child, q));
 }
 
 /* ---------------- sidebar ---------------- */
@@ -101,12 +150,17 @@ class PiSidebar extends HTMLElement {
       e.stopPropagation();
       store.set(mobile() ? { drawerOpen: false } : { railOpen: !store.state.railOpen });
     }
+    else if (act === "search") {
+      e.preventDefault();
+      e.stopPropagation();
+      store.set({ railOpen: true });
+      requestAnimationFrame(() => this.querySelector(".rail-search")?.focus());
+    }
     else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
     else if (act === "new-project-session") {
       e.stopPropagation();
       newProjectSession(t.dataset.id).catch(err => store.setError(`Could not create session: ${err.error || err.message || err}`));
     } else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
-    else if (act === "projects") store.set({ view: "projects", drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
     else if (act === "project-row") {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
@@ -125,7 +179,7 @@ class PiSidebar extends HTMLElement {
 
   sessionRows(p, nodes, depth, q, out, forceAll = false) {
     for (const n of nodes) {
-      const direct = !q || n.title.toLowerCase().includes(q);
+      const direct = !q || fuzzyMatch(n.title, q);
       const descendant = q && (n.children || []).some(child => nodeMatches(child, q));
       if (q && !forceAll && !direct && !descendant) continue;
       const kids = n.children.length > 0;
@@ -157,9 +211,9 @@ class PiSidebar extends HTMLElement {
           <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
           <div class="mini-gap"></div>
           <button class="mini-btn cta-plus" data-act="new-chat" title="New chat">+</button>
-          <button class="mini-btn quiet" data-act="projects" title="Projects">▤</button>
+          <button class="mini-btn quiet" data-act="search" title="Search sessions" aria-label="Search sessions">⌕</button>
           <div class="mini-flex"></div>
-          <button class="mini-btn quiet" data-act="settings" title="Settings">⚙</button>
+          <button class="mini-btn quiet" data-act="settings" title="Settings">${icon("settings")}</button>
         </aside>`;
         return;
       }
@@ -167,11 +221,9 @@ class PiSidebar extends HTMLElement {
       this.innerHTML = `<aside class="rail">
         <div class="rail-head">
           <div class="rail-logo">π</div><div class="rail-word">pi</div>
-          <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">«</button>
         </div>
         <div class="rail-actions">
-          <button class="rail-nav" data-act="projects">Projects</button>
-          <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
+          <input class="rail-search" placeholder="Filter chats and sessions" aria-label="Filter chats and sessions">
         </div>
         <div class="rail-scroll">
           <div class="sec-head"><div class="sec-label">Projects</div>
@@ -183,7 +235,7 @@ class PiSidebar extends HTMLElement {
         </div>
         <div class="rail-foot">
           <div class="avatar">π</div><div class="rail-user">pi-web</div>
-          <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">⚙</button>
+          <button class="ghost-btn" data-act="settings" title="Settings" style="font-size:13px">${icon("settings")}</button>
         </div>
       </aside>`;
     }
@@ -200,7 +252,7 @@ class PiSidebar extends HTMLElement {
     const q = s.query.trim().toLowerCase();
     const projRows = [];
     for (const p of s.projects) {
-      const nameMatch = !q || p.name.toLowerCase().includes(q);
+      const nameMatch = !q || fuzzyMatch(p.name, q);
       if (q && !nameMatch && !p.sessions.some(n => nodeMatches(n, q))) continue;
       const open = !!s.openTree[p.id] || !!q;
       const active = s.view === "chat" && s.projectId === p.id && !s.chatId;
@@ -214,7 +266,7 @@ class PiSidebar extends HTMLElement {
       if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, nameMatch);
     }
     const chatRows = s.chats
-      .filter(cRow => !q || cRow.title.toLowerCase().includes(q))
+      .filter(cRow => !q || fuzzyMatch(cRow.title, q))
       .map(cRow => {
         const streaming = cRow.streaming || store.transcript(cRow.id).streaming;
         const unread = !!s.unread[cRow.id];
@@ -262,7 +314,13 @@ class PiHeader extends HTMLElement {
     const t = e.target.closest("[data-act]");
     if (!t) return;
     const act = t.dataset.act;
-    if (act === "drawer") store.set({ drawerOpen: true });
+    if (act === "sidebar-toggle") {
+      e.preventDefault();
+      e.stopPropagation();
+      store.set(mobile()
+        ? { drawerOpen: !store.state.drawerOpen }
+        : { railOpen: !store.state.railOpen });
+    }
     else if (act === "branch-menu") store.set(s => ({ branchMenuOpen: !s.branchMenuOpen, branchError: null }));
     else if (act === "close-branch-menu") store.set({ branchMenuOpen: false, branchError: null });
     else if (act === "files") this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
@@ -334,7 +392,7 @@ class PiHeader extends HTMLElement {
     const inProject = store.inProject() && p;
     const chat = s.chats.find(x => x.id === s.chatId);
     const node = inProject ? store.findSession(s.sessionId) : null;
-    const title = s.view === "projects" ? "Projects" : s.view === "settings" ? "Settings"
+    const title = s.view === "settings" ? "Settings"
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const branch = inProject ? this.sessionBranch() : null;
     const streaming = store.transcript().streaming;
@@ -358,14 +416,16 @@ class PiHeader extends HTMLElement {
     const pop = inProject && s.branchMenuOpen ? this.popover(p, branch) : "";
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
-        style="${s.filesOpen ? "color:var(--text)" : ""}">${s.filesOpen ? "»" : "«"}</button>` : "";
+        style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
 
     const hookResult = store.state.hookResult;
     const hookPanel = hookResult ? `<div class="hook-result ${hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(hookResult.hook || "hook")}</strong><span>exit ${esc(hookResult.exit)}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${hookResult.stdout ? `<pre>${esc(hookResult.stdout)}</pre>` : ""}${hookResult.stderr ? `<pre class="hook-stderr">${esc(hookResult.stderr)}</pre>` : ""}</div>` : "";
+    const sidebarOpen = mobile() ? s.drawerOpen : s.railOpen;
+    const sidebarControl = mobile()
+      ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
+      : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     this.innerHTML = `<header class="bar">
-      ${mobile() ? `<button class="hamburger" data-act="drawer" title="Menu">
-        <svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>
-      </button>` : ""}
+      <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main">
         <div class="bar-title">${esc(title)}</div>
         ${branchChip}

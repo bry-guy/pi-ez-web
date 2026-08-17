@@ -119,6 +119,21 @@ workspaces under `~/.pi-web-ui/chats/<scratch-id>` and scratch directories are
 retained for manual cleanup. The model picker is backed by Pi's available model
 runtime.
 
+### iOS / PWA
+
+The app includes a standalone web-app manifest, iOS icon metadata, a versioned
+app-shell service worker, safe-area spacing, and reconnect handling for apps
+that are suspended and resumed by iOS. Serve it over HTTPS, open the URL in
+Safari, then choose **Share → Add to Home Screen**. Launching the new Home
+Screen icon opens pi-ez-web as a standalone app.
+
+The service worker caches only the static app shell. API requests, transcripts,
+SSE, provider authentication, and GitHub flows are never cached. If the device
+loses connectivity, the app shows an offline state and catches up from the
+server after it returns online or comes back to the foreground; agent turns
+continue on the server. A new shell build displays an update prompt before
+reloading.
+
 ## Trust boundary
 
 v1 has no authentication and no sandbox: the agent can run shell commands as the service user. Bind it only inside a trusted LAN or tailnet/VPN. Never port-forward it or expose it directly to the public internet.

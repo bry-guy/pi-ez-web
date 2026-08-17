@@ -3,19 +3,12 @@ import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
 import { esc, selectSession } from "./shell.js";
 
-const PI_ANIMS = [
-  "piImplode 4.6s cubic-bezier(.7,0,.3,1) infinite",
-  "piOrbit 4.6s cubic-bezier(.65,0,.35,1) infinite",
-  "piBreathe 4.6s ease-in-out infinite",
-];
-
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => {
       if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
-      else if (w === "anim") this.swapAnim();
     });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
@@ -69,26 +62,39 @@ class PiThread extends HTMLElement {
     this.autoscroll();
   }
 
-  swapAnim() {
-    const el = this.querySelector(".pi-think span");
-    if (el) el.style.animation = PI_ANIMS[store.state.animIdx % PI_ANIMS.length];
-  }
-
-  autoscroll() {
+  autoscroll(force = false) {
     const sc = this.closest(".scrollable") || this;
-    if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
+    if (force || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
   }
 
   render() {
+    const activeKey = store.activeKey();
+    if (activeKey !== this.renderedKey) {
+      this.renderedKey = activeKey;
+      this.scrollOnNextRender = true;
+    }
     const t = store.transcript();
     const noFork = !!store.state.chatId;
-    if (!store.activeKey()) { this.innerHTML = ""; return; }
+    if (!activeKey) { this.innerHTML = ""; return; }
+    const liveAssistant = [...t.records].reverse().find(record => record.role === "assistant" && record.streaming);
+    // There can be a real gap between turn_start and message_start, and again
+    // between an assistant message/tool call and the next assistant message.
+    // Keep the thinking indicator tied to the turn rather than to the presence
+    // of an empty assistant record so those gaps remain visible.
+    const thinking = t.streaming && !liveAssistant;
     if (t.records.length === 0) {
-      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
+      this.innerHTML = thinking
+        ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
+        : `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    this.innerHTML = t.records.map(m => this.renderRecord(m, noFork)).join("");
-    this.autoscroll();
+    const records = t.records.map(m => this.renderRecord(m, noFork)).join("");
+    const indicator = thinking
+      ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
+      : "";
+    this.innerHTML = records + indicator;
+    this.autoscroll(this.scrollOnNextRender);
+    this.scrollOnNextRender = false;
   }
 
   renderRecord(m, noFork) {
@@ -98,14 +104,14 @@ class PiThread extends HTMLElement {
           <button class="fork-btn" data-fork="${esc(m.id)}" title="Fork">
             <span class="sigil">⑂</span><span class="word">fork</span>
           </button>
-          <div class="bubble">${esc(m.text)}</div>
+          <div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>
         </div></div>`;
     }
     if (m.role === "assistant") {
       const thinking = m.streaming && !m.text;
       const caret = m.streaming && m.text;
       if (thinking) {
-        return `<div class="msg"><div class="pi-think"><span style="animation:${PI_ANIMS[store.state.animIdx % PI_ANIMS.length]}">π</span></div></div>`;
+        return `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`;
       }
       return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${caret ? `<span class="caret-bar"></span>` : ""}</div></div>`;
     }
@@ -337,7 +343,7 @@ class PiModelPicker extends HTMLElement {
     const popoverId = this._popoverId ||= `model-popover-${Math.random().toString(36).slice(2, 9)}`;
     this.innerHTML = `<div class="model-picker">
       <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-controls="${popoverId}" aria-expanded="${this.open}"
-        title="Choose model">${esc(chipLabel)} <span class="model-chip-caret">▾</span></button>
+        title="Choose model">${esc(chipLabel)}</button>
       ${this.open ? `<div id="${popoverId}" class="model-popover" role="dialog" aria-label="Choose model">
         <div class="model-popover-head">Choose model</div>
         <div class="model-list" role="listbox">${automatic}${unavailable}${options || empty}</div>
@@ -347,21 +353,152 @@ class PiModelPicker extends HTMLElement {
   }
 }
 
+/* ---------------- context window ---------------- */
+const tokenLabel = value => {
+  const tokens = Number(value);
+  if (!Number.isFinite(tokens)) return "—";
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(Math.round(tokens));
+};
+class PiContextMeter extends HTMLElement {
+  connectedCallback() {
+    this.open = false;
+    this.info = null;
+    this.unsub = store.subscribe(w => {
+      if (w === "state" || w === "transcript") this.sync();
+    });
+    this.addEventListener("click", e => {
+      if (e.target.closest("[data-context-toggle]")) {
+        this.open = !this.open;
+        this.render();
+      }
+    });
+    this.sync();
+  }
+  disconnectedCallback() { this.unsub?.(); }
+  async sync() {
+    const id = store.activeKey();
+    const transcript = store.transcript(id);
+    const lastAssistant = [...transcript.records].reverse().find(record => record.role === "assistant");
+    const key = `${id || ""}:${store.state.model || ""}:${transcript.streaming}:${lastAssistant?.id || ""}:${lastAssistant?.text?.length || 0}`;
+    if (!id || key === this.contextKey) return;
+    this.contextKey = key;
+    try {
+      const info = await api.context(id);
+      if (id !== store.activeKey()) return;
+      this.info = info;
+      this.render();
+    } catch {
+      if (id === store.activeKey()) { this.info = null; this.render(); }
+    }
+  }
+  render() {
+    const info = this.info;
+    if (!store.activeKey()) { this.innerHTML = ""; return; }
+    const percent = Number.isFinite(info?.percent) ? info.percent : null;
+    const tone = percent == null ? "unknown" : percent >= 85 ? "danger" : percent >= 70 ? "warn" : "ok";
+    const label = percent == null ? "Context unavailable" : `Context ${tokenLabel(info.used)} / ${tokenLabel(info.window)} · ${percent}%`;
+    const details = info && percent != null ? `<div class="context-popover" role="status">
+      <strong>Context window</strong>
+      <span>${tokenLabel(info.used)} used · ${tokenLabel(info.remaining)} remaining</span>
+      <span>Input ${tokenLabel(info.input)} · cache ${tokenLabel((info.cacheRead || 0) + (info.cacheWrite || 0))}</span>
+      ${info.model ? `<span>${esc(info.model)}</span>` : ""}
+    </div>` : "";
+    this.innerHTML = `<div class="context-meter ${tone}">
+      <button data-context-toggle aria-expanded="${this.open}" title="Context window usage">
+        <span>${label}</span>${percent != null ? `<i><b style="width:${percent}%"></b></i>` : ""}
+      </button>
+      ${this.open ? details : ""}
+    </div>`;
+  }
+}
+
+/* ---------------- thinking effort ---------------- */
+class PiThinkingPicker extends HTMLElement {
+  connectedCallback() {
+    this.open = false;
+    this.info = null;
+    this.addEventListener("click", e => {
+      const toggle = e.target.closest("[data-thinking-toggle]");
+      if (toggle) { this.open = !this.open; this.render(); return; }
+      const option = e.target.closest("[data-thinking-level]");
+      if (option) void this.choose(option.dataset.thinkingLevel);
+    });
+    this.unsub = store.subscribe(w => { if (w === "state") this.sync(); });
+    this.sync();
+  }
+  disconnectedCallback() { this.unsub?.(); }
+  async sync() {
+    const id = store.activeKey();
+    if (!id || id === this.sessionId) return;
+    this.sessionId = id;
+    this.open = false;
+    // Keep the effort control present even when a provider does not advertise
+    // reasoning metadata. Pi will clamp unsupported choices server-side.
+    this.info = { level: "medium", levels: ["off", "low", "medium", "high"], supported: true };
+    this.render();
+    try {
+      const info = await api.thinking(id);
+      if (id !== store.activeKey() || !Array.isArray(info.levels)) return;
+      this.info = info.levels.length > 1
+        ? info
+        : { ...this.info, level: info.level || this.info.level };
+      this.render();
+    } catch { /* retain the available fallback while a server is restarting */ }
+  }
+  async choose(level) {
+    const id = store.activeKey();
+    if (!id) return;
+    try {
+      this.info = await api.setThinking(id, level);
+      this.open = false;
+      this.render();
+    } catch (err) { store.setError(`Thinking effort change failed: ${err.message || err}`); }
+  }
+  render() {
+    const info = this.info;
+    if (!info?.levels?.length) { this.innerHTML = ""; return; }
+    const level = info.level || "off";
+    this.innerHTML = `<div class="thinking-picker">
+      <button class="thinking-chip" data-thinking-toggle aria-haspopup="listbox" aria-expanded="${this.open}" title="Thinking effort">${esc(level)}</button>
+      ${this.open ? `<div class="thinking-popover" role="listbox" aria-label="Thinking effort">
+        <div class="thinking-popover-head">Thinking effort</div>
+        ${info.levels.map(item => `<button class="thinking-option ${item === level ? "current" : ""}" role="option" aria-selected="${item === level}" data-thinking-level="${esc(item)}">${esc(item)}${item === level ? " <span>✓</span>" : ""}</button>`).join("")}
+      </div>` : ""}
+    </div>`;
+  }
+}
+
 /* ---------------- composer ---------------- */
 class PiComposer extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<div class="composer-outer"><div class="composer-pad"><div class="composer">
       <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
+      <div class="composer-attachments"></div>
       <textarea rows="2"></textarea>
+      <pi-context-meter></pi-context-meter>
       <div class="composer-foot">
-        <div class="composer-hint"></div>
+        <div class="attachment-picker">
+          <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+          <input class="camera-input" type="file" accept="image/*" capture="environment" hidden>
+          <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images" aria-expanded="false">＋</button>
+          <div class="attachment-menu hidden" role="menu">
+            <button type="button" data-attachment-source="files" role="menuitem">Choose images</button>
+            <button type="button" data-attachment-source="camera" role="menuitem">Take photo</button>
+          </div>
+        </div>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
+        <pi-thinking-picker></pi-thinking-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
-        <button class="send-btn" title="Send">↑</button>
+        <button class="send-btn" type="button" title="Send" aria-label="Send message">↑</button>
       </div>
     </div></div></div>`;
     this.ta = this.querySelector("textarea");
-    this.hint = this.querySelector(".composer-hint");
+    this.attachments = [];
+    this.attachmentsEl = this.querySelector(".composer-attachments");
+    this.imageInput = this.querySelector(".image-input");
+    this.cameraInput = this.querySelector(".camera-input");
+    this.attachBtn = this.querySelector(".attach-btn");
+    this.attachmentMenu = this.querySelector(".attachment-menu");
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
@@ -369,14 +506,39 @@ class PiComposer extends HTMLElement {
       store.state.draft = this.ta.value;
       void this.syncCommands();
     });
+    this.attachBtn.addEventListener("click", () => {
+      const open = this.attachmentMenu.classList.toggle("hidden");
+      this.attachBtn.setAttribute("aria-expanded", String(!open));
+    });
+    for (const input of [this.imageInput, this.cameraInput]) input.addEventListener("change", () => {
+      void this.addFiles(input.files);
+      input.value = "";
+    });
+    this.ta.addEventListener("paste", e => {
+      const files = [...(e.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
+      if (files.length) { e.preventDefault(); void this.addFiles(files); }
+    });
     this.addEventListener("click", e => {
+      const source = e.target.closest("[data-attachment-source]");
+      if (source) {
+        this.attachmentMenu.classList.add("hidden");
+        this.attachBtn.setAttribute("aria-expanded", "false");
+        (source.dataset.attachmentSource === "camera" ? this.cameraInput : this.imageInput).click();
+        return;
+      }
+      const removeImage = e.target.closest("[data-remove-image]");
+      if (removeImage) {
+        this.attachments.splice(Number(removeImage.dataset.removeImage), 1);
+        this.renderAttachments();
+        return;
+      }
       const option = e.target.closest("[data-command-index]");
       if (!option) return;
       this.commandIndex = Number(option.dataset.commandIndex);
       this.chooseCommand();
     });
     this.ta.addEventListener("keydown", e => {
-      if (this.commandOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
+      if (this.commandOpen && this.commandQuery() !== null && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
         if (e.key === "Escape") { e.preventDefault(); this.closeCommands(); return; }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
         const query = this.commandQuery();
@@ -389,7 +551,26 @@ class PiComposer extends HTMLElement {
         this.send(e.altKey ? "followUp" : undefined);
       }
     });
-    this.sendBtn.addEventListener("click", () => this.send());
+    this.sendBtn.addEventListener("pointerdown", e => {
+      if (!store.transcript().streaming) return;
+      this.sendHoldTimer = setTimeout(() => {
+        this.sendHoldTimer = null;
+        this.sendHeld = true;
+        void this.send("followUp");
+      }, 500);
+      this.sendBtn.setPointerCapture?.(e.pointerId);
+    });
+    const cancelSendHold = () => {
+      if (this.sendHoldTimer) clearTimeout(this.sendHoldTimer);
+      this.sendHoldTimer = null;
+    };
+    this.sendBtn.addEventListener("pointerup", cancelSendHold);
+    this.sendBtn.addEventListener("pointercancel", cancelSendHold);
+    this.sendBtn.addEventListener("click", e => {
+      e.preventDefault();
+      if (this.sendHeld) { this.sendHeld = false; return; }
+      void this.send();
+    });
     this.stopBtn.addEventListener("click", () => api.stop(store.activeKey()).catch(err => store.setError(`Stop failed: ${err.message || err}`)));
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.sync(); });
     this.commands = [];
@@ -400,7 +581,17 @@ class PiComposer extends HTMLElement {
     this.commandSessionId = null;
     this.sync();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    if (this.sendHoldTimer) clearTimeout(this.sendHoldTimer);
+  }
+
+  scrollToLatest() {
+    const scroller = this.closest("pi-app")?.querySelector(".scrollable");
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+  }
 
   commandQuery() {
     const match = this.ta.value.match(/^\/([^\s]*)$/);
@@ -452,11 +643,32 @@ class PiComposer extends HTMLElement {
     popover.innerHTML = this.commands.map((command, index) => `<button class="command-option ${index === this.commandIndex ? "current" : ""}" data-command-index="${index}"><span>/${esc(command.name)}</span><small>${esc(command.description || command.source || "")}</small></button>`).join("");
   }
 
+  async addFiles(files) {
+    for (const file of [...(files || [])]) {
+      if (!file.type.startsWith("image/") || this.attachments.length >= 4) continue;
+      if (file.size > 6_000_000) { store.setError("Images must be smaller than 6 MB."); continue; }
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      this.attachments.push({ type: "image", data, mimeType: file.type, name: file.name });
+    }
+    this.renderAttachments();
+  }
+  renderAttachments() {
+    this.attachmentsEl.innerHTML = this.attachments.map((image, index) => `<div class="attachment-thumb"><img src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="${esc(image.name || "Attached image")}"><button type="button" data-remove-image="${index}" aria-label="Remove image">×</button></div>`).join("");
+  }
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || !text || store.workspaceBusy(id)) return;
+    if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id)) return;
+    const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
+    this.scrollToLatest();
     this.ta.value = "";
+    this.attachments = [];
+    this.renderAttachments();
     store.state.draft = "";
     if (text.startsWith("!")) {
       try { await api.bang(id, text.slice(1).trim()); }
@@ -473,7 +685,10 @@ class PiComposer extends HTMLElement {
           return;
         }
       } else {
-        await api.message(id, text, mode);
+        await api.message(id, text, mode, images);
+        // The server acknowledges the prompt before the SSE record is guaranteed
+        // to arrive. Refresh once so the sent message is visible immediately.
+        await openTranscript(id);
       }
     } catch (err) {
       if (err.error === "workspace_busy") {
@@ -486,10 +701,14 @@ class PiComposer extends HTMLElement {
       } else if (err.error === "model_required") {
         store.set({ draft: text });
         this.ta.value = text;
+        this.attachments = images;
+        this.renderAttachments();
         store.setError("No model is available. Connect a provider or choose one in Settings.");
       } else {
         store.set({ draft: text });
         this.ta.value = text;
+        this.attachments = images;
+        this.renderAttachments();
         store.setError(`Send failed: ${err.error || err.message || err}`);
       }
     }
@@ -513,20 +732,19 @@ class PiComposer extends HTMLElement {
     else this.renderCommands();
     const error = store.state.error;
     const nQueued = store.state.queued[id] || 0;
-    this.hint.classList.toggle("busy", !!lock);
-    this.hint.classList.toggle("error", !!error);
-    this.hint.textContent = error || (lock
-      ? `branch busy — ${lock.title} is taking a turn`
-      : t.streaming
-        ? (nQueued ? `${nQueued} follow-up${nQueued > 1 ? "s" : ""} queued · Enter steers`
-          : "Enter steers · Alt+Enter queues a follow-up")
-        : "Enter to send · Shift+Enter for a new line");
+    this.ta.classList.toggle("busy", t.streaming || !!lock);
+    this.ta.classList.toggle("error", !!error);
+    this.ta.placeholder = error || (t.streaming
+      ? "Enter a steering message, alt+enter a follow-up…"
+      : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
-    this.sendBtn.classList.toggle("hidden", t.streaming);
+    // Keep Send available during a turn so it can steer or queue a follow-up.
     this.sendBtn.disabled = !!lock;
   }
 }
 
 customElements.define("pi-thread", PiThread);
 customElements.define("pi-model-picker", PiModelPicker);
+customElements.define("pi-context-meter", PiContextMeter);
+customElements.define("pi-thinking-picker", PiThinkingPicker);
 customElements.define("pi-composer", PiComposer);

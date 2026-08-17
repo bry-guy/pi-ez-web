@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pi-ez-web-state-parent
+  labels:
+    app.kubernetes.io/name: pi-ez-web
+    app.kubernetes.io/part-of: selfhost
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: selfhost-bulk-nfs
+  volumeName: pi-web-preview-state-parent-nfs
+  resources:
+    requests:
+      storage: 20Gi

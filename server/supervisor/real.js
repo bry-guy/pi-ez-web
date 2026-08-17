@@ -157,7 +157,7 @@ export class RealSupervisor {
       case "entry_appended": {
         const entry = evt.entry;
         if (entry?.type === "message" && entry.message?.role === "user") {
-          const record = { id: entry.id, role: "user", text: contentText(entry.message.content) };
+          const record = { id: entry.id, role: "user", text: contentText(entry.message.content), images: contentImages(entry.message.content) };
           st.liveRecords.clear();
           st.liveRecords.set(record.id, record);
           st.assistantParent = entry.id;
@@ -216,7 +216,7 @@ export class RealSupervisor {
         const record = st.liveRecords.get(evt.toolCallId);
         if (record) {
           record.out = output;
-          record.meta = [evt.isError ? "error" : "", durationMs ? (durationMs / 1000).toFixed(1) + "s" : ""].filter(Boolean).join(" · ");
+          record.meta = [evt.isError ? "error" : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
         }
         hub.emit(id, "tool_end", {
           toolId: evt.toolCallId, ok: !evt.isError, output,
@@ -264,14 +264,14 @@ export class RealSupervisor {
     return { id };
   }
 
-  async message(id, text, mode) {
+  async message(id, text, mode, images = []) {
     const st = await this._attachById(id);
     if (!isUsableModel(st.session.model)) {
       throw Object.assign(new Error("model_required"), { code: "model_required" });
     }
-    if (mode === "steer" && st.session.isStreaming) return st.session.steer(text);
-    if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text);
-    st.session.prompt(text).catch(err => {
+    if (mode === "steer" && st.session.isStreaming) return st.session.steer(text, images);
+    if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text, images);
+    st.session.prompt(text, { images }).catch(err => {
       if (st.turnEnded) return;
       st.turnEnded = true;
       this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "errored", error: String(err?.message || err) });
@@ -538,6 +538,46 @@ export class RealSupervisor {
     this.hub.emit(id, "session_meta", { model: modelRef });
   }
 
+  async context(id) {
+    const st = await this._attachById(id);
+    const model = st.session.model || {};
+    const window = Number(model.contextWindow) || null;
+    const entry = [...(st.session.sessionManager.getBranch?.() || [])]
+      .reverse().find(item => item?.type === "message" && item.message?.role === "assistant" && item.message?.usage);
+    const usage = entry?.message?.usage;
+    const input = Number(usage?.input) || 0;
+    const cacheRead = Number(usage?.cacheRead) || 0;
+    const cacheWrite = Number(usage?.cacheWrite) || 0;
+    const used = usage ? input + cacheRead + cacheWrite : null;
+    return {
+      window,
+      used,
+      remaining: window && used != null ? Math.max(0, window - used) : null,
+      percent: window && used != null ? Math.min(100, Math.round((used / window) * 100)) : null,
+      input,
+      cacheRead,
+      cacheWrite,
+      model: modelRef(model),
+    };
+  }
+
+  async thinking(id) {
+    const st = await this._attachById(id);
+    return {
+      level: st.session.thinkingLevel,
+      levels: st.session.getAvailableThinkingLevels(),
+      supported: st.session.supportsThinking(),
+    };
+  }
+
+  async setThinking(id, level) {
+    const st = await this._attachById(id);
+    st.session.setThinkingLevel(String(level || "off"));
+    const result = await this.thinking(id);
+    this.hub.emit(id, "session_meta", { thinkingLevel: result.level });
+    return result;
+  }
+
   async setName(id, name) {
     const normalized = String(name || "").trim();
     const st = this.live.get(id);
@@ -621,6 +661,9 @@ function modelRefFromEntries(entries) {
 }
 
 function assistantRecordId(parentId) { return `a:${parentId || "root"}`; }
+export function formatDuration(durationMs) {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+}
 
 function snapshotRecords(st) {
   const records = entriesToRecords(st.session.sessionManager.getBranch?.() || []);
@@ -644,7 +687,12 @@ export function entriesToRecords(entries) {
     if (entry.type !== "message") continue;
     const message = entry.message || {};
     if (message.role === "user") {
-      records.push({ id: entry.id, role: "user", text: contentText(message.content) });
+      records.push({
+        id: entry.id,
+        role: "user",
+        text: contentText(message.content),
+        images: contentImages(message.content),
+      });
       continue;
     }
     if (message.role === "assistant") {
@@ -726,4 +774,11 @@ function contentText(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map(c => c?.text ?? "").join("");
   return "";
+}
+
+function contentImages(content) {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(c => c?.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string")
+    .map(c => ({ type: "image", data: c.data, mimeType: c.mimeType }));
 }

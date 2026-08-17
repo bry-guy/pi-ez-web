@@ -98,7 +98,7 @@ export class MockSupervisor {
 
   async createSession({ cwd, name, model }) {
     const s = {
-      id: newId("s"), cwd, name: name || null, model: model || this.defaultModel(),
+      id: newId("s"), cwd, name: name || null, model: model || this.defaultModel(), thinkingLevel: "medium",
       parentSessionId: null, created: new Date().toISOString(), records: [],
     };
     this._save(s);
@@ -140,6 +140,35 @@ export class MockSupervisor {
     this.hub.emit(id, "session_meta", { model });
   }
 
+  async context(id) {
+    const s = this._load(id);
+    if (!s) throw new Error("no such session");
+    const window = 128_000;
+    // Mock transcripts do not receive provider token usage, so use a stable
+    // approximation solely to exercise the same UI contract.
+    const used = Math.min(window, 2_048 + Math.ceil(JSON.stringify(s.records || []).length / 4));
+    return {
+      window, used, remaining: window - used, percent: Math.round((used / window) * 100),
+      input: used, cacheRead: 0, cacheWrite: 0, model: s.model,
+    };
+  }
+
+  async thinking(id) {
+    const s = this._load(id);
+    if (!s) throw new Error("no such session");
+    return { level: s.thinkingLevel || "medium", levels: ["off", "low", "medium", "high"], supported: true };
+  }
+
+  async setThinking(id, level) {
+    const s = this._load(id);
+    const levels = ["off", "low", "medium", "high"];
+    if (!s || !levels.includes(level)) throw Object.assign(new Error("invalid_thinking_level"), { code: "invalid_thinking_level" });
+    s.thinkingLevel = level;
+    this._save(s);
+    this.hub.emit(id, "session_meta", { thinkingLevel: level });
+    return this.thinking(id);
+  }
+
   async setName(id, name) {
     const s = this._load(id);
     s.name = name;
@@ -153,7 +182,7 @@ export class MockSupervisor {
     const idx = p.records.findIndex(r => r.id === atRecordId);
     const kept = idx > 0 ? p.records.slice(0, idx) : [];
     const s = {
-      id: newId("s"), cwd, name: name || null, model: p.model,
+      id: newId("s"), cwd, name: name || null, model: p.model, thinkingLevel: p.thinkingLevel || "medium",
       parentSessionId: parentId, created: new Date().toISOString(),
       records: kept,
     };

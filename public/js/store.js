@@ -51,7 +51,7 @@ function findSessionPath(nodes, id, path = []) {
 
 export const store = {
   state: {
-    view: "chat",            // chat | projects | settings
+    view: "chat",            // chat | settings
     projectId: null,
     sessionId: null,
     chatId: null,            // non-null => plain chat (no branch chip/files/fork)
@@ -87,6 +87,8 @@ export const store = {
     mode: "real",
     buildId: null,
     reconnecting: false,
+    offline: globalThis.navigator?.onLine === false,
+    updateAvailable: false,
     providers: [],
     repositorySources: null,
     settings: null,

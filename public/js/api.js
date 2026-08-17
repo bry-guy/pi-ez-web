@@ -3,6 +3,9 @@ import { CONTRACT_VERSION, store } from "./store.js";
 const API_CONTRACT_VERSION = 2;
 const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"];
 const JH = { "content-type": "application/json" };
+export function formatDuration(durationMs) {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+}
 
 function validateStateContract(state) {
   const advertised = new Set(Array.isArray(state?.capabilities) ? state.capabilities : []);
@@ -67,12 +70,17 @@ export const api = {
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
-  message: (id, text, mode = "prompt") => fetch(`/api/sessions/${id}/message`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  message: (id, text, mode = "prompt", images = []) => fetch(`/api/sessions/${id}/message`, {
+    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images }),
+  }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
   fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
   branch: (id, branch, create = false, fromRef = undefined) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create, ...(fromRef ? { fromRef } : {}) }) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
+  context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),
+  thinking: id => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`).then(j),
+  setThinking: (id, level) => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`, { method: "POST", headers: JH, body: JSON.stringify({ level }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
   command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
   hook: (id, name) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
@@ -191,7 +199,7 @@ function stopRecovery() {
   if (recoveryTimer) clearTimeout(recoveryTimer);
   recoveryTimer = null;
   recoveryAttempt = 0;
-  store.set({ reconnecting: false });
+  store.set({ reconnecting: false, offline: false });
 }
 
 function scheduleRecovery(delay) {
@@ -203,7 +211,7 @@ function scheduleRecovery(delay) {
 }
 
 async function recoverConnection() {
-  if (reloadIssued || recoveryInFlight) return;
+  if (reloadIssued || recoveryInFlight || globalThis.navigator?.onLine === false) return;
   recoveryInFlight = true;
   try {
     const health = await api.health();
@@ -225,9 +233,25 @@ async function recoverConnection() {
 }
 
 function startRecovery() {
+  if (globalThis.navigator?.onLine === false) {
+    store.set({ offline: true, reconnecting: false });
+    return;
+  }
   if (recoveryTimer || recoveryInFlight || reloadIssued) return;
   store.set({ reconnecting: true });
   scheduleRecovery(250);
+}
+
+export function resumeConnection() {
+  if (globalThis.navigator?.onLine === false) {
+    store.set({ offline: true, reconnecting: false });
+    return;
+  }
+  store.set({ offline: false });
+  connectSSE();
+  const id = store.activeKey();
+  if (id) void openTranscript(id);
+  void recoverConnection();
 }
 
 export function connectSSE() {
@@ -254,7 +278,7 @@ export function connectSSE() {
     // EventSource reconnects by itself, while the health poller handles a
     // rollout that replaces this process and eventually reloads on a new build.
     const id = store.activeKey();
-    if (id) void openTranscript(id);
+    if (globalThis.navigator?.onLine !== false && id) void openTranscript(id);
     startRecovery();
   };
 }
@@ -311,7 +335,7 @@ export function applyEvent(evt, replay = false) {
       const r = byId(recs, evt.toolId);
       if (r) {
         r.out = evt.output || "";
-        r.meta = [evt.meta, evt.durationMs != null ? (evt.durationMs / 1000).toFixed(1) + "s" : ""].filter(Boolean).join(" · ");
+        r.meta = [evt.meta, evt.durationMs != null ? formatDuration(evt.durationMs) : ""].filter(Boolean).join(" · ");
       }
       break;
     }
@@ -331,7 +355,7 @@ export function applyEvent(evt, replay = false) {
       break;
     case "bang_end": {
       const r = byId(recs, evt.bangId);
-      if (r) { r.out = evt.stdout || ""; r.meta = `exit ${evt.exit} · ${(evt.durationMs / 1000).toFixed(1)}s`; }
+      if (r) { r.out = evt.stdout || ""; r.meta = `exit ${evt.exit} · ${formatDuration(evt.durationMs)}`; }
       break;
     }
     case "turn_end": {

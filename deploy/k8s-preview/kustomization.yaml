@@ -5,8 +5,10 @@ namePrefix: preview-
 commonLabels:
   selfhost.bry-guy.net/preview: "true"
 resources:
+  - storage.yaml
   - deployment.yaml
   - service.yaml
 images:
   - name: ghcr.io/bry-guy/pi-ez-web
-    newTag: preview-placeholder
+    newName: ghcr.io/bry-guy/pi-ez-web
+    digest: sha256:140307583606cdbd340abc31e4f5cf43b6b8406720496aa5d608650ea3829ced
