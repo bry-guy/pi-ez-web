@@ -35,16 +35,40 @@ export class RealSupervisor {
     this.paths = new Map();      // sessionId -> session file path
     this.info = new Map();       // sessionId -> discovered SessionInfo metadata
     this.runtime = null;         // shared ModelRuntime for all attached sessions
+    this.runtimePromise = null;   // prevents concurrent runtime initialization
+    this.attachPromises = new Map(); // sessionId -> in-flight attach
+    this.sessionCreateTail = Promise.resolve(); // serialize SDK resource setup
     this.models = null;
     this.modelError = null;
   }
 
   async _modelRuntime() {
-    if (!this.runtime) {
-      const { ModelRuntime } = await SDK();
-      this.runtime = await ModelRuntime.create();
+    if (this.runtime) return this.runtime;
+    if (!this.runtimePromise) {
+      const initializing = (async () => {
+        const { ModelRuntime } = await SDK();
+        const runtime = await ModelRuntime.create();
+        this.runtime = runtime;
+        return runtime;
+      })();
+      this.runtimePromise = initializing;
+      initializing.catch(() => {
+        if (this.runtimePromise === initializing) this.runtimePromise = null;
+      });
     }
-    return this.runtime;
+    return this.runtimePromise;
+  }
+
+  async _withSessionCreateLock(task) {
+    const previous = this.sessionCreateTail;
+    let release;
+    this.sessionCreateTail = new Promise(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
   }
 
   async listSessions(cwd) {
@@ -128,7 +152,7 @@ export class RealSupervisor {
     const model = await this._resolveModel(modelRef, runtime);
     const options = { cwd: resolvedCwd, sessionManager, modelRuntime: runtime };
     if (model) options.model = model;
-    const { session } = await createAgentSession(options);
+    const { session } = await this._withSessionCreateLock(() => createAgentSession(options));
     this.paths.set(session.sessionId, session.sessionFile);
     const st = {
       session,
@@ -327,6 +351,20 @@ export class RealSupervisor {
   }
 
   async _attachById(id) {
+    const st = this.live.get(id);
+    if (st) return st;
+    const pending = this.attachPromises.get(id);
+    if (pending) return pending;
+    const attaching = this._attachByIdOnce(id);
+    this.attachPromises.set(id, attaching);
+    try {
+      return await attaching;
+    } finally {
+      if (this.attachPromises.get(id) === attaching) this.attachPromises.delete(id);
+    }
+  }
+
+  async _attachByIdOnce(id) {
     const st = this.live.get(id);
     if (st) return st;
     await this._discover(id);
@@ -608,7 +646,9 @@ export class RealSupervisor {
     }
     if (entry && !entry.parentId) sm.resetLeaf();
     const runtime = await this._modelRuntime();
-    const { session } = await createAgentSession({ cwd, sessionManager: sm, modelRuntime: runtime });
+    const { session } = await this._withSessionCreateLock(() =>
+      createAgentSession({ cwd, sessionManager: sm, modelRuntime: runtime }),
+    );
     if (entry?.parentId) await session.navigateTree(entry.parentId);
     if (name) session.setSessionName(name);
     const id = session.sessionId;
