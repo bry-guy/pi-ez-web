@@ -482,7 +482,18 @@ export class RealSupervisor {
     if (parsed.name === "new") return { action: "new" };
     if (parsed.name === "compact") {
       const st = await this._attachById(id);
-      await st.session.compact(arg || undefined);
+      try {
+        await st.session.compact(arg || undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "Already compacted") {
+          return { action: "notice", title: "Compact", message: "Session is already compacted." };
+        }
+        if (message === "Nothing to compact (session too small)") {
+          return { action: "notice", title: "Compact", message: "Nothing to compact yet; the session is too small." };
+        }
+        throw error;
+      }
       return { action: "refresh", message: "Session context compacted." };
     }
     if (parsed.name === "reload") {

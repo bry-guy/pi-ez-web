@@ -36,6 +36,19 @@ test("model-less session attachment resolves the configured default before creat
   assert.deepEqual(attached, ["session-1", "/tmp", "openai-codex/gpt-5.6-luna"]);
 });
 
+test("manual compact reports expected no-op states instead of an internal error", async () => {
+  const supervisor = new RealSupervisor({});
+  for (const [message, expected] of [
+    ["Already compacted", "Session is already compacted."],
+    ["Nothing to compact (session too small)", "Nothing to compact yet; the session is too small."],
+  ]) {
+    supervisor._attachById = async () => ({ session: { compact: async () => { throw new Error(message); } } });
+    assert.deepEqual(await supervisor.command("session-1", "/compact"), {
+      action: "notice", title: "Compact", message: expected,
+    });
+  }
+});
+
 test("configured extensions load commands and session_start tools", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-extension-"));
   try {
