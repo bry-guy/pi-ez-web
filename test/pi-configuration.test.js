@@ -84,6 +84,7 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   const configuration = new PiConfiguration();
   const { settingsManager } = await configuration.createSettingsManager(cwd, agentDir, SettingsManager);
   assert.deepEqual(settingsManager.getGlobalSettings().packages, ["npm:profile-package", "npm:extra-package"]);
+  assert.deepEqual(settingsManager.getNpmCommand(), ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"]);
   assert.deepEqual(settingsManager.getGlobalSettings().extensions, [
     path.join(profileDir, "extension.ts"),
     path.join(process.env.PI_WEB_HOME, "web-extension.ts"),

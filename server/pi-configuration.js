@@ -12,6 +12,7 @@ import { appHome, loadConfig, resolvePath } from "./config.js";
 const MAX_PROFILE_BYTES = 512 * 1024;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
+const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"];
 
 function isObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -382,6 +383,10 @@ export class PiConfiguration {
     }
 
     const overlay = addInlineResources(settings, inline);
+    // Package setup runs in managed Git checkouts that may contain mise.toml.
+    // Use the image's system npm and avoid auto-installing peer dependency trees;
+    // an explicitly supplied profile npmCommand remains authoritative.
+    if (!Object.hasOwn(overlay, "npmCommand")) overlay.npmCommand = [...DEFAULT_NPM_COMMAND];
     return { piConfig: clone(piConfig), profile, settings: overlay, inline, warnings };
   }
 
