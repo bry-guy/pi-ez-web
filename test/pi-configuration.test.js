@@ -5,7 +5,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { saveConfig } from "../server/config.js";
-import { PiConfiguration, githubProfileSettingsUrl } from "../server/pi-configuration.js";
+import { PiConfiguration, githubProfileSettingsUrl, recoverIncompleteGitPackages } from "../server/pi-configuration.js";
 
 let tmp;
 let previousWebHome;
@@ -32,6 +32,23 @@ test("GitHub profile references support repository and blob URLs", () => {
     githubProfileSettingsUrl("https://github.com/bry-guy/dotfiles/blob/main/.pi/profiles/rpiv/settings.json"),
     "https://raw.githubusercontent.com/bry-guy/dotfiles/main/.pi/profiles/rpiv/settings.json",
   );
+});
+
+test("recovery removes only incomplete explicitly configured Git packages", () => {
+  const agentDir = path.join(tmp, "recover-agent");
+  const bad = path.join(agentDir, "git", "github.com", "example", "bad");
+  const good = path.join(agentDir, "git", "github.com", "example", "good");
+  fs.mkdirSync(bad, { recursive: true });
+  fs.writeFileSync(path.join(bad, "partial.txt"), "partial");
+  fs.mkdirSync(path.join(good, ".git"), { recursive: true });
+
+  const recovered = recoverIncompleteGitPackages(agentDir, {
+    packages: ["git:github.com/example/bad", "git:github.com/example/good", "npm:untouched"],
+  });
+
+  assert.deepEqual(recovered, [bad]);
+  assert.equal(fs.existsSync(bad), false);
+  assert.equal(fs.existsSync(good), true);
 });
 
 test("a local profile overlays Pi settings, resolves resources, and keeps project overrides", async () => {

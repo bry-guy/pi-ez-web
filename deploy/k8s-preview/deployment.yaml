@@ -151,6 +151,10 @@ spec:
               value: real
             - name: MISE_ENV
               value: pi-web
+            # Pi packages are explicitly selected in the profile/configuration.
+            # Trust only their managed Git checkout root, not project worktrees.
+            - name: MISE_TRUSTED_CONFIG_PATHS
+              value: /data/pi-ez-agent/git/github.com
             - name: KUBECONFIG
               value: /run/secrets/pi-ez-web-operator/platform-7049-1.yaml
             - name: OP_SERVICE_ACCOUNT_TOKEN

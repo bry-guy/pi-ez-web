@@ -6,7 +6,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
-import { PiConfiguration } from "../pi-configuration.js";
+import { PiConfiguration, publicError } from "../pi-configuration.js";
+
+function errorDetails(error) {
+  const parts = [];
+  const seen = new Set();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current.stack || current.message) parts.push(current.stack || current.message);
+    if (current.stderr) parts.push(current.stderr);
+    current = current.cause;
+  }
+  return publicError(parts.join("\nCaused by: "));
+}
 
 let sdk = null;
 async function SDK() {
@@ -179,7 +192,9 @@ export class RealSupervisor {
       this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult);
       return result;
     } catch (error) {
-      this.piConfiguration.recordRuntimeError(error);
+      const detail = errorDetails(error);
+      console.error("pi-ez-web Pi resource setup failed", detail);
+      this.piConfiguration.recordRuntimeError(new Error(detail));
       throw error;
     }
   }

@@ -171,6 +171,58 @@ function readLocalJson(file) {
 }
 
 function profileCachePath() { return path.join(appHome(), "pi-profile-cache.json"); }
+
+function gitPackageSource(entry) {
+  const source = sourceOf(entry)?.trim();
+  if (!source?.startsWith("git:")) return null;
+  let value = source.slice(4).trim();
+  let host;
+  let repoPath;
+  if (value.startsWith("git@")) {
+    const separator = value.indexOf(":", 4);
+    if (separator < 0) return null;
+    host = value.slice(4, separator);
+    repoPath = value.slice(separator + 1);
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      host = url.hostname;
+      repoPath = url.pathname.replace(/^\/+/, "");
+    } catch { return null; }
+  } else {
+    const separator = value.indexOf("/");
+    if (separator < 1) return null;
+    host = value.slice(0, separator);
+    repoPath = value.slice(separator + 1);
+  }
+  repoPath = repoPath.replace(/\.git$/, "").replace(/@[^/]+$/, "");
+  const parts = [host, ...repoPath.split("/")];
+  if (parts.some(part => !part || part === "." || part === ".." || /[\\\\\0]/.test(part))) return null;
+  return parts;
+}
+
+// Pi's package manager cleans failed clones, but a process interruption can
+// leave a non-repository directory behind. Remove only such directories for
+// Git packages explicitly present in the selected profile/configuration.
+export function recoverIncompleteGitPackages(agentDir, settings) {
+  const recovered = [];
+  for (const entry of Array.isArray(settings?.packages) ? settings.packages : []) {
+    const parts = gitPackageSource(entry);
+    if (!parts) continue;
+    const target = path.resolve(agentDir, "git", ...parts);
+    const root = path.resolve(agentDir, "git");
+    if (target === root || !target.startsWith(`${root}${path.sep}`) || !fs.existsSync(target)) continue;
+    if (fs.existsSync(path.join(target, ".git"))) continue;
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      recovered.push(target);
+    } catch (error) {
+      throw new Error(`Could not recover incomplete Pi package ${target}: ${publicError(error)}`, { cause: error });
+    }
+  }
+  if (recovered.length) console.warn("pi-ez-web: recovered incomplete Pi package checkout(s)", recovered);
+  return recovered;
+}
 function readProfileCache(location) {
   try {
     const cached = JSON.parse(fs.readFileSync(profileCachePath(), "utf8"));
@@ -195,10 +247,13 @@ function writeProfileCache(location, settings) {
   }
 }
 
-function publicError(error) {
+export function publicError(error) {
   return String(error?.message || error || "Could not load Pi profile.")
     .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
-    .replace(/([?&](?:token|key|code)=)[^&\s]+/gi, "$1[redacted]");
+    .replace(/gh[oprsu]_[A-Za-z0-9_]+/g, "[redacted]")
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-[redacted]")
+    .replace(/(OP_SERVICE_ACCOUNT_TOKEN\s*=\s*)[^\s]+/gi, "$1[redacted]")
+    .replace(/([?&](?:token|key|code|state|access_token|refresh_token)=)[^&\s]+/gi, "$1[redacted]");
 }
 
 class OverlaySettingsStorage {
@@ -332,6 +387,7 @@ export class PiConfiguration {
 
   async createSettingsManager(cwd, agentDir, SettingsManager) {
     const resolved = await this.resolve();
+    recoverIncompleteGitPackages(agentDir, resolved.settings);
     const storage = new OverlaySettingsStorage(cwd, agentDir, base => ["loaded", "cached"].includes(resolved.profile.status)
       ? mergeSettings(base, resolved.settings)
       : addInlineResources(base, resolved.inline));

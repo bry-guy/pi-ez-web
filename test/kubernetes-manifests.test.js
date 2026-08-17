@@ -29,6 +29,7 @@ test('preview initializes Bryan’s Pi profile with a package fallback', () => {
   assert.match(deployment, /pi\.profile \|\|= 'https:\/\/github\.com\/bry-guy\/dotfiles';/);
   assert.match(deployment, /git:github\.com\/nicobailon\/pi-mcp-adapter/);
   assert.match(deployment, /defaultMode: 'lite'/);
+  assert.match(deployment, /name: MISE_TRUSTED_CONFIG_PATHS\n\s+value: \/data\/pi-ez-agent\/git\/github\.com/);
 });
 
 test('production pod labels do not change its immutable Deployment selector', () => {

@@ -8,6 +8,7 @@ import { ensureHome, loadConfig } from "./config.js";
 import { hub } from "./events.js";
 import { buildApi } from "./routes.js";
 import { createSupervisor } from "./supervisor/index.js";
+import { publicError } from "./pi-configuration.js";
 import { piWebStashes, prune } from "./workspaces.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,7 +29,7 @@ export function createApp() {
       requestId,
       method: c.req.method,
       path: c.req.path,
-      stack: error instanceof Error ? error.stack : String(error),
+      stack: publicError(error instanceof Error ? error.stack : String(error)),
     });
     c.header("x-request-id", requestId);
     return c.json({ error: "internal_error", requestId }, 500);
