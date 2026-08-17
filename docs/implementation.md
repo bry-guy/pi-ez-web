@@ -54,7 +54,9 @@ packages in the persistent agent directory. Remote profiles are cached after a
 successful fetch; they never replace deployment-local credentials or session
 storage. The web supervisor binds extensions in headless JSON mode so tools,
 commands, hooks, `session_start`, and dynamic resources work, while TUI/RPC
-extension dialogs remain unavailable. New plain chats use private
+extension dialogs remain unavailable. Durable todo and background-agent
+activity is projected into a bounded `activity` transcript/SSE record; arbitrary
+extension widgets and renderer functions are not exposed to the browser. New plain chats use private
 scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.

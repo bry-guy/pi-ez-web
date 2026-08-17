@@ -31,7 +31,10 @@ class SSE {
   constructor(url) {
     this.events = [];
     this.waiters = [];
+    let ready;
+    this.ready = new Promise(resolve => { ready = resolve; });
     this.done = fetch(url).then(async res => {
+      ready();
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -135,6 +138,7 @@ test("state exposes the API contract and health marker", async () => {
   assert.ok(state.capabilities.includes("slash-commands"));
   assert.ok(state.capabilities.includes("project-hooks"));
   assert.ok(state.capabilities.includes("pi-resources"));
+  assert.ok(state.capabilities.includes("extension-activity"));
   assert.equal(state.piConfiguration.profile.status, "none");
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
@@ -255,6 +259,19 @@ test("tool + diff events produce structured records", async () => {
   await sse.wait(e => e.sessionId === id && e.type === "turn_end");
   const snap = await (await get(`/api/sessions/${id}/transcript`)).json();
   assert.deepEqual(snap.records.map(r => r.role), ["user", "tool", "diff", "assistant"]);
+});
+
+test("activity records stream and persist across transcript snapshots", async () => {
+  const sse = new SSE(base + "/api/events");
+  const { id } = await (await post("/api/chats")).json();
+  await post(`/api/sessions/${id}/message`, { text: "track todo and a background agent" });
+  const todo = await sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.kind === "todo");
+  const agent = await sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.kind === "agent");
+  assert.equal(todo.record.key, "todo");
+  assert.equal(agent.record.key, "agent:mock");
+  await sse.wait(e => e.sessionId === id && e.type === "turn_end");
+  const snap = await (await get(`/api/sessions/${id}/transcript`)).json();
+  assert.deepEqual(snap.records.filter(r => r.role === "activity").map(r => r.kind), ["todo", "agent"]);
 });
 
 test("followUp queues; steer interrupts", async () => {
@@ -473,6 +490,7 @@ test("fork carries dirty workspace state point-in-time", async () => {
   fs.writeFileSync(path.join(parentWs, "dirty.txt"), "uncommitted\n");
 
   const sse = new SSE(base + "/api/events");
+  await sse.ready;
   const fr = await (await post(`/api/sessions/${firstSessionId}/fork`, {})).json();
   assert.ok(fs.existsSync(path.join(fr.workspacePath, "dirty.txt"))); // fork has it
   assert.ok(fs.existsSync(path.join(parentWs, "dirty.txt")));          // parent keeps it

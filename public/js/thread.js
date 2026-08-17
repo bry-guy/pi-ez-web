@@ -76,25 +76,47 @@ class PiThread extends HTMLElement {
     const t = store.transcript();
     const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
-    const liveAssistant = [...t.records].reverse().find(record => record.role === "assistant" && record.streaming);
+    const visibleRecords = t.records.filter(record => record.role !== "activity");
+    const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
     // Keep the thinking indicator tied to the turn rather than to the presence
     // of an empty assistant record so those gaps remain visible.
     const thinking = t.streaming && !liveAssistant;
-    if (t.records.length === 0) {
-      this.innerHTML = thinking
-        ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
-        : `<div class="empty-pi"><div class="tile">π</div></div>`;
+    const activity = this.renderActivity(t.records);
+    if (visibleRecords.length === 0 && !activity && !thinking) {
+      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    const records = t.records.map(m => this.renderRecord(m, noFork)).join("");
+    const records = visibleRecords.map(m => this.renderRecord(m, noFork)).join("");
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
-    this.innerHTML = records + indicator;
+    this.innerHTML = records + indicator + activity;
     this.autoscroll(this.scrollOnNextRender);
     this.scrollOnNextRender = false;
+  }
+
+  renderActivity(records) {
+    const latest = new Map();
+    for (const record of records) {
+      if (record.role === "activity" && record.key) latest.set(record.key, record);
+    }
+    const todo = latest.get("todo");
+    const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
+    const agents = [...latest.values()].filter(record => record.kind === "agent");
+    if (!todoItems.length && !agents.length) return "";
+    const todoDone = todoItems.filter(item => item.status === "completed").length;
+    const todoRows = todoItems.map(item => {
+      const status = item.status === "completed" ? "done" : item.status === "in_progress" ? "active" : "pending";
+      const label = item.status === "in_progress" ? item.activeForm || item.subject : item.subject;
+      return `<div class="activity-task ${status}"><span class="activity-glyph">${status === "done" ? "✓" : status === "active" ? "◐" : "○"}</span><span>${esc(label)}</span></div>`;
+    }).join("");
+    const todoPanel = todoItems.length
+      ? `<section class="activity-panel todo-panel" aria-label="Todos"><div class="activity-head"><strong>Todos</strong><span>${todoDone}/${todoItems.length}</span></div>${todoRows}</section>`
+      : "";
+    const agentCards = agents.map(agent => `<section class="activity-panel agent-panel" aria-label="${esc(agent.title)}"><div class="activity-head"><strong>${esc(agent.title)}</strong><span>${esc(agent.status)}</span></div><div class="activity-summary">${esc(agent.summary)}</div></section>`).join("");
+    return `<div class="activity-stack">${todoPanel}${agentCards}</div>`;
   }
 
   renderRecord(m, noFork) {

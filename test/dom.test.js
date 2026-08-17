@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 2,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity"],
   mode: "mock",
   defaultModel: "mock/fast",
   models: [
@@ -278,6 +278,24 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.set({ view: "chat", projectId: "p1", sessionId: "sibling", chatId: null });
   store.markRead("sibling");
   assert.equal(store.state.unread.sibling, undefined);
+
+  store.set({ view: "chat", projectId: "p1", sessionId: "s1", chatId: null });
+  applyEvent({ v: 1, seq: 104, sessionId: "s1", type: "activity", record: {
+    id: "activity:todo:1", role: "activity", kind: "todo", key: "todo", status: "in_progress",
+    title: "Todos", summary: "1/2 complete", source: "test",
+    items: [
+      { id: "1", subject: "done", status: "completed", activeForm: "", blockedBy: [] },
+      { id: "2", subject: "<safe>", status: "in_progress", activeForm: "checking", blockedBy: [] },
+    ],
+  } });
+  assert.match(root.querySelector(".todo-panel")?.textContent || "", /1\/2/);
+  assert.match(root.querySelector(".todo-panel")?.textContent || "", /checking/);
+  assert.equal(root.querySelector(".todo-panel safe"), null);
+  applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "activity", record: {
+    id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "completed",
+    title: "Explore", summary: "Found the files.", items: [], source: "test",
+  } });
+  assert.match(root.querySelector(".agent-panel")?.textContent || "", /Found the files/);
 
   dom.window.close();
 });

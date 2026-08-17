@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -330,6 +330,13 @@ export function applyEvent(evt, replay = false) {
       if (!byId(recs, evt.toolId)) {
         const at = lastStreamingIndex(recs);
         recs.splice(at, 0, { id: evt.toolId, role: "tool", tool: evt.name, arg: evt.argsSummary || "", meta: "", out: "" });
+      }
+      break;
+    case "activity":
+      if (evt.record?.role === "activity") {
+        const existing = byId(recs, evt.record.id);
+        if (existing) Object.assign(existing, evt.record);
+        else recs.push(evt.record);
       }
       break;
     case "tool_end": {

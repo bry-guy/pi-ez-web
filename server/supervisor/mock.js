@@ -259,12 +259,16 @@ export class MockSupervisor {
 
     const wantsDiff = /edit|diff|fix|change/i.test(userText);
     const wantsTool = /read|grep|look|file|edit|diff|fix/i.test(userText) || wantsDiff;
+    const wantsTodoActivity = /todo/i.test(userText);
+    const wantsAgentActivity = /subagent|background agent/i.test(userText);
     const full = steered
       ? `Steering acknowledged — switching to: ${userText}`
       : `mock: I'd run that against ${path.basename(s.cwd)} — reading first, then proposing an edit. (${userText.slice(0, 60)})`;
 
     const t0 = setTimeout(() => {
       if (wantsTool) this._emitTool(id, s.cwd, wantsDiff);
+      if (wantsTodoActivity) this._emitActivity(id, "todo");
+      if (wantsAgentActivity) this._emitActivity(id, "agent");
       let i = 0;
       const tick = () => {
         if (!st.streaming || st.msgId !== msgId) return;
@@ -284,6 +288,27 @@ export class MockSupervisor {
       tick();
     }, THINK_MS());
     st.timers.push(t0);
+  }
+
+  _emitActivity(id, kind) {
+    const s = this._load(id);
+    const ai = s.records.findIndex(r => r.role === "assistant" && r.streaming);
+    const activity = kind === "todo"
+      ? {
+        id: newId("activity"), role: "activity", kind: "todo", key: "todo", status: "in_progress",
+        title: "Todos", summary: "1/2 complete · 1 active", source: "mock",
+        items: [
+          { id: "1", subject: "Inspect activity", description: "", status: "completed", activeForm: "", blockedBy: [] },
+          { id: "2", subject: "Render activity", description: "", status: "in_progress", activeForm: "rendering activity", blockedBy: [] },
+        ],
+      }
+      : {
+        id: newId("activity"), role: "activity", kind: "agent", key: "agent:mock", status: "completed",
+        title: "Explore", summary: "Checked the activity bridge and returned a concise result.", items: [], source: "mock",
+      };
+    s.records.splice(ai < 0 ? s.records.length : ai, 0, activity);
+    this._save(s);
+    this.hub.emit(id, "activity", { record: activity });
   }
 
   _emitTool(id, cwd, withDiff) {

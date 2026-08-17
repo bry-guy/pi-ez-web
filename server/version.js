@@ -7,5 +7,6 @@ export const API_CAPABILITIES = Object.freeze([
   "slash-commands",
   "project-hooks",
   "pi-resources",
+  "extension-activity",
 ]);
 export const BUILD_ID = process.env.PI_WEB_BUILD_ID || "development";

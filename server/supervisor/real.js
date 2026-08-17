@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
+import { activityFromEntry, activityFromToolResult } from "../activity.js";
 import { PiConfiguration, publicError } from "../pi-configuration.js";
 
 function errorDetails(error) {
@@ -250,6 +251,11 @@ export class RealSupervisor {
           st.assistantParent = entry.id;
           hub.emit(id, "user_record", { record });
         }
+        const activity = activityFromEntry(entry);
+        if (activity) {
+          st.liveRecords.set(activity.id, activity);
+          hub.emit(id, "activity", { record: activity });
+        }
         break;
       }
       case "agent_start":
@@ -300,6 +306,11 @@ export class RealSupervisor {
         const m = st.toolMeta.get(evt.toolCallId) || {};
         const durationMs = m.t0 ? Date.now() - m.t0 : 0;
         const output = renderToolResult(evt.result);
+        const activity = activityFromToolResult(evt.result, evt.toolCallId);
+        if (activity) {
+          st.liveRecords.set(activity.id, activity);
+          hub.emit(id, "activity", { record: activity });
+        }
         const record = st.liveRecords.get(evt.toolCallId);
         if (record) {
           record.out = output;
@@ -809,6 +820,9 @@ export function entriesToRecords(entries) {
       records.push({ id: d.id || entry.id, role: "bang", cmd: d.cmd || "", meta: d.meta || "", out: d.out || "" });
       continue;
     }
+    const activity = activityFromEntry(entry);
+    if (activity) records.push(activity);
+    if (entry.type === "custom" || entry.type === "custom_message") continue;
     if (entry.type !== "message") continue;
     const message = entry.message || {};
     if (message.role === "user") {

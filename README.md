@@ -96,8 +96,10 @@ those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
 extensions execute as the server user with full system access, so reference only
 sources you trust. Headless-compatible tools, commands, hooks, startup events,
 skills, and prompts work in pi-ez-web; terminal-only extension UI is not rendered
-and extensions see `ctx.hasUI === false`. The same fields are viewable and
-editable under **Settings → Pi profile & extensions**.
+and extensions see `ctx.hasUI === false`. Durable todo state and background-agent
+completion summaries are shown as safe activity cards below the chat; arbitrary
+extension widgets are not rendered. The same fields are viewable and editable
+under **Settings → Pi profile & extensions**.
 
 Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
 state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for

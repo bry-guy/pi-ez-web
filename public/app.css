@@ -391,6 +391,16 @@ header.bar {
 .diff-line.hunk { color: var(--faint); }
 .diff-line:not(.hunk):not(.add):not(.del), .diff-line.add, .diff-line.del { color: var(--text); }
 .diff-line.hunk { color: var(--faint); }
+.activity-stack { display: grid; gap: 8px; margin: 4px auto 14px; width: min(80%, 760px); }
+.activity-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 9px 12px; box-shadow: var(--elevation-1); }
+.activity-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--muted); font: 11px var(--mono); }
+.activity-head strong { color: var(--text); font-weight: 500; font-size: 12px; }
+.activity-task { display: flex; gap: 8px; align-items: baseline; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.activity-task.done { color: var(--faint); text-decoration: line-through; }
+.activity-task.active { color: var(--text); }
+.activity-glyph { width: 12px; color: var(--accent); font-family: var(--mono); }
+.activity-task.done .activity-glyph { color: var(--green); }
+.activity-summary { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
 /* ---------- composer ---------- */
 .composer-outer { border-top: 0; background: var(--bg); }
