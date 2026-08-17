@@ -291,11 +291,18 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".todo-panel")?.textContent || "", /1\/2/);
   assert.match(root.querySelector(".todo-panel")?.textContent || "", /checking/);
   assert.equal(root.querySelector(".todo-panel safe"), null);
+  root.querySelector(".todo-panel [data-activity-toggle]").click();
+  assert.equal(root.querySelector(".todo-panel .activity-body"), null);
+  root.querySelector(".todo-panel [data-activity-toggle]").click();
+  assert.ok(root.querySelector(".todo-panel .activity-body"));
   applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "activity", record: {
     id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "completed",
     title: "Explore", summary: "Found the files.", items: [], source: "test",
   } });
-  assert.match(root.querySelector(".agent-panel")?.textContent || "", /Found the files/);
+  assert.equal(root.querySelector(".activity-inline .activity-inline-body"), null);
+  root.querySelector(".activity-inline [data-activity-toggle]").click();
+  assert.match(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
+  assert.ok(root.querySelector(".activity-stack"));
 
   dom.window.close();
 });

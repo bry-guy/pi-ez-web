@@ -12,8 +12,8 @@ class PiThread extends HTMLElement {
     });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
-      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-toggle]")) {
-        e.preventDefault(); e.target.closest("[data-toggle]").click();
+      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-toggle], [data-activity-toggle]")) {
+        e.preventDefault(); e.target.closest("[data-toggle], [data-activity-toggle]").click();
       }
     });
     this.render();
@@ -23,6 +23,14 @@ class PiThread extends HTMLElement {
   async onClick(e) {
     const fork = e.target.closest("[data-fork]");
     if (fork) return this.fork(fork.dataset.fork);
+    const activityToggle = e.target.closest("[data-activity-toggle]");
+    if (activityToggle) {
+      const key = activityToggle.dataset.activityToggle;
+      const open = store.state.openActivity[key] ?? (key === "todo");
+      store.state.openActivity[key] = !open;
+      this.render();
+      return;
+    }
     const tog = e.target.closest("[data-toggle]");
     if (tog) {
       const id = tog.dataset.toggle;
@@ -76,7 +84,7 @@ class PiThread extends HTMLElement {
     const t = store.transcript();
     const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
-    const visibleRecords = t.records.filter(record => record.role !== "activity");
+    const visibleRecords = t.records.filter(record => record.role !== "activity" || record.kind === "agent");
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
@@ -105,19 +113,25 @@ class PiThread extends HTMLElement {
     }
     const todo = latest.get("todo");
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
-    const agents = [...latest.values()].filter(record => record.kind === "agent");
-    if (!todoItems.length && !agents.length) return "";
+    if (!todoItems.length) return "";
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
       const status = item.status === "completed" ? "done" : item.status === "in_progress" ? "active" : "pending";
       const label = item.status === "in_progress" ? item.activeForm || item.subject : item.subject;
       return `<div class="activity-task ${status}"><span class="activity-glyph">${status === "done" ? "✓" : status === "active" ? "◐" : "○"}</span><span>${esc(label)}</span></div>`;
     }).join("");
+    const panel = (key, title, meta, body, defaultOpen) => {
+      const open = store.state.openActivity[key] ?? defaultOpen;
+      return `<section class="activity-panel ${key === "todo" ? "todo-panel" : "agent-panel"}" aria-label="${esc(title)}">
+        <button class="activity-head" type="button" data-activity-toggle="${esc(key)}" aria-expanded="${open}">
+          <strong>${esc(title)}</strong><span>${esc(meta)} <b class="activity-caret">${open ? "▾" : "▸"}</b></span>
+        </button>${open ? `<div class="activity-body">${body}</div>` : ""}
+      </section>`;
+    };
     const todoPanel = todoItems.length
-      ? `<section class="activity-panel todo-panel" aria-label="Todos"><div class="activity-head"><strong>Todos</strong><span>${todoDone}/${todoItems.length}</span></div>${todoRows}</section>`
+      ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, true)
       : "";
-    const agentCards = agents.map(agent => `<section class="activity-panel agent-panel" aria-label="${esc(agent.title)}"><div class="activity-head"><strong>${esc(agent.title)}</strong><span>${esc(agent.status)}</span></div><div class="activity-summary">${esc(agent.summary)}</div></section>`).join("");
-    return `<div class="activity-stack">${todoPanel}${agentCards}</div>`;
+    return `<div class="activity-stack">${todoPanel}</div>`;
   }
 
   renderCommandNotice() {
@@ -131,6 +145,15 @@ class PiThread extends HTMLElement {
   }
 
   renderRecord(m, noFork) {
+    if (m.role === "activity" && m.kind === "agent") {
+      const open = store.state.openActivity[m.key] ?? false;
+      return `<div class="msg activity-inline"><div class="block">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-activity-toggle="${esc(m.key)}">
+          <span class="bh-caret">${open ? "▾" : "▸"}</span><span class="bh-name">${esc(m.title || "Activity")}</span>
+          <span class="bh-arg">background activity</span><span class="bh-meta">${esc(m.status || "completed")}</span>
+        </div>${open ? `<div class="activity-inline-body markdown-content">${renderMarkdown(m.summary || "")}</div>` : ""}
+      </div></div>`;
+    }
     if (m.role === "user") {
       return `<div class="msg ${noFork ? "no-fork" : ""}">
         <div class="msg-user-row">
@@ -511,13 +534,8 @@ class PiComposer extends HTMLElement {
       <pi-context-meter></pi-context-meter>
       <div class="composer-foot">
         <div class="attachment-picker">
-          <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
-          <input class="camera-input" type="file" accept="image/*" capture="environment" hidden>
-          <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images" aria-expanded="false">＋</button>
-          <div class="attachment-menu hidden" role="menu">
-            <button type="button" data-attachment-source="files" role="menuitem">Choose images</button>
-            <button type="button" data-attachment-source="camera" role="menuitem">Take photo</button>
-          </div>
+          <input class="image-input" type="file" accept="image/*" multiple hidden>
+          <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images">＋</button>
         </div>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <pi-thinking-picker></pi-thinking-picker>
@@ -529,9 +547,7 @@ class PiComposer extends HTMLElement {
     this.attachments = [];
     this.attachmentsEl = this.querySelector(".composer-attachments");
     this.imageInput = this.querySelector(".image-input");
-    this.cameraInput = this.querySelector(".camera-input");
     this.attachBtn = this.querySelector(".attach-btn");
-    this.attachmentMenu = this.querySelector(".attachment-menu");
     this.stopBtn = this.querySelector(".stop-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
@@ -539,26 +555,16 @@ class PiComposer extends HTMLElement {
       store.state.draft = this.ta.value;
       void this.syncCommands();
     });
-    this.attachBtn.addEventListener("click", () => {
-      const open = this.attachmentMenu.classList.toggle("hidden");
-      this.attachBtn.setAttribute("aria-expanded", String(!open));
-    });
-    for (const input of [this.imageInput, this.cameraInput]) input.addEventListener("change", () => {
-      void this.addFiles(input.files);
-      input.value = "";
+    this.attachBtn.addEventListener("click", () => this.imageInput.click());
+    this.imageInput.addEventListener("change", () => {
+      void this.addFiles(this.imageInput.files);
+      this.imageInput.value = "";
     });
     this.ta.addEventListener("paste", e => {
       const files = [...(e.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
       if (files.length) { e.preventDefault(); void this.addFiles(files); }
     });
     this.addEventListener("click", e => {
-      const source = e.target.closest("[data-attachment-source]");
-      if (source) {
-        this.attachmentMenu.classList.add("hidden");
-        this.attachBtn.setAttribute("aria-expanded", "false");
-        (source.dataset.attachmentSource === "camera" ? this.cameraInput : this.imageInput).click();
-        return;
-      }
       const removeImage = e.target.closest("[data-remove-image]");
       if (removeImage) {
         this.attachments.splice(Number(removeImage.dataset.removeImage), 1);

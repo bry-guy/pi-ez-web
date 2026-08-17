@@ -337,7 +337,10 @@ export function applyEvent(evt, replay = false) {
       if (evt.record?.role === "activity") {
         const existing = byId(recs, evt.record.id);
         if (existing) Object.assign(existing, evt.record);
-        else recs.push(evt.record);
+        else {
+          const at = evt.record.kind === "agent" ? lastStreamingIndex(recs) : recs.length;
+          recs.splice(at, 0, evt.record);
+        }
       }
       break;
     case "tool_end": {

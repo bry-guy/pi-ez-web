@@ -59,6 +59,7 @@ export const store = {
     drawerOpen: false,
     openTree: {},
     openTools: {},
+    openActivity: {},
     openDirs: {},
     branchMenuOpen: false,
     branchError: null,
