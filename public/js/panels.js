@@ -734,9 +734,14 @@ class PiApp extends HTMLElement {
       this.ensureFiles(true);
     });
     this.unsub = store.subscribe(w => { if (w === "state") this.sync(); });
+    this.onResize = () => this.sync();
+    window.addEventListener("resize", this.onResize);
     this.sync();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    window.removeEventListener("resize", this.onResize);
+  }
 
   filesKey() {
     const p = store.project();
@@ -773,6 +778,8 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
+    const bar = this.querySelector("pi-header .bar");
+    if (bar) this.style.setProperty("--header-height", `${bar.getBoundingClientRect().height}px`);
     for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
     const connection = this.querySelector("[data-connection-status]");

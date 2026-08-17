@@ -66,9 +66,20 @@ function findNode(nodes, id) {
   }
   return null;
 }
+function fuzzyMatch(value, query) {
+  if (!query) return true;
+  let i = 0;
+  const text = String(value || "").toLowerCase();
+  for (const char of query.toLowerCase()) {
+    i = text.indexOf(char, i);
+    if (i < 0) return false;
+    i++;
+  }
+  return true;
+}
 function nodeMatches(n, q) {
   if (!q) return true;
-  return n.title.toLowerCase().includes(q) || (n.children || []).some(child => nodeMatches(child, q));
+  return fuzzyMatch(n.title, q) || (n.children || []).some(child => nodeMatches(child, q));
 }
 
 /* ---------------- sidebar ---------------- */
@@ -132,7 +143,7 @@ class PiSidebar extends HTMLElement {
 
   sessionRows(p, nodes, depth, q, out, forceAll = false) {
     for (const n of nodes) {
-      const direct = !q || n.title.toLowerCase().includes(q);
+      const direct = !q || fuzzyMatch(n.title, q);
       const descendant = q && (n.children || []).some(child => nodeMatches(child, q));
       if (q && !forceAll && !direct && !descendant) continue;
       const kids = n.children.length > 0;
@@ -176,7 +187,7 @@ class PiSidebar extends HTMLElement {
           <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">${icon("chevronLeft")}</button>
         </div>
         <div class="rail-actions">
-          <input class="rail-search" placeholder="Search sessions" aria-label="Search sessions">
+          <input class="rail-search" placeholder="Filter chats and sessions" aria-label="Filter chats and sessions">
         </div>
         <div class="rail-scroll">
           <div class="sec-head"><div class="sec-label">Projects</div>
@@ -205,7 +216,7 @@ class PiSidebar extends HTMLElement {
     const q = s.query.trim().toLowerCase();
     const projRows = [];
     for (const p of s.projects) {
-      const nameMatch = !q || p.name.toLowerCase().includes(q);
+      const nameMatch = !q || fuzzyMatch(p.name, q);
       if (q && !nameMatch && !p.sessions.some(n => nodeMatches(n, q))) continue;
       const open = !!s.openTree[p.id] || !!q;
       const active = s.view === "chat" && s.projectId === p.id && !s.chatId;
@@ -219,7 +230,7 @@ class PiSidebar extends HTMLElement {
       if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, nameMatch);
     }
     const chatRows = s.chats
-      .filter(cRow => !q || cRow.title.toLowerCase().includes(q))
+      .filter(cRow => !q || fuzzyMatch(cRow.title, q))
       .map(cRow => {
         const streaming = cRow.streaming || store.transcript(cRow.id).streaming;
         const unread = !!s.unread[cRow.id];

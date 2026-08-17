@@ -505,6 +505,9 @@ class PiComposer extends HTMLElement {
         }
       } else {
         await api.message(id, text, mode, images);
+        // The server acknowledges the prompt before the SSE record is guaranteed
+        // to arrive. Refresh once so the sent message is visible immediately.
+        await openTranscript(id);
       }
     } catch (err) {
       if (err.error === "workspace_busy") {
