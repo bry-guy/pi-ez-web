@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 2,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources"],
   mode: "mock",
   defaultModel: "mock/fast",
   models: [
@@ -29,6 +29,12 @@ const state = {
   ],
   repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
   settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true } },
+  piConfiguration: {
+    config: { profile: "https://github.com/bry-guy/dotfiles", packages: ["npm:context-mode"], extensions: [] },
+    profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
+    warnings: [],
+    runtime: { extensions: [{ path: "context-mode" }], errors: [], skills: 0, prompts: 0 },
+  },
 };
 const transcript = { sessionId: "s1", seq: 0, streaming: false, records: [] };
 
@@ -183,6 +189,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.set({ view: "settings" });
   assert.match(root.querySelector("pi-settings").textContent, /Default model/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
+  assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
+  assert.match(root.querySelector("[data-setting='piPackages']").value, /npm:context-mode/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);

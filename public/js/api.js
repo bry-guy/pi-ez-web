@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -110,6 +110,7 @@ export async function refreshState() {
     modelError: s.modelError || null,
     models: s.models || [],
     providers: s.providers || [],
+    piConfiguration: s.piConfiguration || null,
     repositorySources: s.repositorySources || null,
     settings: s.settings || null,
     reposRoot: s.reposRoot || null,
@@ -374,6 +375,9 @@ export function applyEvent(evt, replay = false) {
     }
     case "workspace_busy":
       tOf(evt.bySessionId).streaming = true;
+      break;
+    case "extension_error":
+      store.setError(`Extension ${evt.extensionPath || "error"}: ${evt.error || "failed"}`);
       break;
     case "session_created":
     case "session_forked":

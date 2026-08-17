@@ -134,6 +134,8 @@ test("state exposes the API contract and health marker", async () => {
   assert.ok(state.capabilities.includes("provider-auth"));
   assert.ok(state.capabilities.includes("slash-commands"));
   assert.ok(state.capabilities.includes("project-hooks"));
+  assert.ok(state.capabilities.includes("pi-resources"));
+  assert.equal(state.piConfiguration.profile.status, "none");
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
@@ -563,6 +565,22 @@ test("settings can persist a custom local repositories root", async () => {
   const body = await r.json();
   assert.equal(body.reposRoot, customRoot);
   assert.equal((await (await get("/api/state")).json()).reposRoot, customRoot);
+});
+
+test("settings expose and persist Pi package and extension configuration", async () => {
+  let r = await post("/api/settings", {
+    pi: { profile: null, packages: ["npm:context-mode"], extensions: ["./extensions/example.ts"] },
+  });
+  assert.equal(r.status, 200);
+  let body = await r.json();
+  assert.deepEqual(body.piConfiguration.config.packages, ["npm:context-mode"]);
+  assert.deepEqual(loadConfig().pi.extensions, ["./extensions/example.ts"]);
+
+  r = await post("/api/settings", { pi: { packages: "invalid" } });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_pi_configuration");
+
+  await post("/api/settings", { pi: { profile: null, packages: [], extensions: [] } });
 });
 
 test("settings reject malformed GitHub owner values", async () => {

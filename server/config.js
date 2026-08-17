@@ -21,6 +21,11 @@ const DEFAULTS = {
   reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
   defaultModel: null,
+  pi: {
+    profile: null, // local profile dir/settings.json or HTTPS settings URL
+    packages: [], // additional Pi package sources
+    extensions: [], // additional package sources or server-local extension paths
+  },
   repositorySources: {
     default: "local",
     github: { clientId: null, owner: null },
@@ -46,6 +51,26 @@ export function normalizeHookSets(value) {
     sets[projectName] = normalizeHooks(hooks);
   }
   return sets;
+}
+
+export function normalizePiConfig(value, { strict = false } = {}) {
+  const invalid = message => {
+    if (strict) throw Object.assign(new Error(message), { code: "invalid_pi_configuration" });
+    return { ...DEFAULTS.pi };
+  };
+  if (value == null) return { ...DEFAULTS.pi };
+  if (typeof value !== "object" || Array.isArray(value)) return invalid("Pi configuration must be an object.");
+  if (value.profile !== undefined && value.profile !== null && typeof value.profile !== "string") return invalid("Pi profile must be a path or HTTPS URL.");
+  for (const key of ["packages", "extensions"]) {
+    if (value[key] !== undefined && (!Array.isArray(value[key]) || value[key].some(entry => typeof entry !== "string"))) {
+      return invalid(`Pi ${key} must be an array of strings.`);
+    }
+  }
+  return {
+    profile: typeof value.profile === "string" && value.profile.trim() ? value.profile.trim() : null,
+    packages: [...new Set((value.packages || []).map(entry => entry.trim()).filter(Boolean))],
+    extensions: [...new Set((value.extensions || []).map(entry => entry.trim()).filter(Boolean))],
+  };
 }
 
 function readJson(p, fallback) {
@@ -83,6 +108,7 @@ export function loadConfig() {
     projects,
     projectHooks: normalizeHooks(raw.projectHooks),
     projectHookSets: normalizeHookSets(raw.projectHookSets),
+    pi: normalizePiConfig(raw.pi),
     repositorySources: {
       ...DEFAULTS.repositorySources,
       ...sources,

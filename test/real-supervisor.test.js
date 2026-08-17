@@ -36,6 +36,59 @@ test("model-less session attachment resolves the configured default before creat
   assert.deepEqual(attached, ["session-1", "/tmp", "openai-codex/gpt-5.6-luna"]);
 });
 
+test("configured extensions load commands and session_start tools", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-extension-"));
+  try {
+    const webHome = path.join(tmp, "web");
+    const agentDir = path.join(tmp, "pi");
+    const cwd = path.join(tmp, "cwd");
+    const extension = path.join(tmp, "configured-extension.ts");
+    fs.mkdirSync(webHome, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(extension, `
+      export default function (pi) {
+        pi.registerCommand("configured-command", { description: "configured", async handler() {} });
+        pi.on("session_start", () => pi.registerTool({
+          name: "startup_tool", label: "Startup", description: "registered at session_start",
+          parameters: { type: "object", properties: {} },
+          async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; }
+        }));
+      }
+    `);
+    fs.writeFileSync(path.join(webHome, "config.json"), JSON.stringify({
+      pi: { profile: null, packages: [], extensions: [extension] },
+    }));
+    const extensionScript = `
+      import { EventHub } from './server/events.js';
+      import { RealSupervisor } from './server/supervisor/real.js';
+      const supervisor = new RealSupervisor(new EventHub());
+      const created = await supervisor.createSession({ cwd: process.env.TEST_CWD });
+      const commands = await supervisor.commands(created.id);
+      const tools = supervisor.live.get(created.id).session.getAllTools().map(tool => tool.name);
+      console.log(JSON.stringify({ commands: commands.map(command => command.name), tools, pi: await supervisor.piConfigurationState() }));
+    `;
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", extensionScript], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        PI_WEB_HOME: webHome,
+        PI_CODING_AGENT_DIR: agentDir,
+        TEST_CWD: cwd,
+        OPENAI_API_KEY: "",
+        ANTHROPIC_API_KEY: "",
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const result = JSON.parse(output.trim().split("\n").at(-1));
+    assert.ok(result.commands.includes("configured-command"));
+    assert.ok(result.tools.includes("startup_tool"));
+    assert.equal(result.pi.runtime.extensions.length, 1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("real sessions can be created without provider credentials", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-real-"));
   try {

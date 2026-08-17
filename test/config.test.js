@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -31,6 +31,19 @@ test("project hooks normalize commands and allow explicit removal", () => {
 test("named project hook sets normalize deployment defaults", () => {
   saveConfig({ projectHookSets: { infra: { check: " mise run check ", "bad name": "ignored" }, "": { setup: "ignored" } } });
   assert.deepEqual(loadConfig().projectHookSets, { infra: { check: "mise run check" } });
+});
+
+test("Pi resource config normalizes a profile and unique package/extension sources", () => {
+  assert.deepEqual(normalizePiConfig({
+    profile: " https://github.com/bry-guy/dotfiles ",
+    packages: ["npm:context-mode", "npm:context-mode", ""],
+    extensions: [" ./extensions/test.ts "],
+  }), {
+    profile: "https://github.com/bry-guy/dotfiles",
+    packages: ["npm:context-mode"],
+    extensions: ["./extensions/test.ts"],
+  });
+  assert.throws(() => normalizePiConfig({ packages: "nope" }, { strict: true }), error => error.code === "invalid_pi_configuration");
 });
 
 test("project modes default to manual and preserve only valid values", () => {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
@@ -99,6 +99,12 @@ export function buildApi(sup) {
     });
     const models = modelState.models || [];
     const providers = await safe(() => sup.listProviders(), []);
+    const piConfiguration = await safe(() => sup.piConfigurationState(), {
+      config: cfg.pi,
+      profile: { status: "error", source: cfg.pi.profile, error: "Could not inspect Pi configuration." },
+      warnings: [],
+      runtime: null,
+    });
     const projects = [];
     for (const p of cfg.projects) {
       try { projects.push(await projectState(p, sup)); }
@@ -115,6 +121,7 @@ export function buildApi(sup) {
       modelError: modelState.error || null,
       models,
       providers,
+      piConfiguration,
       repositorySources: repositorySourceState(cfg, github),
       settings: settingsState(cfg, github),
       reposRoot: reposRoot(cfg),
@@ -645,6 +652,18 @@ export function buildApi(sup) {
   api.post("/settings", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
+    let nextPiConfiguration;
+    if (body.pi !== undefined) {
+      try {
+        nextPiConfiguration = normalizePiConfig(body.pi, { strict: true });
+        sup.assertPiConfigurationReloadable();
+      } catch (e) {
+        if (e.code === "invalid_pi_configuration") return err(c, 400, e.code, { message: e.message });
+        if (e.code === "pi_configuration_busy") return err(c, 409, e.code);
+        throw e;
+      }
+      cfg.pi = nextPiConfiguration;
+    }
     if (body.defaultModel === null) cfg.defaultModel = null;
     else if (body.defaultModel !== undefined) {
       const models = await sup.listModels();
@@ -675,6 +694,9 @@ export function buildApi(sup) {
       cfg.projectHookSets = normalizeHookSets(body.projectHookSets);
     }
     saveConfig(cfg);
+    const piConfiguration = nextPiConfiguration
+      ? await sup.reloadPiConfiguration()
+      : await sup.piConfigurationState();
     const modelState = await sup.modelState();
     return c.json({
       ok: true,
@@ -685,6 +707,7 @@ export function buildApi(sup) {
       effectiveDefaultModel: modelState.effectiveDefault,
       defaultModelStatus: modelState.status,
       modelError: modelState.error || null,
+      piConfiguration,
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
       repositorySources: repositorySourceState(cfg, github),

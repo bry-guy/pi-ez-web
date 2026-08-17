@@ -33,6 +33,7 @@ class PiSettings extends HTMLElement {
   async onClick(e) {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
+    if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
     const login = e.target.closest("[data-auth-login]");
@@ -69,6 +70,26 @@ class PiSettings extends HTMLElement {
       const message = err.error === "invalid_github_owner"
         ? "Enter a valid GitHub user or organization name."
         : `Repository settings failed: ${err.error || err.message || err}`;
+      this.setFeedback(message, "error");
+    }
+  }
+  async savePiConfiguration() {
+    const lines = selector => (this.querySelector(selector)?.value || "")
+      .split("\n").map(value => value.trim()).filter(Boolean);
+    const pi = {
+      profile: this.querySelector("[data-setting='piProfile']")?.value.trim() || null,
+      packages: lines("[data-setting='piPackages']"),
+      extensions: lines("[data-setting='piExtensions']"),
+    };
+    try {
+      const result = await api.settingsPatch({ pi });
+      await refreshState();
+      const profileError = result.piConfiguration?.profile?.error;
+      this.setFeedback(profileError ? `Saved, but the profile could not be loaded: ${profileError}` : "Pi configuration saved. Packages install when a session loads.", profileError ? "error" : "success");
+    } catch (err) {
+      const message = err.error === "pi_configuration_busy"
+        ? "Stop active sessions before changing Pi extensions."
+        : `Pi configuration failed: ${err.error || err.message || err}`;
       this.setFeedback(message, "error");
     }
   }
@@ -218,6 +239,17 @@ class PiSettings extends HTMLElement {
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
+    const piState = store.state.piConfiguration || {};
+    const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
+    const profileStatus = ["loaded", "cached"].includes(piState.profile?.status)
+      ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}`
+      : piState.profile?.status === "error"
+        ? `Profile error: ${piState.profile.error}`
+        : "Using the deployment's Pi settings";
+    const runtimeSummary = piState.runtime
+      ? `${piState.runtime.extensions?.length || 0} extension${piState.runtime.extensions?.length === 1 ? "" : "s"}, ${piState.runtime.skills || 0} skills, and ${piState.runtime.prompts || 0} prompts loaded for the last attached session.`
+      : "Resources load in the background when a session is first opened.";
+    const piProblems = [...(piState.warnings || []), ...(piState.runtime?.errors || []).map(error => `${error.path}: ${error.error}`)];
     const feedback = this.feedback
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
@@ -233,6 +265,25 @@ class PiSettings extends HTMLElement {
         <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
       </section>
       ${this.authFlowCard()}
+      <section class="settings-section">
+        <div class="settings-section-title">Pi profile & extensions</div>
+        <div class="settings-card settings-card-spaced">
+          <div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Profile settings</div><div class="sr-sub">Optional profile directory, settings.json path, or HTTPS URL. A GitHub repository URL reads <span class="settings-mono">.pi/agent/settings.json</span>. Credentials and transcripts stay local to this deployment.</div></div>
+            <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(piConfig.profile || "")}" placeholder="https://github.com/owner/dotfiles">
+          </div>
+          <div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Additional packages</div><div class="sr-sub">One Pi npm/git package source per line. Pi installs missing packages automatically.</div></div>
+            <textarea class="settings-inline-input pi-resource-list" data-setting="piPackages" rows="4" placeholder="npm:context-mode&#10;git:github.com/owner/pi-extension">${esc((piConfig.packages || []).join("\n"))}</textarea>
+          </div>
+          <div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">One package source or server-local extension path per line. Relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
+            <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
+          </div>
+          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div>
+        </div>
+      </section>
       <section class="settings-section">
         <div class="settings-section-title">Repository sources</div>
         <div class="settings-card settings-card-spaced">

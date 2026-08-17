@@ -736,7 +736,8 @@ class PiComposer extends HTMLElement {
     this.ta.classList.toggle("error", !!error);
     this.ta.placeholder = error || (t.streaming
       ? "Enter a steering message, alt+enter a follow-up…"
-      : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
+      : lock ? "Another session is streaming — open it to send a steering message…"
+        : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     // Keep Send available during a turn so it can steer or queue a follow-up.
     this.sendBtn.disabled = !!lock;

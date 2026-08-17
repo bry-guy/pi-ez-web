@@ -47,7 +47,14 @@ Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
 `closed.json`, `github-auth.json`, and `chats/`); project worktrees default to
 the Pi-adjacent `~/.pi/worktrees` (and can be overridden with `worktreeRoot`).
 Pi owns transcripts, settings, models, and AI auth under
-`PI_CODING_AGENT_DIR` (normally `~/.pi/agent`). New plain chats use private
+`PI_CODING_AGENT_DIR` (normally `~/.pi/agent`). The optional `config.json` `pi`
+block can layer a local or HTTPS `settings.json` profile over SDK sessions and
+add package/extension sources. Pi's resource loader installs missing npm/git
+packages in the persistent agent directory. Remote profiles are cached after a
+successful fetch; they never replace deployment-local credentials or session
+storage. The web supervisor binds extensions in headless JSON mode so tools,
+commands, hooks, `session_start`, and dynamic resources work, while TUI/RPC
+extension dialogs remain unavailable. New plain chats use private
 scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.

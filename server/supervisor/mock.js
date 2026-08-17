@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { appHome, loadConfig, newId } from "../config.js";
 import { WEB_PI_COMMANDS, parseSlashCommand } from "../commands.js";
+import { PiConfiguration } from "../pi-configuration.js";
 
 const MOCK_MODELS = [
   { id: "mock/fast", provider: "mock", label: "Mock Fast" },
@@ -22,6 +23,7 @@ export class MockSupervisor {
   constructor(hub) {
     this.hub = hub;
     this.live = new Map(); // id -> { timers, queue, streaming }
+    this.piConfiguration = new PiConfiguration();
   }
 
   // ---- storage ----
@@ -83,6 +85,17 @@ export class MockSupervisor {
   }
   async loginProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
   async logoutProvider() { throw Object.assign(new Error("unsupported_auth_type"), { code: "unsupported_auth_type" }); }
+  assertPiConfigurationReloadable() {
+    if ([...this.live.values()].some(state => state.streaming)) {
+      throw Object.assign(new Error("pi_configuration_busy"), { code: "pi_configuration_busy" });
+    }
+  }
+  async reloadPiConfiguration() {
+    this.assertPiConfigurationReloadable();
+    this.piConfiguration.invalidate();
+    return this.piConfiguration.state({ force: true });
+  }
+  piConfigurationState() { return this.piConfiguration.state(); }
   async commands() { return WEB_PI_COMMANDS.map(command => ({ ...command })); }
   async command(id, text) {
     const parsed = parseSlashCommand(text);

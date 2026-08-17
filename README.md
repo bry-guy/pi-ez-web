@@ -64,6 +64,11 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
   "reposRoot": "~/src",
   "worktreeRoot": null,
   "defaultModel": null,
+  "pi": {
+    "profile": "https://github.com/bry-guy/dotfiles",
+    "packages": [],
+    "extensions": []
+  },
   "repositorySources": {
     "default": "local",
     "github": { "owner": "bry-guy" }
@@ -73,6 +78,27 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
 
 `defaultModel: null` means Automatic: use the first currently available
 provider model. An explicit value must be a usable `provider/modelId` reference.
+
+The optional `pi` block is the simplest way to share Pi behavior with the web
+runtime. `profile` accepts a local Pi profile directory, a local `settings.json`,
+or a credential-free HTTPS URL. A GitHub repository URL such as the example
+above resolves to `.pi/agent/settings.json` on its default branch; a GitHub blob
+URL can select another file, for example
+`.pi/profiles/rpiv/settings.json`. The profile's declarative settings are layered
+onto each web session, while `packages` and `extensions` add sources directly.
+Relative paths in the web config resolve from `PI_WEB_HOME`. Missing npm/git
+packages are installed by Pi into the persistent `PI_CODING_AGENT_DIR` when a
+session loads. The last successfully fetched remote profile is cached for
+restart/offline fallback.
+
+Profiles intentionally do **not** import `auth.json`, models, or transcripts:
+those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
+extensions execute as the server user with full system access, so reference only
+sources you trust. Headless-compatible tools, commands, hooks, startup events,
+skills, and prompts work in pi-ez-web; terminal-only extension UI is not rendered
+and extensions see `ctx.hasUI === false`. The same fields are viewable and
+editable under **Settings → Pi profile & extensions**.
+
 Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
 state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for
 example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). The project picker

@@ -220,7 +220,7 @@ class PiSidebar extends HTMLElement {
       if (layout === "empty") { this.innerHTML = ""; return; }
       this.innerHTML = `<aside class="rail">
         <div class="rail-head">
-          <div class="rail-logo">π</div><div class="rail-word">pi</div>
+          <button class="rail-logo" data-act="collapse" title="Collapse sidebar">π</button><div class="rail-word">pi</div>
         </div>
         <div class="rail-actions">
           <input class="rail-search" placeholder="Filter chats and sessions" aria-label="Filter chats and sessions">

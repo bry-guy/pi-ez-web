@@ -90,6 +90,7 @@ export const store = {
     offline: globalThis.navigator?.onLine === false,
     updateAvailable: false,
     providers: [],
+    piConfiguration: null,
     repositorySources: null,
     settings: null,
     repos: [],

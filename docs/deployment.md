@@ -18,7 +18,7 @@ workload. The infra repository creates an Argo CD Application for a selected
 branch and overrides its GHCR image with that branch commit's immutable tag;
 preview resources are name-prefixed so they do not select the production pod.
 
-- `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, and chat scratch space.
+- `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, cached remote Pi profile, and chat scratch space.
 - `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
 - `reposRoot` — the checked-out repositories.
 - `worktreeRoot` — Git worktrees created by the app.
@@ -47,7 +47,10 @@ A typical retained layout is:
 /data/pi-ez-worktrees/
 ```
 
-Treat both `github-auth.json` and Pi's `auth.json` as secrets in backups.
+Treat both `github-auth.json` and Pi's `auth.json` as secrets in backups. A
+remote Pi profile configured in `config.json` can install and execute arbitrary
+Pi packages as the service user; use only trusted HTTPS settings and package
+sources.
 
 ## k3s
 

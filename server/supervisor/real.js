@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
+import { PiConfiguration } from "../pi-configuration.js";
 
 let sdk = null;
 async function SDK() {
@@ -40,6 +41,7 @@ export class RealSupervisor {
     this.sessionCreateTail = Promise.resolve(); // serialize SDK resource setup
     this.models = null;
     this.modelError = null;
+    this.piConfiguration = new PiConfiguration();
   }
 
   async _modelRuntime() {
@@ -139,10 +141,53 @@ export class RealSupervisor {
     return model;
   }
 
+  async _createConfiguredSession({ cwd, sessionManager, modelRuntime, model }) {
+    const SDKModule = await SDK();
+    const runtime = modelRuntime || await this._modelRuntime();
+    try {
+      const { settingsManager } = await this.piConfiguration.createSettingsManager(
+        cwd,
+        SDKModule.getAgentDir(),
+        SDKModule.SettingsManager,
+      );
+      const resourceLoader = new SDKModule.DefaultResourceLoader({
+        cwd,
+        agentDir: SDKModule.getAgentDir(),
+        settingsManager,
+      });
+      await resourceLoader.reload();
+      const result = await SDKModule.createAgentSession({
+        cwd,
+        sessionManager,
+        modelRuntime: runtime,
+        settingsManager,
+        resourceLoader,
+        ...(model ? { model } : {}),
+      });
+      // pi-ez-web is headless today. Binding still matters: it fires
+      // session_start, enables resources_discover, and activates tools that
+      // extensions register at session startup. TUI/RPC dialogs remain
+      // unavailable and extensions see ctx.hasUI === false.
+      await result.session.bindExtensions({
+        mode: "json",
+        onError: error => this.hub.emit(result.session.sessionId, "extension_error", {
+          extensionPath: error.extensionPath,
+          event: error.event,
+          error: error.error,
+        }),
+      });
+      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult);
+      return result;
+    } catch (error) {
+      this.piConfiguration.recordRuntimeError(error);
+      throw error;
+    }
+  }
+
   async _attach(id, cwd, modelRef) {
     const cached = id && this.live.get(id);
     if (cached) return cached;
-    const { createAgentSession, SessionManager } = await SDK();
+    const { SessionManager } = await SDK();
     const file = id && (this.paths.get(id) || this.info.get(id)?.path);
     const resolvedCwd = cwd || (id && this._boundCwd(id)) || process.cwd();
     const sessionManager = file
@@ -150,9 +195,12 @@ export class RealSupervisor {
       : SessionManager.create(resolvedCwd);
     const runtime = await this._modelRuntime();
     const model = await this._resolveModel(modelRef, runtime);
-    const options = { cwd: resolvedCwd, sessionManager, modelRuntime: runtime };
-    if (model) options.model = model;
-    const { session } = await this._withSessionCreateLock(() => createAgentSession(options));
+    const { session } = await this._withSessionCreateLock(() => this._createConfiguredSession({
+      cwd: resolvedCwd,
+      sessionManager,
+      modelRuntime: runtime,
+      model,
+    }));
     this.paths.set(session.sessionId, session.sessionFile);
     const st = {
       session,
@@ -380,6 +428,29 @@ export class RealSupervisor {
     await st.session.abort();
   }
 
+  async _disposeLiveState(st, reason = "quit") {
+    try { await st.session.extensionRunner?.emit?.({ type: "session_shutdown", reason }); }
+    catch { /* extension shutdown is best effort */ }
+    st.unsubscribe?.();
+    st.session.dispose?.();
+  }
+
+  assertPiConfigurationReloadable() {
+    if ([...this.live.values()].some(st => st.session.isStreaming)) {
+      throw Object.assign(new Error("pi_configuration_busy"), { code: "pi_configuration_busy" });
+    }
+  }
+
+  async reloadPiConfiguration() {
+    this.assertPiConfigurationReloadable();
+    for (const st of this.live.values()) await this._disposeLiveState(st, "reload");
+    this.live.clear();
+    this.piConfiguration.invalidate();
+    return this.piConfiguration.state({ force: true });
+  }
+
+  piConfigurationState() { return this.piConfiguration.state(); }
+
   isStreaming(id) { return !!this.live.get(id)?.session?.isStreaming; }
   activeInCwd(cwd, exceptId) {
     for (const [id, st] of this.live) {
@@ -428,8 +499,7 @@ export class RealSupervisor {
     const st = this.live.get(id);
     if (st) {
       if (st.session.isStreaming) throw Object.assign(new Error("busy"), { code: "workspace_busy" });
-      st.unsubscribe?.();
-      st.session.dispose?.();
+      await this._disposeLiveState(st, "reload");
       this.live.delete(id);
     }
     if (!await this._discover(id)) throw new Error("unknown session " + id);
@@ -635,7 +705,7 @@ export class RealSupervisor {
   }
 
   async fork(parentId, atRecordId, { cwd, name }) {
-    const { SessionManager, createAgentSession } = await SDK();
+    const { SessionManager } = await SDK();
     await this._discover(parentId);
     const src = this.paths.get(parentId) || this.info.get(parentId)?.path;
     if (!src) throw new Error("unknown parent session");
@@ -646,9 +716,13 @@ export class RealSupervisor {
     }
     if (entry && !entry.parentId) sm.resetLeaf();
     const runtime = await this._modelRuntime();
+<<<<<<< HEAD
     const { session } = await this._withSessionCreateLock(() =>
       createAgentSession({ cwd, sessionManager: sm, modelRuntime: runtime }),
     );
+=======
+    const { session } = await this._createConfiguredSession({ cwd, sessionManager: sm, modelRuntime: runtime });
+>>>>>>> ddeb186 (feat: support Pi profiles and extensions)
     if (entry?.parentId) await session.navigateTree(entry.parentId);
     if (name) session.setSessionName(name);
     const id = session.sessionId;
