@@ -716,13 +716,9 @@ export class RealSupervisor {
     }
     if (entry && !entry.parentId) sm.resetLeaf();
     const runtime = await this._modelRuntime();
-<<<<<<< HEAD
     const { session } = await this._withSessionCreateLock(() =>
-      createAgentSession({ cwd, sessionManager: sm, modelRuntime: runtime }),
+      this._createConfiguredSession({ cwd, sessionManager: sm, modelRuntime: runtime }),
     );
-=======
-    const { session } = await this._createConfiguredSession({ cwd, sessionManager: sm, modelRuntime: runtime });
->>>>>>> ddeb186 (feat: support Pi profiles and extensions)
     if (entry?.parentId) await session.navigateTree(entry.parentId);
     if (name) session.setSessionName(name);
     const id = session.sessionId;
