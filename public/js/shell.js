@@ -120,6 +120,12 @@ class PiSidebar extends HTMLElement {
       e.stopPropagation();
       store.set(mobile() ? { drawerOpen: false } : { railOpen: !store.state.railOpen });
     }
+    else if (act === "search") {
+      e.preventDefault();
+      e.stopPropagation();
+      store.set({ railOpen: true });
+      requestAnimationFrame(() => this.querySelector(".rail-search")?.focus());
+    }
     else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
     else if (act === "new-project-session") {
       e.stopPropagation();
@@ -175,6 +181,7 @@ class PiSidebar extends HTMLElement {
           <button class="mini-logo" data-act="collapse" title="Expand sidebar">π</button>
           <div class="mini-gap"></div>
           <button class="mini-btn cta-plus" data-act="new-chat" title="New chat">+</button>
+          <button class="mini-btn quiet" data-act="search" title="Search sessions" aria-label="Search sessions">⌕</button>
           <div class="mini-flex"></div>
           <button class="mini-btn quiet" data-act="settings" title="Settings">${icon("settings")}</button>
         </aside>`;
@@ -184,7 +191,6 @@ class PiSidebar extends HTMLElement {
       this.innerHTML = `<aside class="rail">
         <div class="rail-head">
           <div class="rail-logo">π</div><div class="rail-word">pi</div>
-          <button class="ghost-btn" data-act="collapse" title="Collapse sidebar">${icon("chevronLeft")}</button>
         </div>
         <div class="rail-actions">
           <input class="rail-search" placeholder="Filter chats and sessions" aria-label="Filter chats and sessions">
@@ -278,7 +284,13 @@ class PiHeader extends HTMLElement {
     const t = e.target.closest("[data-act]");
     if (!t) return;
     const act = t.dataset.act;
-    if (act === "drawer") store.set({ drawerOpen: true });
+    if (act === "sidebar-toggle") {
+      e.preventDefault();
+      e.stopPropagation();
+      store.set(mobile()
+        ? { drawerOpen: !store.state.drawerOpen }
+        : { railOpen: !store.state.railOpen });
+    }
     else if (act === "branch-menu") store.set(s => ({ branchMenuOpen: !s.branchMenuOpen, branchError: null }));
     else if (act === "close-branch-menu") store.set({ branchMenuOpen: false, branchError: null });
     else if (act === "files") this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
@@ -378,10 +390,12 @@ class PiHeader extends HTMLElement {
 
     const hookResult = store.state.hookResult;
     const hookPanel = hookResult ? `<div class="hook-result ${hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(hookResult.hook || "hook")}</strong><span>exit ${esc(hookResult.exit)}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${hookResult.stdout ? `<pre>${esc(hookResult.stdout)}</pre>` : ""}${hookResult.stderr ? `<pre class="hook-stderr">${esc(hookResult.stderr)}</pre>` : ""}</div>` : "";
+    const sidebarOpen = mobile() ? s.drawerOpen : s.railOpen;
+    const sidebarControl = mobile()
+      ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
+      : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     this.innerHTML = `<header class="bar">
-      ${mobile() ? `<button class="hamburger" data-act="drawer" title="Menu">
-        <svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>
-      </button>` : ""}
+      <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main">
         <div class="bar-title">${esc(title)}</div>
         ${branchChip}

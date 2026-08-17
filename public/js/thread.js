@@ -71,11 +71,23 @@ class PiThread extends HTMLElement {
     const t = store.transcript();
     const noFork = !!store.state.chatId;
     if (!store.activeKey()) { this.innerHTML = ""; return; }
+    const liveAssistant = [...t.records].reverse().find(record => record.role === "assistant" && record.streaming);
+    // There can be a real gap between turn_start and message_start, and again
+    // between an assistant message/tool call and the next assistant message.
+    // Keep the thinking indicator tied to the turn rather than to the presence
+    // of an empty assistant record so those gaps remain visible.
+    const thinking = t.streaming && !liveAssistant;
     if (t.records.length === 0) {
-      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
+      this.innerHTML = thinking
+        ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
+        : `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    this.innerHTML = t.records.map(m => this.renderRecord(m, noFork)).join("");
+    const records = t.records.map(m => this.renderRecord(m, noFork)).join("");
+    const indicator = thinking
+      ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
+      : "";
+    this.innerHTML = records + indicator;
     this.autoscroll();
   }
 

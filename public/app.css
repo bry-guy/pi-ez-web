@@ -219,9 +219,11 @@ header.bar {
 .hook-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; color: var(--muted); }
 .hook-result .hook-stderr { color: var(--red); }
 .hamburger {
-  border: 1px solid var(--border); background: var(--surface); border-radius: 8px; width: 32px; height: 32px;
-  cursor: pointer; color: var(--text); display: grid; place-items: center; flex: 0 0 auto;
+  border: 0; background: var(--surface-2); border-radius: 8px; width: 32px; height: 32px;
+  cursor: pointer; color: var(--muted); display: grid; place-items: center; flex: 0 0 auto;
 }
+.hamburger:hover, .hamburger:focus-visible { background: var(--surface-3); color: var(--text); }
+.hamburger:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
 
 /* branch popover */
 .popover-scrim { position: fixed; inset: 0; z-index: 30; }
@@ -276,7 +278,7 @@ header.bar {
 .msg { min-width: 0; margin-bottom: 22px; }
 .msg-user-row { display: flex; justify-content: flex-end; align-items: flex-start; gap: 6px; }
 .fork-btn {
-  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border: 0; background: var(--surface); color: var(--muted);
   font-family: var(--mono); font-size: 12px; padding: 4px 8px; border-radius: 8px;
   display: flex; align-items: center; gap: 5px; align-self: center; flex: 0 0 auto;
   transition: opacity .12s; cursor: pointer; opacity: 0;
@@ -312,11 +314,11 @@ header.bar {
 .markdown-content li + li { margin-top: .28em; }
 .markdown-content li > ul, .markdown-content li > ol { margin: .28em 0 0; }
 .markdown-content blockquote {
-  margin: 1em 0; padding: .16em 0 .16em 1em; border-left: 3px solid var(--accent);
+  margin: 1em 0; padding: .5em .8em; background: var(--surface-2); border-radius: 8px;
   color: var(--muted);
 }
 .markdown-content blockquote > :last-child { margin-bottom: 0; }
-.markdown-content hr { height: 1px; margin: 1.35em 0; border: 0; background: var(--border); }
+.markdown-content hr { height: 0; margin: 1.75em 0; border: 0; background: transparent; }
 .markdown-content :not(pre) > code {
   padding: .12em .38em; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2);
   color: var(--orange); font: .88em var(--mono); white-space: break-spaces;
@@ -406,7 +408,9 @@ header.bar {
   width: 100%; border: 0; outline: none; resize: none; background: transparent;
   padding: 13px 15px 5px; font-size: 14.5px; line-height: 1.55; font-family: inherit; display: block;
 }
-.composer textarea:focus { box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.composer, .composer textarea, .composer textarea:focus {
+  border: 0 !important; outline: 0 !important; box-shadow: none !important; appearance: none;
+}
 .composer textarea.busy { color: var(--muted); }
 .composer textarea.busy::placeholder { color: var(--faint); opacity: 1; }
 .command-popover {
@@ -561,7 +565,10 @@ aside.files {
   position: absolute; inset: 0; background: oklch(0.2 0.02 255 / 0.45); z-index: 20;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
-.drawer-scrim { position: absolute; inset: 0; background: oklch(0.2 0.02 255 / 0.45); z-index: 5; }
+.drawer-scrim {
+  position: absolute; inset: var(--header-height, 54px) 0 0;
+  background: oklch(0.2 0.02 255 / 0.45); z-index: 5;
+}
 .modal {
   width: 520px; max-height: 70vh; background: var(--surface-2); border: 0;
   border-radius: 14px; box-shadow: var(--elevation-2); display: flex; flex-direction: column; overflow: hidden;
@@ -617,7 +624,8 @@ aside.files {
   .col-pad, .composer-pad { width: auto; max-width: none; margin-inline: 0; padding-inline: 16px; }
   .col-pad { padding-top: 18px; padding-bottom: 8px; }
   .composer-pad { padding-top: 10px; padding-bottom: 14px; }
-  header.bar { padding-inline: 12px; }
+  header.bar { padding-inline: 12px; z-index: 40; }
+  .hamburger { position: relative; z-index: 41; }
   .bar-main { min-width: 0; }
   .bar-sub { flex-wrap: wrap; width: 100%; }
   .composer textarea { font-size: 16px; }
@@ -694,6 +702,16 @@ aside.files {
 }
 .reload-card { width: 360px; max-width: 100%; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .reload-card .primary-btn { margin-top: 18px; justify-content: center; }
+
+/* Borders make the interface read as a collection of boxes. Surfaces, spacing,
+   rounded corners, and elevation provide the hierarchy instead. */
+*, *::before, *::after { border: 0 !important; }
+.rail-foot, .settings-row, .modal-head, .model-popover-head, .branch-pop .pop-head,
+.branch-pop .pop-foot, .model-group + .model-group, .model-unavailable, .diff-body,
+.file-error { box-shadow: none; }
+.settings-row + .settings-row { margin-top: 2px; }
+.rail-foot { margin: 8px 8px 0; border-radius: 10px; background: var(--surface-2); }
+.settings-card, .confirm-modal, .reload-card { box-shadow: var(--elevation-1); }
 
 /* UI chrome stays close to transcript scale; hierarchy comes from weight and spacing. */
 .sec-label { font-size: 11px; }
