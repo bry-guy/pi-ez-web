@@ -417,8 +417,8 @@ header.bar {
 pi-context-meter { display: block; padding: 0 13px; }
 .context-meter { position: relative; }
 .context-meter > button {
-  display: flex; align-items: center; gap: 9px; width: 100%; padding: 5px 0 3px;
-  border: 0; background: transparent; color: var(--faint); text-align: left; font: 10.5px var(--mono); cursor: pointer;
+  display: flex; align-items: center; justify-content: flex-end; gap: 9px; width: 100%; padding: 5px 0 3px;
+  border: 0; background: transparent; color: var(--faint); text-align: right; font: 10.5px var(--mono); cursor: pointer;
 }
 .context-meter > button:hover, .context-meter > button:focus-visible { color: var(--muted); outline: 0; }
 .context-meter i { width: 52px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
