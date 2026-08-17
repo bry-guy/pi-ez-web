@@ -26,7 +26,8 @@ test('production and preview Services select only their own pods', () => {
 
 test('preview initializes Bryan’s Pi profile with a package fallback', () => {
   const deployment = manifest('deploy/k8s-preview/deployment.yaml');
-  assert.match(deployment, /pi\.profile \|\|= 'https:\/\/github\.com\/bry-guy\/dotfiles';/);
+  assert.match(deployment, /pi\.profile === 'https:\/\/github\.com\/bry-guy\/dotfiles\/blob\/main\/\.pi\/agent\/settings\.json'/);
+  assert.match(deployment, /pi\.profile = 'https:\/\/github\.com\/bry-guy\/dotfiles';/);
   assert.match(deployment, /git:github\.com\/nicobailon\/pi-mcp-adapter/);
   assert.match(deployment, /defaultMode: 'lite'/);
   assert.match(deployment, /name: MISE_TRUSTED_CONFIG_PATHS\n\s+value: \/data\/pi-ez-agent\/git\/github\.com/);
