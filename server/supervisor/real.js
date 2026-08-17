@@ -8,6 +8,7 @@ import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
 import { activityFromEntry, activityFromToolResult } from "../activity.js";
 import { PiConfiguration, publicError } from "../pi-configuration.js";
+import { GitHubClient } from "../github.js";
 
 function errorDetails(error) {
   const parts = [];
@@ -41,6 +42,19 @@ function persistManager(manager, code = "session_persistence_unavailable") {
     manager.flushed = true;
   }
   return file;
+}
+
+function commandArgument(args) {
+  const value = String(args || "").trim();
+  return value || null;
+}
+
+function exportFormat(args) {
+  const value = commandArgument(args)?.toLowerCase();
+  if (!value) return "html";
+  if (value === "html" || value.endsWith(".html")) return "html";
+  if (value === "jsonl" || value.endsWith(".jsonl")) return "jsonl";
+  throw Object.assign(new Error("usage: /export [html|jsonl]"), { code: "command_usage" });
 }
 
 export class RealSupervisor {
@@ -385,15 +399,106 @@ export class RealSupervisor {
     });
   }
 
+  async exportSession(id, format = "html") {
+    const st = await this._attachById(id);
+    const normalized = format === "jsonl" ? "jsonl" : "html";
+    const file = normalized === "jsonl"
+      ? st.session.exportToJsonl()
+      : await st.session.exportToHtml();
+    const body = fs.readFileSync(file);
+    return {
+      body,
+      filename: path.basename(file),
+      contentType: normalized === "jsonl" ? "application/jsonl; charset=utf-8" : "text/html; charset=utf-8",
+    };
+  }
+
+  async shareSession(id) {
+    const exported = await this.exportSession(id, "html");
+    if (exported.body.length > 4_000_000) {
+      throw Object.assign(new Error("session_export_too_large"), { code: "session_export_too_large" });
+    }
+    const client = new GitHubClient();
+    const response = await client.request("/gists", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        description: "Pi session",
+        public: false,
+        files: { "session.html": { content: exported.body.toString("utf8") } },
+      }),
+    });
+    const gist = await response.json();
+    if (!gist?.html_url) throw Object.assign(new Error("github_unavailable"), { code: "github_unavailable" });
+    return { url: gist.html_url };
+  }
+
   async command(id, text, mode) {
     const parsed = parseSlashCommand(text);
     if (!parsed) throw Object.assign(new Error("invalid_slash_command"), { code: "invalid_slash_command" });
-    if (parsed.name === "settings") return { action: "settings" };
-    if (parsed.name === "name") {
-      if (!parsed.args.trim()) throw Object.assign(new Error("usage: /name <name>"), { code: "command_usage" });
-      await this.setName(id, parsed.args.trim());
-      return { action: "session_meta", name: parsed.args.trim() };
+    const arg = commandArgument(parsed.args);
+
+    if (parsed.name === "settings" || parsed.name === "login" || parsed.name === "logout") {
+      return { action: "settings" };
     }
+    if (parsed.name === "model" || parsed.name === "scoped-models") {
+      if (parsed.name === "model" && arg) {
+        await this.setModel(id, arg);
+        return { action: "session_meta", model: arg };
+      }
+      return { action: "model-picker" };
+    }
+    if (parsed.name === "name") {
+      if (!arg) {
+        const st = await this._attachById(id);
+        return { action: "notice", title: "Session name", message: st.session.sessionName || "No session name set." };
+      }
+      await this.setName(id, arg);
+      return { action: "session_meta", name: arg };
+    }
+    if (parsed.name === "export") return { action: "download", format: exportFormat(parsed.args) };
+    if (parsed.name === "copy") {
+      const st = await this._attachById(id);
+      const textToCopy = st.session.getLastAssistantText?.();
+      if (!textToCopy) throw Object.assign(new Error("No agent messages to copy yet."), { code: "command_usage" });
+      return { action: "copy", text: textToCopy };
+    }
+    if (parsed.name === "share") return { action: "share", ...(await this.shareSession(id)) };
+    if (parsed.name === "session") {
+      const st = await this._attachById(id);
+      const stats = st.session.getSessionStats();
+      return { action: "notice", title: "Session info", stats: {
+        id: stats.sessionId, file: stats.sessionFile || null,
+        messages: stats.totalMessages, user: stats.userMessages, assistant: stats.assistantMessages,
+        tools: stats.toolCalls, toolResults: stats.toolResults, tokens: stats.tokens, cost: stats.cost,
+      } };
+    }
+    if (parsed.name === "changelog") return { action: "notice", title: "Changelog", message: "See the Pi release notes in the configured Pi installation." };
+    if (parsed.name === "hotkeys") return { action: "notice", title: "Web shortcuts", message: "Enter send · Shift+Enter newline · Alt+Enter follow-up · !command shell · /command Pi command." };
+    if (parsed.name === "fork") return { action: "fork" };
+    if (parsed.name === "clone") return { action: "clone" };
+    if (parsed.name === "tree" || parsed.name === "resume") return { action: "sidebar" };
+    if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Web sessions run with the server's configured headless trust policy." };
+    if (parsed.name === "new") return { action: "new" };
+    if (parsed.name === "compact") {
+      const st = await this._attachById(id);
+      await st.session.compact(arg || undefined);
+      return { action: "refresh", message: "Session context compacted." };
+    }
+    if (parsed.name === "reload") {
+      const st = await this._attachById(id);
+      if (st.session.isStreaming || st.session.isCompacting) {
+        throw Object.assign(new Error("Wait for the current response to finish before reloading."), { code: "command_busy" });
+      }
+      await st.session.reload();
+      return { action: "refresh", message: "Pi resources reloaded." };
+    }
+    if (parsed.name === "quit") return { action: "quit" };
+    if (parsed.name === "debug") return { action: "notice", title: "Pi diagnostics", message: `Session ${id} · ${this.live.has(id) ? "attached" : "discovered"}` };
+    if (parsed.name === "import") {
+      throw Object.assign(new Error("Use /export to download a session; importing files from the browser is not enabled yet."), { code: "command_usage" });
+    }
+
     const st = await this._attachById(id);
     const commands = await this.commands(id);
     const known = commands.some(command => command.name === parsed.name);

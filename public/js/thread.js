@@ -1,7 +1,7 @@
 import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
-import { esc, selectSession } from "./shell.js";
+import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
 
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
@@ -84,7 +84,8 @@ class PiThread extends HTMLElement {
     // of an empty assistant record so those gaps remain visible.
     const thinking = t.streaming && !liveAssistant;
     const activity = this.renderActivity(t.records);
-    if (visibleRecords.length === 0 && !activity && !thinking) {
+    const notice = this.renderCommandNotice();
+    if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
       this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
@@ -92,7 +93,7 @@ class PiThread extends HTMLElement {
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
-    this.innerHTML = records + indicator + activity;
+    this.innerHTML = records + indicator + activity + notice;
     this.autoscroll(this.scrollOnNextRender);
     this.scrollOnNextRender = false;
   }
@@ -117,6 +118,16 @@ class PiThread extends HTMLElement {
       : "";
     const agentCards = agents.map(agent => `<section class="activity-panel agent-panel" aria-label="${esc(agent.title)}"><div class="activity-head"><strong>${esc(agent.title)}</strong><span>${esc(agent.status)}</span></div><div class="activity-summary">${esc(agent.summary)}</div></section>`).join("");
     return `<div class="activity-stack">${todoPanel}${agentCards}</div>`;
+  }
+
+  renderCommandNotice() {
+    const notice = store.state.commandNotice;
+    if (!notice || notice.sessionId !== store.activeKey()) return "";
+    const stats = notice.stats;
+    const message = stats
+      ? `Messages ${stats.messages} · user ${stats.user} · assistant ${stats.assistant} · tools ${stats.tools} · tokens ${stats.tokens?.total || 0} · cost ${Number(stats.cost || 0).toFixed(4)}`
+      : notice.message || "";
+    return `<section class="command-notice" role="status"><strong>${esc(notice.title || "Pi")}</strong><span>${esc(message)}</span></section>`;
   }
 
   renderRecord(m, noFork) {
@@ -662,7 +673,72 @@ class PiComposer extends HTMLElement {
     const popover = this.querySelector(".command-popover");
     if (!popover) return;
     popover.classList.toggle("hidden", !this.commandOpen);
-    popover.innerHTML = this.commands.map((command, index) => `<button class="command-option ${index === this.commandIndex ? "current" : ""}" data-command-index="${index}"><span>/${esc(command.name)}</span><small>${esc(command.description || command.source || "")}</small></button>`).join("");
+    popover.innerHTML = this.commands.map((command, index) => `<button class="command-option ${index === this.commandIndex ? "current" : ""}" data-command-index="${index}"><span>/${esc(command.name)}</span><small>${esc([command.description || command.source || "", command.argumentHint || ""].filter(Boolean).join(" "))}</small></button>`).join("");
+  }
+
+  async handleCommandResult(id, result) {
+    const action = result?.action;
+    if (action === "settings") { store.set({ view: "settings", commandNotice: null }); return; }
+    if (action === "model-picker") {
+      const picker = this.querySelector("pi-model-picker");
+      if (picker) { picker.open = true; picker.focusedIndex = 0; picker.render(); picker.focusOption?.(); }
+      return;
+    }
+    if (action === "download") {
+      const link = document.createElement("a");
+      link.href = api.exportSession(id, result.format || "html");
+      link.download = "";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      store.set({ commandNotice: { sessionId: id, title: "Export", message: "Session download started." } });
+      return;
+    }
+    if (action === "copy") {
+      try {
+        await navigator.clipboard.writeText(result.text || "");
+        store.set({ commandNotice: { sessionId: id, title: "Copy", message: "Copied the last agent message." } });
+      } catch {
+        store.setError("Clipboard access is unavailable in this browser.");
+      }
+      return;
+    }
+    if (action === "share") {
+      store.set({ commandNotice: { sessionId: id, title: "Share", message: result.url || "Private gist created." } });
+      return;
+    }
+    if (action === "notice") {
+      store.set({ commandNotice: { sessionId: id, title: result.title, message: result.message, stats: result.stats } });
+      return;
+    }
+    if (action === "refresh") {
+      await openTranscript(id);
+      store.set({ commandNotice: { sessionId: id, title: "Pi", message: result.message || "Done." } });
+      return;
+    }
+    if (action === "sidebar") { store.set({ railOpen: true, drawerOpen: true, commandNotice: null }); return; }
+    if (action === "new") {
+      if (store.state.chatId || !store.state.projectId) await newChat();
+      else await newProjectSession(store.state.projectId);
+      return;
+    }
+    if (action === "clone" || action === "fork") {
+      const projectId = store.state.projectId;
+      if (!projectId) { store.setError("Forking is available for project sessions."); return; }
+      const user = [...store.transcript(id).records].reverse().find(record => record.role === "user");
+      if (action === "fork" && !user) { store.setError("There is no user message to fork yet."); return; }
+      const forked = await api.fork(id, action === "fork" ? user.id : undefined);
+      await refreshState();
+      store.state.openTree[id] = true;
+      selectSession(projectId, forked.id);
+      if (action === "fork") store.set({ draft: user.text || "" });
+      return;
+    }
+    if (action === "quit") {
+      await api.close(id);
+      return;
+    }
+    if (action) store.set({ commandNotice: { sessionId: id, title: "Pi", message: result.message || action } });
   }
 
   async addFiles(files) {
@@ -692,6 +768,7 @@ class PiComposer extends HTMLElement {
     this.attachments = [];
     this.renderAttachments();
     store.state.draft = "";
+    store.set({ commandNotice: null });
     if (text.startsWith("!")) {
       try { await api.bang(id, text.slice(1).trim()); }
       catch (err) { store.setError(`Command failed: ${err.error || err.message || err}`); }
@@ -702,10 +779,7 @@ class PiComposer extends HTMLElement {
     try {
       if (text.startsWith("/")) {
         const result = await api.command(id, text, mode);
-        if (result.action === "settings") {
-          store.set({ view: "settings" });
-          return;
-        }
+        await this.handleCommandResult(id, result);
       } else {
         await api.message(id, text, mode, images);
         // The server acknowledges the prompt before the SSE record is guaranteed

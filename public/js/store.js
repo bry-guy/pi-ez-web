@@ -78,6 +78,7 @@ export const store = {
     models: [],              // registry-backed { id, provider, label }
     animIdx: 0,
     error: null,             // transient composer/action error
+    commandNotice: null,     // last web-adapted Pi slash-command result
     hookResult: null,        // last configured project hook result
     fatalError: null,        // unrecoverable wire-contract error
     fileError: null,

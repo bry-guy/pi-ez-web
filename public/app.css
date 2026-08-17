@@ -401,6 +401,8 @@ header.bar {
 .activity-glyph { width: 12px; color: var(--accent); font-family: var(--mono); }
 .activity-task.done .activity-glyph { color: var(--green); }
 .activity-summary { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.command-notice { display: grid; gap: 4px; width: min(80%, 760px); margin: 8px auto 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.command-notice strong { color: var(--text); font-weight: 500; }
 
 /* ---------- composer ---------- */
 .composer-outer { border-top: 0; background: var(--bg); }

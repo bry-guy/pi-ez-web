@@ -97,15 +97,62 @@ export class MockSupervisor {
   }
   piConfigurationState() { return this.piConfiguration.state(); }
   async commands() { return WEB_PI_COMMANDS.map(command => ({ ...command })); }
+  async exportSession(id, format = "html") {
+    const s = this._load(id);
+    if (!s) throw new Error("unknown session " + id);
+    const jsonl = `${JSON.stringify({ type: "session", id: s.id, cwd: s.cwd })}\n${(s.records || []).map(record => JSON.stringify(record)).join("\n")}\n`;
+    const html = `<!doctype html><meta charset="utf-8"><title>Pi session</title><pre>${jsonl.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</pre>`;
+    return {
+      body: Buffer.from(format === "jsonl" ? jsonl : html),
+      filename: `${s.id}.${format === "jsonl" ? "jsonl" : "html"}`,
+      contentType: format === "jsonl" ? "application/jsonl; charset=utf-8" : "text/html; charset=utf-8",
+    };
+  }
+  async shareSession(id) { return { url: `https://gist.github.com/mock/${id}` }; }
   async command(id, text) {
     const parsed = parseSlashCommand(text);
     if (!parsed) throw Object.assign(new Error("invalid_slash_command"), { code: "invalid_slash_command" });
-    if (parsed.name === "settings") return { action: "settings" };
-    if (parsed.name === "name") {
-      if (!parsed.args.trim()) throw Object.assign(new Error("usage: /name <name>"), { code: "command_usage" });
-      await this.setName(id, parsed.args.trim());
-      return { action: "session_meta", name: parsed.args.trim() };
+    const arg = String(parsed.args || "").trim();
+    if (parsed.name === "settings" || parsed.name === "login" || parsed.name === "logout") return { action: "settings" };
+    if (parsed.name === "model" || parsed.name === "scoped-models") {
+      if (parsed.name === "model" && arg) {
+        await this.setModel(id, arg);
+        return { action: "session_meta", model: arg };
+      }
+      return { action: "model-picker" };
     }
+    if (parsed.name === "name") {
+      if (!arg) return { action: "notice", title: "Session name", message: this._load(id)?.name || "No session name set." };
+      await this.setName(id, arg);
+      return { action: "session_meta", name: arg };
+    }
+    if (parsed.name === "export") {
+      if (arg && !["html", "jsonl"].includes(arg.toLowerCase()) && !/\.(html|jsonl)$/i.test(arg)) {
+        throw Object.assign(new Error("usage: /export [html|jsonl]"), { code: "command_usage" });
+      }
+      return { action: "download", format: /jsonl$/i.test(arg) || arg.toLowerCase() === "jsonl" ? "jsonl" : "html" };
+    }
+    if (parsed.name === "copy") {
+      const textToCopy = [...(this._load(id)?.records || [])].reverse().find(record => record.role === "assistant")?.text;
+      if (!textToCopy) throw Object.assign(new Error("No agent messages to copy yet."), { code: "command_usage" });
+      return { action: "copy", text: textToCopy };
+    }
+    if (parsed.name === "share") return { action: "share", ...(await this.shareSession(id)) };
+    if (parsed.name === "session") {
+      const s = this._load(id);
+      return { action: "notice", title: "Session info", stats: { id, file: null, messages: s.records.length, user: s.records.filter(r => r.role === "user").length, assistant: s.records.filter(r => r.role === "assistant").length, tools: 0, toolResults: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 } };
+    }
+    if (parsed.name === "changelog") return { action: "notice", title: "Changelog", message: "Mock mode has no separate Pi changelog." };
+    if (parsed.name === "hotkeys") return { action: "notice", title: "Web shortcuts", message: "Enter send · Shift+Enter newline · Alt+Enter follow-up · !command shell · /command Pi command." };
+    if (["tree", "resume"].includes(parsed.name)) return { action: "sidebar" };
+    if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Mock sessions use the configured web trust policy." };
+    if (parsed.name === "fork" || parsed.name === "clone") return { action: parsed.name };
+    if (parsed.name === "new") return { action: "new" };
+    if (parsed.name === "compact") return { action: "refresh", message: "Session context compacted." };
+    if (parsed.name === "reload") return { action: "refresh", message: "Pi resources reloaded." };
+    if (parsed.name === "quit") return { action: "quit" };
+    if (parsed.name === "debug") return { action: "notice", title: "Pi diagnostics", message: `Session ${id} · mock` };
+    if (parsed.name === "import") throw Object.assign(new Error("Use /export to download a session; importing files from the browser is not enabled yet."), { code: "command_usage" });
     throw Object.assign(new Error("unknown_slash_command"), { code: "unknown_slash_command" });
   }
 

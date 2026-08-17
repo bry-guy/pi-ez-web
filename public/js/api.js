@@ -83,6 +83,7 @@ export const api = {
   setThinking: (id, level) => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`, { method: "POST", headers: JH, body: JSON.stringify({ level }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
   command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  exportSession: (id, format = "html") => `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
   hook: (id, name) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   settings: (defaultModel, reposRoot) => {
     const body = {};

@@ -274,6 +274,24 @@ test("activity records stream and persist across transcript snapshots", async ()
   assert.deepEqual(snap.records.filter(r => r.role === "activity").map(r => r.kind), ["todo", "agent"]);
 });
 
+test("Pi built-in commands are discoverable and web-adapted", async () => {
+  const { id } = await (await post("/api/chats")).json();
+  const commands = await (await get(`/api/sessions/${id}/commands`)).json();
+  for (const name of ["model", "export", "copy", "compact", "reload", "new", "resume", "quit"]) {
+    assert.ok(commands.commands.some(command => command.name === name), `missing /${name}`);
+  }
+  const session = await (await post(`/api/sessions/${id}/command`, { text: "/session" })).json();
+  assert.equal(session.action, "notice");
+  const compact = await (await post(`/api/sessions/${id}/command`, { text: "/compact keep it short" })).json();
+  assert.equal(compact.action, "refresh");
+  const exported = await (await post(`/api/sessions/${id}/command`, { text: "/export jsonl" })).json();
+  assert.deepEqual(exported, { ok: true, action: "download", format: "jsonl" });
+  const file = await get(`/api/sessions/${id}/export?format=jsonl`);
+  assert.equal(file.status, 200);
+  assert.match(file.headers.get("content-type") || "", /application\/jsonl/);
+  assert.match(await file.text(), /\"type\":\"session\"/);
+});
+
 test("followUp queues; steer interrupts", async () => {
   const sse = new SSE(base + "/api/events");
   const { id } = await (await post("/api/chats")).json();
@@ -376,16 +394,19 @@ test("project creation: first session on the checkout branch", async () => {
 
 test("slash command discovery supports /settings and /name", async () => {
   const commands = await (await get(`/api/sessions/${firstSessionId}/commands`)).json();
-  assert.deepEqual(commands.commands.map(command => command.name), ["settings", "name"]);
+  const commandNames = commands.commands.map(command => command.name);
+  assert.ok(commandNames.includes("settings"));
+  assert.ok(commandNames.includes("name"));
+  assert.ok(commandNames.includes("compact"));
   const settings = await post(`/api/sessions/${firstSessionId}/command`, { text: "/settings" });
   assert.deepEqual(await settings.json(), { ok: true, action: "settings" });
   const named = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name Web session" });
   assert.equal(named.status, 200);
   assert.equal((await named.json()).name, "Web session");
   assert.equal((await (await get(`/api/sessions/${firstSessionId}/meta`)).json()).name, "Web session");
-  const invalid = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name" });
-  assert.equal(invalid.status, 400);
-  assert.equal((await invalid.json()).error, "command_usage");
+  const currentName = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name" });
+  assert.equal(currentName.status, 200);
+  assert.equal((await currentName.json()).action, "notice");
   const unknown = await post(`/api/sessions/${firstSessionId}/command`, { text: "/not-a-command" });
   assert.equal(unknown.status, 400);
   assert.equal((await unknown.json()).error, "unknown_slash_command");

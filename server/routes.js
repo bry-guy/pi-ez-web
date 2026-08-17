@@ -366,8 +366,28 @@ export function buildApi(sup) {
       if (result.action === "settings") return c.json({ ok: true, action: "settings" });
       return c.json({ ok: true, ...result });
     } catch (e) {
-      const statuses = { model_required: 409, unknown_slash_command: 400, invalid_slash_command: 400, command_usage: 400 };
+      const statuses = {
+        model_required: 409, command_busy: 409, model_unavailable: 400, unknown_slash_command: 400, invalid_slash_command: 400,
+        command_usage: 400, session_export_too_large: 413, github_auth_required: 401,
+        github_rate_limited: 403, github_unavailable: 502,
+      };
       if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      if (String(e?.message || "").startsWith("unknown session")) return err(c, 404, "no_such_session");
+      throw e;
+    }
+  });
+
+  api.get("/sessions/:id/export", async c => {
+    const format = String(c.req.query("format") || "html").toLowerCase();
+    if (format !== "html" && format !== "jsonl") return err(c, 400, "command_usage", { message: "format must be html or jsonl" });
+    try {
+      const output = await sup.exportSession(c.req.param("id"), format);
+      return c.body(output.body, 200, {
+        "content-type": output.contentType,
+        "content-disposition": `attachment; filename="${output.filename.replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+        "cache-control": "no-store",
+      });
+    } catch (e) {
       if (String(e?.message || "").startsWith("unknown session")) return err(c, 404, "no_such_session");
       throw e;
     }

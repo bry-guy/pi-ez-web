@@ -39,7 +39,7 @@ first prompt asks you to connect a model provider when no usable model is
 available. Assistant replies render GitHub-flavored Markdown (headings, lists,
 tables, links, quotes, and code blocks); model-supplied HTML is removed and the
 rendered output is sanitized. The composer discovers Pi extension, prompt-template,
-and skill commands, while `/settings` and `/name <name>` are web-native actions.
+and skill commands. Pi's built-in slash commands are web-adapted too: model selection, compaction, export/download, copy, session stats, reload, fork/clone, navigation, and provider settings work from the same `/` palette.
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
 OpenAI API-key login, and the default-model selector. Branch switching, the file
 tree, and forking appear only inside a **project** session — connect a repo first
