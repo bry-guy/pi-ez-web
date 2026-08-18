@@ -309,6 +309,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
   assert.equal(root.querySelector(".delivery-status"), null);
   assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
+  store.state.transcripts.s1.records.push({ id: "failed-1", role: "user", text: "failed", deliveryError: "provider unavailable" });
+  store.notify("transcript");
+  assert.equal(root.querySelector(".delivery-status")?.textContent, "ERROR: Unable to send.");
   applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "activity", record: {
     id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
     title: "Compacting context", summary: "Preparing a shorter context…", items: [], source: "pi",

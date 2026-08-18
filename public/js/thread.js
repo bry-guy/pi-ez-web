@@ -164,7 +164,7 @@ class PiThread extends HTMLElement {
       </div></div>`;
     }
     if (m.role === "user") {
-      const delivery = m.pending ? "Sending…" : m.deliveryError ? `Not sent · ${m.deliveryError}` : "";
+      const delivery = m.deliveryError ? "ERROR: Unable to send." : "";
       return `<div class="msg ${noFork ? "no-fork" : ""} ${m.deliveryError ? "delivery-failed" : ""}">
         <div class="msg-user-row">
           ${m.pending || m.deliveryError ? "" : `<button class="fork-btn" data-fork="${esc(m.id)}" title="Fork"><span class="sigil">⑂</span><span class="word">fork</span></button>`}
