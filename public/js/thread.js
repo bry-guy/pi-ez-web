@@ -3,6 +3,8 @@ import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
 import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
 
+let pendingMessageSequence = 0;
+
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
   connectedCallback() {
@@ -112,8 +114,9 @@ class PiThread extends HTMLElement {
       if (record.role === "activity" && record.key) latest.set(record.key, record);
     }
     const todo = latest.get("todo");
+    const compaction = latest.get("compaction");
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
-    if (!todoItems.length) return "";
+    if (!todoItems.length && !compaction) return "";
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
       const status = item.status === "completed" ? "done" : item.status === "in_progress" ? "active" : "pending";
@@ -131,7 +134,13 @@ class PiThread extends HTMLElement {
     const todoPanel = todoItems.length
       ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, true)
       : "";
-    return `<div class="activity-stack">${todoPanel}</div>`;
+    const compactionPanel = compaction
+      ? `<div class="activity-status ${esc(compaction.status || "completed")}" role="status" aria-live="polite">
+          <span class="activity-status-glyph">${compaction.status === "running" ? "◐" : compaction.status === "completed" ? "✓" : "!"}</span>
+          <strong>${esc(compaction.title || "Context compaction")}</strong><span>${esc(compaction.summary || "")}</span>
+        </div>`
+      : "";
+    return `<div class="activity-stack">${compactionPanel}${todoPanel}</div>`;
   }
 
   renderCommandNotice() {
@@ -155,12 +164,11 @@ class PiThread extends HTMLElement {
       </div></div>`;
     }
     if (m.role === "user") {
-      return `<div class="msg ${noFork ? "no-fork" : ""}">
+      const delivery = m.pending ? "Sending…" : m.deliveryError ? `Not sent · ${m.deliveryError}` : "";
+      return `<div class="msg ${noFork ? "no-fork" : ""} ${m.deliveryError ? "delivery-failed" : ""}">
         <div class="msg-user-row">
-          <button class="fork-btn" data-fork="${esc(m.id)}" title="Fork">
-            <span class="sigil">⑂</span><span class="word">fork</span>
-          </button>
-          <div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>
+          ${m.pending || m.deliveryError ? "" : `<button class="fork-btn" data-fork="${esc(m.id)}" title="Fork"><span class="sigil">⑂</span><span class="word">fork</span></button>`}
+          <div><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
         </div></div>`;
     }
     if (m.role === "assistant") {
@@ -636,6 +644,20 @@ class PiComposer extends HTMLElement {
     const match = this.ta.value.match(/^\/([^\s]*)$/);
     return match ? match[1].toLowerCase() : null;
   }
+  addPendingMessage(id, text, images) {
+    const pendingId = `pending:${id}:${Date.now()}:${++pendingMessageSequence}`;
+    store.transcript(id).records.push({ id: pendingId, pendingId, role: "user", text, images, pending: true });
+    store.notify("transcript");
+    return pendingId;
+  }
+  markPendingMessage(id, pendingId, message) {
+    if (!pendingId) return;
+    const record = store.transcript(id).records.find(item => item.pendingId === pendingId);
+    if (!record) return;
+    record.pending = false;
+    record.deliveryError = message;
+    store.notify("transcript");
+  }
   async syncCommands() {
     const query = this.commandQuery();
     const id = store.activeKey();
@@ -767,8 +789,11 @@ class PiComposer extends HTMLElement {
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id)) return;
+    if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id) || store.transcript(id).compacting) return;
     const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
+    const pendingId = !text.startsWith("/") && !text.startsWith("!")
+      ? this.addPendingMessage(id, text, images)
+      : null;
     this.scrollToLatest();
     this.ta.value = "";
     this.attachments = [];
@@ -787,12 +812,19 @@ class PiComposer extends HTMLElement {
         const result = await api.command(id, text, mode);
         await this.handleCommandResult(id, result);
       } else {
-        await api.message(id, text, mode, images);
-        // The server acknowledges the prompt before the SSE record is guaranteed
-        // to arrive. Refresh once so the sent message is visible immediately.
-        await openTranscript(id);
+        await api.message(id, text, mode, images, pendingId);
+        // The optimistic record is already visible; SSE replaces it with Pi's
+        // canonical record when the server accepts the prompt.
       }
     } catch (err) {
+      const message = err.error === "model_required"
+        ? "No model is available."
+        : err.error === "workspace_busy"
+          ? "Workspace is busy."
+          : err.error === "checkout_occupied"
+            ? "Not sent: another session is using this workspace."
+            : err.message || err.error || String(err);
+      this.markPendingMessage(id, pendingId, message);
       if (err.error === "workspace_busy") {
         await refreshState().catch(refreshErr => store.setError(`Could not refresh state: ${refreshErr.message || refreshErr}`));
       } else if (err.error === "checkout_occupied") {
@@ -821,6 +853,7 @@ class PiComposer extends HTMLElement {
     const t = store.transcript();
     const p = store.project();
     const lock = store.workspaceBusy(id);
+    const compacting = !!t.compacting;
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
     const activeId = store.activeKey();
@@ -834,15 +867,16 @@ class PiComposer extends HTMLElement {
     else this.renderCommands();
     const error = store.state.error;
     const nQueued = store.state.queued[id] || 0;
-    this.ta.classList.toggle("busy", t.streaming || !!lock);
+    this.ta.classList.toggle("busy", t.streaming || compacting || !!lock);
     this.ta.classList.toggle("error", !!error);
-    this.ta.placeholder = error || (t.streaming
-      ? "Enter a steering message, alt+enter a follow-up…"
-      : lock ? "Another session is streaming — open it to send a steering message…"
-        : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
+    this.ta.placeholder = error || (compacting
+      ? "Compacting context…"
+      : t.streaming ? "Enter a steering message, alt+enter a follow-up…"
+        : lock ? "Another session is streaming — open it to send a steering message…"
+          : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     // Keep Send available during a turn so it can steer or queue a follow-up.
-    this.sendBtn.disabled = !!lock;
+    this.sendBtn.disabled = compacting || !!lock;
   }
 }
 

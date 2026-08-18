@@ -36,6 +36,24 @@ test("model-less session attachment resolves the configured default before creat
   assert.deepEqual(attached, ["session-1", "/tmp", "openai-codex/gpt-5.6-luna"]);
 });
 
+test("compaction events become visible status activities", () => {
+  const events = [];
+  const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
+  const st = { liveRecords: new Map(), pendingMessages: [] };
+  supervisor._onEvent("session-1", st, { type: "compaction_start", reason: "manual" });
+  assert.equal(st.liveRecords.get("activity:compaction").status, "running");
+  supervisor._onEvent("session-1", st, { type: "compaction_end", reason: "manual", result: {}, aborted: false });
+  assert.equal(st.liveRecords.get("activity:compaction").status, "completed");
+  assert.deepEqual(events.map(event => [event.type, event.data.record.status]), [
+    ["activity", "running"], ["activity", "completed"],
+  ]);
+  st.pendingMessages.push({ clientMessageId: "client-1", text: "hello" });
+  supervisor._onEvent("session-1", st, { type: "entry_appended", entry: {
+    id: "user-1", type: "message", message: { role: "user", content: "hello" },
+  } });
+  assert.equal(events.at(-1).data.clientMessageId, "client-1");
+});
+
 test("manual compact reports expected no-op states instead of an internal error", async () => {
   const supervisor = new RealSupervisor({});
   for (const [message, expected] of [

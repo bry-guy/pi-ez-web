@@ -70,8 +70,8 @@ export const api = {
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
-  message: (id, text, mode = "prompt", images = []) => fetch(`/api/sessions/${id}/message`, {
-    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images }),
+  message: (id, text, mode = "prompt", images = [], clientMessageId = null) => fetch(`/api/sessions/${id}/message`, {
+    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images, ...(clientMessageId ? { clientMessageId } : {}) }),
   }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
@@ -172,9 +172,15 @@ export async function openTranscript(id) {
   buffers.set(id, []);
   try {
     const snap = await fetchTranscriptWithRetry(id);
+    const pending = (store.state.transcripts[id]?.records || []).filter(record => record.pending || record.deliveryError);
+    const records = [...(snap.records || [])];
+    for (const record of pending) {
+      if (!records.some(existing => existing.role === "user" && existing.text === record.text)) records.push(record);
+    }
     store.state.transcripts[id] = {
-      records: snap.records || [],
+      records,
       streaming: !!snap.streaming,
+      compacting: !!snap.compacting,
       seq: snap.seq ?? -1,
     };
     const snapshotSeq = snap.seq ?? -1;
@@ -296,7 +302,11 @@ export function applyEvent(evt, replay = false) {
   switch (evt.type) {
     case "user_record": {
       const record = evt.record;
-      if (record && !byId(recs, record.id)) recs.push(record);
+      const pendingIndex = evt.clientMessageId
+        ? recs.findIndex(item => item.pendingId === evt.clientMessageId)
+        : recs.findLastIndex(item => item.role === "user" && (item.pending || item.deliveryError) && item.text === record?.text);
+      if (record && pendingIndex >= 0) recs.splice(pendingIndex, 1, record);
+      else if (record && !byId(recs, record.id)) recs.push(record);
       updateFirstTitle(evt.sessionId, record?.text);
       if (!replay) store.touchSession(evt.sessionId);
       break;
@@ -341,6 +351,7 @@ export function applyEvent(evt, replay = false) {
           const at = evt.record.kind === "agent" ? lastStreamingIndex(recs) : recs.length;
           recs.splice(at, 0, evt.record);
         }
+        if (evt.record.key === "compaction") t.compacting = evt.record.status === "running";
       }
       break;
     case "tool_end": {

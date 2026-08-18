@@ -43,6 +43,19 @@ test("custom subagent entries become durable activity records", () => {
   assert.equal(record.summary, "Found the files.");
 });
 
+test("compaction is recovered as one safe status activity", () => {
+  const record = activityFromEntry({ type: "compaction", id: "c1", summary: "private context" });
+  assert.deepEqual(record, {
+    id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "completed",
+    title: "Context compacted", summary: "Session context compacted.", items: [], source: "pi",
+  });
+  const records = entriesToRecords([
+    { type: "compaction", id: "c1" },
+    { type: "compaction", id: "c2" },
+  ]);
+  assert.deepEqual(records.map(item => item.id), ["activity:compaction"]);
+});
+
 test("activity is recovered beside ordinary transcript records", () => {
   const records = entriesToRecords([
     { type: "message", id: "assistant", parentId: "user", timestamp: "now", message: {

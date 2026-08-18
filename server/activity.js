@@ -107,6 +107,12 @@ export function activityFromToolResult(result, id) {
 
 export function activityFromEntry(entry) {
   if (!object(entry)) return null;
+  if (entry.type === "compaction") {
+    return normalizeActivity({
+      id: "activity:compaction", kind: "status", key: "compaction", status: "completed",
+      title: "Context compacted", summary: "Session context compacted.",
+    }, { source: "pi" });
+  }
   if (entry.type === "message") {
     const message = entry.message;
     if (!object(message)) return null;

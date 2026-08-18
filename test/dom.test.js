@@ -304,5 +304,19 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
   assert.ok(root.querySelector(".activity-stack"));
 
+  store.state.transcripts.s1.records.unshift({ id: "pending-1", pendingId: "client-1", role: "user", text: "optimistic", pending: true });
+  store.notify("transcript");
+  applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
+  assert.equal(root.querySelector(".delivery-status"), null);
+  assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
+  applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "activity", record: {
+    id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
+    title: "Compacting context", summary: "Preparing a shorter context…", items: [], source: "pi",
+  } });
+  assert.match(root.querySelector(".activity-status")?.textContent || "", /Compacting context/);
+  assert.equal(store.state.transcripts.s1.compacting, true);
+  assert.equal(root.querySelector(".send-btn").disabled, true);
+  assert.match(root.querySelector("textarea").placeholder, /Compacting context/);
+
   dom.window.close();
 });

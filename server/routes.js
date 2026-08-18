@@ -395,7 +395,9 @@ export function buildApi(sup) {
 
   api.post("/sessions/:id/message", async c => {
     const id = c.req.param("id");
-    const { text, mode = "prompt", images = [] } = await c.req.json();
+    const body = await c.req.json();
+    const { text, mode = "prompt", images = [] } = body;
+    const clientMessageId = typeof body?.clientMessageId === "string" ? body.clientMessageId.slice(0, 120) : null;
     const messageText = typeof text === "string" ? text.trim() : "";
     if (!messageText && !Array.isArray(images)) return err(c, 400, "empty_message");
     if (!messageText && images.length === 0) return err(c, 400, "empty_message");
@@ -429,7 +431,7 @@ export function buildApi(sup) {
       }
     }
     try {
-      await sup.message(id, messageText, mode, images);
+      await sup.message(id, messageText, mode, images, clientMessageId);
       return c.json({ ok: true });
     } catch (e) {
       if (e.code === "model_required") {
@@ -455,6 +457,7 @@ export function buildApi(sup) {
       sessionId: id,
       seq,
       streaming: sup.isStreaming(id),
+      compacting: sup.isCompacting(id),
       records: await sup.transcript(id),
     });
   });

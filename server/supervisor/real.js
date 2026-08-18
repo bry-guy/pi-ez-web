@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
-import { activityFromEntry, activityFromToolResult } from "../activity.js";
+import { activityFromEntry, activityFromToolResult, normalizeActivity } from "../activity.js";
 import { PiConfiguration, publicError } from "../pi-configuration.js";
 import { GitHubClient } from "../github.js";
 
@@ -239,6 +239,7 @@ export class RealSupervisor {
       turnId: null,
       assistantParent: null,
       liveRecords: new Map(),
+      pendingMessages: [],
       toolMeta: new Map(),
     };
     st.unsubscribe = session.subscribe(evt => this._onEvent(session.sessionId, st, evt));
@@ -263,13 +264,36 @@ export class RealSupervisor {
           st.liveRecords.clear();
           st.liveRecords.set(record.id, record);
           st.assistantParent = entry.id;
-          hub.emit(id, "user_record", { record });
+          const pending = st.pendingMessages.shift();
+          hub.emit(id, "user_record", { record, ...(pending?.clientMessageId ? { clientMessageId: pending.clientMessageId } : {}) });
         }
         const activity = activityFromEntry(entry);
         if (activity) {
           st.liveRecords.set(activity.id, activity);
           hub.emit(id, "activity", { record: activity });
         }
+        break;
+      }
+      case "compaction_start": {
+        const record = normalizeActivity({
+          id: "activity:compaction", kind: "status", key: "compaction", status: "running",
+          title: "Compacting context", summary: "Preparing a shorter context…",
+        }, { source: "pi" });
+        st.liveRecords.set(record.id, record);
+        hub.emit(id, "activity", { record });
+        break;
+      }
+      case "compaction_end": {
+        const aborted = !!evt.aborted;
+        const failed = !aborted && !evt.result;
+        const record = normalizeActivity({
+          id: "activity:compaction", kind: "status", key: "compaction",
+          status: aborted ? "aborted" : failed ? "failed" : "completed",
+          title: aborted ? "Compaction cancelled" : failed ? "Compaction failed" : "Context compacted",
+          summary: evt.errorMessage || (aborted ? "Compaction cancelled." : "Session context compacted."),
+        }, { source: "pi" });
+        st.liveRecords.set(record.id, record);
+        hub.emit(id, "activity", { record });
         break;
       }
       case "agent_start":
@@ -376,14 +400,28 @@ export class RealSupervisor {
     return { id };
   }
 
-  async message(id, text, mode, images = []) {
+  async message(id, text, mode, images = [], clientMessageId = null) {
     const st = await this._attachById(id);
     if (!isUsableModel(st.session.model)) {
       throw Object.assign(new Error("model_required"), { code: "model_required" });
     }
-    if (mode === "steer" && st.session.isStreaming) return st.session.steer(text, images);
-    if (mode === "followUp" && st.session.isStreaming) return st.session.followUp(text, images);
+    if (clientMessageId) st.pendingMessages.push({ clientMessageId, text });
+    if (mode === "steer" && st.session.isStreaming) {
+      try { return await st.session.steer(text, images); }
+      catch (error) {
+        if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
+        throw error;
+      }
+    }
+    if (mode === "followUp" && st.session.isStreaming) {
+      try { return await st.session.followUp(text, images); }
+      catch (error) {
+        if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
+        throw error;
+      }
+    }
     st.session.prompt(text, { images }).catch(err => {
+      if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
       if (st.turnEnded) return;
       st.turnEnded = true;
       this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "errored", error: String(err?.message || err) });
@@ -594,6 +632,7 @@ export class RealSupervisor {
   piConfigurationState() { return this.piConfiguration.state(); }
 
   isStreaming(id) { return !!this.live.get(id)?.session?.isStreaming; }
+  isCompacting(id) { return !!this.live.get(id)?.session?.isCompacting; }
   activeInCwd(cwd, exceptId) {
     for (const [id, st] of this.live) {
       if (id !== exceptId && st.cwd === cwd && st.session.isStreaming) return id;
@@ -922,6 +961,7 @@ function snapshotRecords(st) {
   for (const record of st.liveRecords.values()) {
     const existing = records.find(r => r.id === record.id);
     if (!existing) records.push(cloneRecord(record));
+    else if (record.role === "activity") Object.assign(existing, cloneRecord(record));
     else if (record.streaming) Object.assign(existing, { text: record.text, streaming: true });
   }
   return records;
@@ -937,7 +977,11 @@ export function entriesToRecords(entries) {
       continue;
     }
     const activity = activityFromEntry(entry);
-    if (activity) records.push(activity);
+    if (activity) {
+      const index = records.findIndex(record => record.id === activity.id);
+      if (index >= 0) records[index] = activity;
+      else records.push(activity);
+    }
     if (entry.type === "custom" || entry.type === "custom_message") continue;
     if (entry.type !== "message") continue;
     const message = entry.message || {};

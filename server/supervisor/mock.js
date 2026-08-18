@@ -174,6 +174,7 @@ export class MockSupervisor {
     return s ? { id: s.id, cwd: s.cwd, name: s.name, model: s.model, parentSessionId: s.parentSessionId } : null;
   }
   isStreaming(id) { return !!this.live.get(id)?.streaming; }
+  isCompacting(id) { return !!this.live.get(id)?.compacting; }
   activeInCwd(cwd, exceptId) {
     for (const [id, st] of this.live) {
       if (id === exceptId || !st.streaming) continue;
@@ -250,17 +251,17 @@ export class MockSupervisor {
     return { id: s.id };
   }
 
-  async message(id, text, mode) {
+  async message(id, text, mode, _images = [], clientMessageId = null) {
     const st = this.live.get(id) || { timers: [], queue: [], streaming: false };
     this.live.set(id, st);
     if (st.streaming) {
-      if (mode === "followUp") { st.queue.push(text); this.hub.emit(id, "queue_update", { steering: 0, followUp: st.queue.length }); return; }
+      if (mode === "followUp") { st.queue.push({ text, clientMessageId }); this.hub.emit(id, "queue_update", { steering: 0, followUp: st.queue.length }); return; }
       // steer: cut the current stream, answer the steer next.
       this._finishTurn(id, "done", `\n\n(steered)`);
-      this._startTurn(id, text, true);
+      this._startTurn(id, text, true, clientMessageId);
       return;
     }
-    this._startTurn(id, text, false);
+    this._startTurn(id, text, false, clientMessageId);
   }
 
   async stop(id) {
@@ -288,7 +289,7 @@ export class MockSupervisor {
   }
 
   // ---- scripted turn ----
-  _startTurn(id, userText, steered) {
+  _startTurn(id, userText, steered, clientMessageId = null) {
     const st = this.live.get(id);
     const s = this._load(id);
     const userRec = { id: newId("m"), role: "user", text: userText };
@@ -300,7 +301,7 @@ export class MockSupervisor {
     st.streaming = true;
     st.turnId = newId("t");
     st.msgId = msgId;
-    this.hub.emit(id, "user_record", { record: userRec });
+    this.hub.emit(id, "user_record", { record: userRec, ...(clientMessageId ? { clientMessageId } : {}) });
     this.hub.emit(id, "turn_start", { turnId: st.turnId });
     this.hub.emit(id, "message_start", { messageId: msgId, role: "assistant" });
 
@@ -410,6 +411,6 @@ export class MockSupervisor {
     this.hub.emit(id, "message_end", { messageId: st.msgId });
     this.hub.emit(id, "turn_end", { turnId: st.turnId, reason });
     const next = st.queue.shift();
-    if (next !== undefined) this._startTurn(id, next, false);
+    if (next !== undefined) this._startTurn(id, next.text, false, next.clientMessageId);
   }
 }

@@ -408,6 +408,14 @@ header.bar {
 .activity-glyph { width: 12px; color: var(--accent); font-family: var(--mono); }
 .activity-task.done .activity-glyph { color: var(--green); }
 .activity-summary { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.activity-status { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font: 11px var(--mono); }
+.activity-status strong { color: var(--text); font-weight: 500; }
+.activity-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-status-glyph { color: var(--accent); }
+.activity-status.completed .activity-status-glyph { color: var(--green); }
+.activity-status.failed .activity-status-glyph, .activity-status.aborted .activity-status-glyph { color: var(--red); }
+.delivery-status { margin-top: 4px; color: var(--red); font: 10px var(--mono); text-align: right; }
+.delivery-failed .bubble { opacity: .72; }
 .command-notice { display: grid; gap: 4px; width: 100%; margin: 8px 0 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.45; }
 .command-notice strong { color: var(--text); font-weight: 500; }
 
