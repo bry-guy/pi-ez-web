@@ -124,6 +124,16 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".branch-pop")?.textContent || "", /origin\/feature\/remote-ui/);
   store.set({ branchMenuOpen: false });
 
+  store.state.openTree.p1 = false;
+  store.notify("state");
+  root.querySelector("[data-act='project-row']").click();
+  assert.equal(store.state.sessionId, "s1");
+  assert.equal(store.state.openTree.p1, false);
+  root.querySelector("[data-act='toggle-tree'][data-tree-id='p1']").click();
+  assert.equal(store.state.openTree.p1, true);
+  root.querySelector("[data-act='session-row'][data-id='sibling']").click();
+  assert.equal(store.state.sessionId, "sibling");
+
   store.state.transcripts.s1 ||= { records: [], streaming: false, seq: -1 };
   store.state.transcripts.s1.streaming = true;
   store.notify("transcript");
@@ -285,6 +295,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.unread.sibling, undefined);
 
   store.set({ view: "chat", projectId: "p1", sessionId: "s1", chatId: null });
+  store.state.transcripts.s1.records = [{
+    id: "activity:agent:solo", role: "activity", kind: "agent", key: "agent:solo", status: "running",
+    title: "Solo", summary: "Working without todos", items: [], source: "test",
+  }];
+  store.notify("transcript");
+  assert.match(root.querySelector(".activity-stack .agent-panel")?.textContent || "", /Working without todos/);
+  store.state.transcripts.s1.records = [];
+  store.notify("transcript");
   applyEvent({ v: 1, seq: 104, sessionId: "s1", type: "activity", record: {
     id: "activity:todo:1", role: "activity", kind: "todo", key: "todo", status: "in_progress",
     title: "Todos", summary: "1/2 complete", source: "test",
@@ -301,9 +319,16 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector(".todo-panel [data-activity-toggle]").click();
   assert.ok(root.querySelector(".todo-panel .activity-body"));
   applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "activity", record: {
+    id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "running",
+    title: "Explore", summary: "Checking files…", items: [], source: "test",
+  } });
+  assert.match(root.querySelector(".activity-stack .agent-panel")?.textContent || "", /Checking files/);
+  assert.equal(root.querySelector(".activity-inline .bh-name"), null);
+  applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "activity", record: {
     id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "completed",
     title: "Explore", summary: "Found the files.", items: [], source: "test",
   } });
+  assert.equal(root.querySelector(".activity-stack .agent-panel"), null);
   assert.equal(root.querySelector(".activity-inline .activity-inline-body"), null);
   root.querySelector(".activity-inline [data-activity-toggle]").click();
   assert.match(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
@@ -311,14 +336,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   store.state.transcripts.s1.records.unshift({ id: "pending-1", pendingId: "client-1", role: "user", text: "optimistic", pending: true });
   store.notify("transcript");
-  applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
+  applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
   assert.equal(root.querySelector(".delivery-status"), null);
   assert.ok(root.querySelector(".user-message-content"));
   assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
   store.state.transcripts.s1.records.push({ id: "failed-1", role: "user", text: "failed", deliveryError: "provider unavailable" });
   store.notify("transcript");
   assert.equal(root.querySelector(".delivery-status")?.textContent, "ERROR: Unable to send.");
-  applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "activity", record: {
+  applyEvent({ v: 1, seq: 108, sessionId: "s1", type: "activity", record: {
     id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
     title: "Compacting context", summary: "Preparing a shorter context…", items: [], source: "pi",
   } });

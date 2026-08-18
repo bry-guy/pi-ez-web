@@ -162,15 +162,19 @@ class PiSidebar extends HTMLElement {
       newProjectSession(t.dataset.id).catch(err => store.setError(`Could not create session: ${err.error || err.message || err}`));
     } else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
-    else if (act === "project-row") {
+    else if (act === "toggle-tree") {
+      e.stopPropagation();
+      const id = t.dataset.treeId;
+      if (!id) return;
+      store.state.openTree[id] = !store.state.openTree[id];
+      store.notify("state");
+    } else if (act === "project-row") {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
       if (!p) return;
-      store.state.openTree[p.id] = !store.state.openTree[p.id];
       const first = p.sessions[0];
       if (first) selectSession(p.id, first.id);
       else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false });
     } else if (act === "session-row") {
-      if (t.dataset.kids === "1") store.state.openTree[t.dataset.id] = !store.state.openTree[t.dataset.id];
       selectSession(t.dataset.pid, t.dataset.id);
     } else if (act === "chat-row") selectChat(t.dataset.id);
   }
@@ -189,7 +193,7 @@ class PiSidebar extends HTMLElement {
       const unread = !!store.state.unread[n.id];
       out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
         <div class="row ${sel ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
-          <span class="caret">${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
+          <span class="caret" ${kids ? `data-act="toggle-tree" data-tree-id="${esc(n.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(n.title)}"` : ""}>${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
           <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>
           <button class="row-close" data-act="close-row" data-kind="session" data-id="${esc(n.id)}"
@@ -258,7 +262,7 @@ class PiSidebar extends HTMLElement {
       const active = s.view === "chat" && s.projectId === p.id && !s.chatId;
       projRows.push(`<div class="row-wrap" style="margin-top:1px">
         <div class="row mono ${active && !open ? "active" : ""}" role="button" tabindex="0" aria-expanded="${open}" data-act="project-row" data-id="${esc(p.id)}">
-          <span class="caret">${open ? "▾" : "▸"}</span>
+          <span class="caret" data-act="toggle-tree" data-tree-id="${esc(p.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(p.name)}">${open ? "▾" : "▸"}</span>
           <span class="lbl">${esc(p.name)}</span>
           <span class="count">${this.count(p.sessions)}</span>
           <button class="row-add cta-plus" data-act="new-project-session" data-id="${esc(p.id)}" title="New session in ${esc(p.name)}" aria-label="New session in ${esc(p.name)}">+</button>

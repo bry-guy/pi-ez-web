@@ -87,14 +87,18 @@ export function activityFromAgentDetails(details, { id, content = "", source = "
   if (!object(details) || (!details.id && !details.description && !details.status)) return null;
   const agentId = text(details.id || id);
   if (!agentId) return null;
-  const summary = details.resultPreview || details.result || details.error || content;
+  const terminalStatus = new Set(["completed", "failed", "stopped", "aborted", "error"]);
+  const terminal = terminalStatus.has(details.status)
+    || details.completed === true || details.done === true || details.finished === true
+    || details.result !== undefined || details.resultPreview !== undefined || details.error !== undefined;
+  const summary = terminal ? details.resultPreview || details.result || details.error || content : content;
   return normalizeActivity({
     id: `activity:agent:${agentId}`,
     kind: "agent",
     key: `agent:${agentId}`,
-    status: statusOf(details.status, "completed"),
+    status: statusOf(details.status, terminal ? "completed" : "running"),
     title: details.description || "Background agent",
-    summary: summary || "Background agent finished.",
+    summary: summary || (terminal ? "Background agent finished." : "Background agent is working…"),
   }, { source });
 }
 

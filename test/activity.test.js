@@ -43,6 +43,37 @@ test("custom subagent entries become durable activity records", () => {
   assert.equal(record.summary, "Found the files.");
 });
 
+test("subagent progress stays running until a terminal payload arrives", () => {
+  const running = activityFromEntry({
+    type: "custom_message",
+    id: "entry-running",
+    customType: "subagents:record",
+    content: "Checking files…",
+    details: { id: "agent-8", description: "Search" },
+  });
+  assert.equal(running.status, "running");
+  assert.equal(running.summary, "Checking files…");
+
+  const completed = activityFromEntry({
+    type: "custom",
+    id: "entry-complete",
+    customType: "subagents:record",
+    data: { id: "agent-8", description: "Search", status: "completed", result: "Found it." },
+  });
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.summary, "Found it.");
+});
+
+test("transcript snapshots replace a running subagent with its final record", () => {
+  const records = entriesToRecords([
+    { type: "custom", id: "running", customType: "subagents:record", data: { id: "agent-9", description: "Inspect" } },
+    { type: "custom", id: "done", customType: "subagents:record", data: { id: "agent-9", description: "Inspect", status: "completed", result: "Done" } },
+  ]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].status, "completed");
+  assert.equal(records[0].summary, "Done");
+});
+
 test("compaction is recovered as one safe status activity", () => {
   const record = activityFromEntry({ type: "compaction", id: "c1", summary: "private context" });
   assert.deepEqual(record, {

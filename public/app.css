@@ -408,6 +408,11 @@ header.bar {
 .activity-head > span { white-space: nowrap; }
 .activity-caret { margin-left: 5px; color: var(--faint); font-weight: 400; }
 .activity-body { padding: 0 14px 11px; }
+.agent-progress { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.agent-progress .activity-glyph { flex: 0 0 12px; }
+.agent-progress-summary { flex: 1; min-width: 0; }
+.agent-progress-summary > :first-child { margin-top: 0; }
+.agent-progress-summary > :last-child { margin-bottom: 0; }
 .activity-inline-body { border-top: 1px solid var(--border); padding: 10px 30px 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .activity-inline-body > :first-child { margin-top: 0; }
 .activity-inline-body > :last-child { margin-bottom: 0; }

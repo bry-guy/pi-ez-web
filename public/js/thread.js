@@ -4,6 +4,9 @@ import { store } from "./store.js";
 import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
+const LIVE_AGENT_STATUSES = new Set(["pending", "in_progress", "running", "queued"]);
+const liveAgent = record => record?.role === "activity"
+  && record.kind === "agent" && LIVE_AGENT_STATUSES.has(record.status);
 
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
@@ -86,7 +89,9 @@ class PiThread extends HTMLElement {
     const t = store.transcript();
     const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
-    const visibleRecords = t.records.filter(record => record.role !== "activity" || record.kind === "agent" || record.key === "compaction");
+    const visibleRecords = t.records.filter(record => record.role !== "activity"
+      || record.key === "compaction"
+      || (record.kind === "agent" && !liveAgent(record)));
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
@@ -114,8 +119,8 @@ class PiThread extends HTMLElement {
       if (record.role === "activity" && record.key) latest.set(record.key, record);
     }
     const todo = latest.get("todo");
+    const agents = [...latest.values()].filter(liveAgent);
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
-    if (!todoItems.length) return "";
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
       const status = item.status === "completed" ? "done" : item.status === "in_progress" ? "active" : "pending";
@@ -133,7 +138,15 @@ class PiThread extends HTMLElement {
     const todoPanel = todoItems.length
       ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, true)
       : "";
-    return `<div class="activity-stack">${todoPanel}</div>`;
+    const agentPanels = agents.map(agent => panel(
+      agent.key,
+      agent.title || "Background agent",
+      agent.status === "queued" ? "queued" : "in progress",
+      `<div class="agent-progress"><span class="activity-glyph">◐</span><div class="agent-progress-summary markdown-content">${renderMarkdown(agent.summary || "Background agent is working…")}</div></div>`,
+      true,
+    )).join("");
+    if (!todoPanel && !agentPanels) return "";
+    return `<div class="activity-stack">${todoPanel}${agentPanels}</div>`;
   }
 
   renderCommandNotice() {
