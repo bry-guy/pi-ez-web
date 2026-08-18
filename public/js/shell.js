@@ -409,7 +409,7 @@ class PiHeader extends HTMLElement {
         <button class="branch-chip" data-act="branch-menu" title="Switch branch" ${blocked ? "disabled" : ""}>
           <span class="bname">${esc(branch)}</span><span class="bcaret">▾</span>
         </button>
-        ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge this branch" ${blocked ? "disabled" : ""}>merge</button>` : ""}
+        ${showMerge ? `<button class="merge-btn" data-act="merge" title="Merge ${esc(branch)} into ${esc(p.branch)}" aria-label="Merge ${esc(branch)} into ${esc(p.branch)}" ${blocked ? "disabled" : ""}>Merge</button>` : ""}
         ${Object.entries(p.hooks || {}).filter(([, enabled]) => enabled).map(([name]) => `<button class="hook-btn" data-act="hook" data-hook="${esc(name)}" title="Run ${esc(name)} hook" ${blocked ? "disabled" : ""}>${esc(name)}</button>`).join("")}
       </div>` : "";
 

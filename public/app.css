@@ -206,6 +206,13 @@ header.bar {
 }
 .hook-btn:hover { border-color: var(--accent); color: var(--accent); }
 .hook-btn:disabled { opacity: .5; cursor: default; }
+.merge-btn {
+  border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent);
+  border-radius: 5px; padding: 2px 8px; font: 600 10px var(--mono); cursor: pointer;
+}
+.merge-btn:hover, .merge-btn:focus-visible { background: var(--accent); color: var(--accent-ink); }
+.merge-btn:disabled { opacity: .5; cursor: default; }
+.merge-btn:disabled:hover { background: var(--accent-soft); color: var(--accent); }
 .hook-result {
   position: absolute; top: calc(100% - 4px); right: 14px; z-index: 32; width: min(520px, calc(100% - 28px));
   max-height: 320px; overflow: auto; padding: 9px 11px; background: var(--surface);

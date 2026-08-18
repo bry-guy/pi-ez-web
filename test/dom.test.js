@@ -321,5 +321,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".send-btn").disabled, true);
   assert.match(root.querySelector("textarea").placeholder, /Compacting context/);
 
+  store.state.projects[0].sessions[0].branch = "feat/ship";
+  store.state.transcripts.s1.compacting = false;
+  store.notify("state");
+  assert.equal(root.querySelector(".merge-btn")?.textContent.trim(), "Merge");
+  assert.match(root.querySelector(".merge-btn")?.getAttribute("title") || "", /feat\/ship.*main/);
+
   dom.window.close();
 });
