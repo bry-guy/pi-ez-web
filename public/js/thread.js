@@ -86,7 +86,7 @@ class PiThread extends HTMLElement {
     const t = store.transcript();
     const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
-    const visibleRecords = t.records.filter(record => record.role !== "activity" || record.kind === "agent");
+    const visibleRecords = t.records.filter(record => record.role !== "activity" || record.kind === "agent" || record.key === "compaction");
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
@@ -114,9 +114,8 @@ class PiThread extends HTMLElement {
       if (record.role === "activity" && record.key) latest.set(record.key, record);
     }
     const todo = latest.get("todo");
-    const compaction = latest.get("compaction");
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
-    if (!todoItems.length && !compaction) return "";
+    if (!todoItems.length) return "";
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
       const status = item.status === "completed" ? "done" : item.status === "in_progress" ? "active" : "pending";
@@ -134,13 +133,7 @@ class PiThread extends HTMLElement {
     const todoPanel = todoItems.length
       ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, true)
       : "";
-    const compactionPanel = compaction
-      ? `<div class="activity-status ${esc(compaction.status || "completed")}" role="status" aria-live="polite">
-          <span class="activity-status-glyph">${compaction.status === "running" ? "◐" : compaction.status === "completed" ? "✓" : "!"}</span>
-          <strong>${esc(compaction.title || "Context compaction")}</strong><span>${esc(compaction.summary || "")}</span>
-        </div>`
-      : "";
-    return `<div class="activity-stack">${compactionPanel}${todoPanel}</div>`;
+    return `<div class="activity-stack">${todoPanel}</div>`;
   }
 
   renderCommandNotice() {
@@ -154,6 +147,13 @@ class PiThread extends HTMLElement {
   }
 
   renderRecord(m, noFork) {
+    if (m.role === "activity" && m.key === "compaction") {
+      const status = m.status || "completed";
+      return `<div class="msg activity-inline"><div class="activity-status ${esc(status)}" role="status" aria-live="polite">
+        <span class="activity-status-glyph">${status === "running" ? "◐" : status === "completed" ? "✓" : "!"}</span>
+        <strong>${esc(m.title || "Context compaction")}</strong><span>${esc(m.summary || "")}</span>
+      </div></div>`;
+    }
     if (m.role === "activity" && m.kind === "agent") {
       const open = store.state.openActivity[m.key] ?? false;
       return `<div class="msg activity-inline"><div class="block">
@@ -168,7 +168,7 @@ class PiThread extends HTMLElement {
       return `<div class="msg ${noFork ? "no-fork" : ""} ${m.deliveryError ? "delivery-failed" : ""}">
         <div class="msg-user-row">
           ${m.pending || m.deliveryError ? "" : `<button class="fork-btn" data-fork="${esc(m.id)}" title="Fork"><span class="sigil">⑂</span><span class="word">fork</span></button>`}
-          <div><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
+          <div class="user-message-content"><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
         </div></div>`;
     }
     if (m.role === "assistant") {
@@ -741,7 +741,7 @@ class PiComposer extends HTMLElement {
     }
     if (action === "refresh") {
       await openTranscript(id);
-      store.set({ commandNotice: { sessionId: id, title: "Pi", message: result.message || "Done." } });
+      store.set({ commandNotice: result.notice === false ? null : { sessionId: id, title: "Pi", message: result.message || "Done." } });
       return;
     }
     if (action === "sidebar") { store.set({ railOpen: true, drawerOpen: true, commandNotice: null }); return; }

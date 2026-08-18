@@ -106,6 +106,7 @@ test("an external profile loads declarative package sources and ignores its mach
   let requested;
   const configuration = new PiConfiguration({
     fetchImpl: async url => {
+      if (url.includes("/git/trees/")) return new Response(JSON.stringify({ tree: [] }), { status: 200 });
       requested = url;
       return new Response(JSON.stringify({
         packages: ["npm:context-mode"],
@@ -132,6 +133,31 @@ test("an external profile loads declarative package sources and ignores its mach
   assert.equal(cached.profile.status, "cached");
   assert.deepEqual(cached.settings.packages, ["npm:context-mode"]);
   assert.ok(cached.warnings.some(warning => /Using cached Pi profile/.test(warning)));
+});
+
+test("GitHub profiles fetch dotfiles agent skills into local resources", async () => {
+  const settingsUrl = "https://raw.githubusercontent.com/bry-guy/dotfiles/HEAD/.pi/agent/settings.json";
+  const treeUrl = "https://api.github.com/repos/bry-guy/dotfiles/git/trees/HEAD?recursive=1";
+  const skillUrl = "https://raw.githubusercontent.com/bry-guy/dotfiles/HEAD/.agents/skills/todo-discipline/SKILL.md";
+  const skill = "---\\nname: todo-discipline\\ndescription: Keep TODOs disciplined.\\n---\\n\\nUse bounded tasks.\\n";
+  const requests = [];
+  const configuration = new PiConfiguration({
+    fetchImpl: async url => {
+      requests.push(url);
+      if (url === settingsUrl) return new Response(JSON.stringify({ packages: [] }), { status: 200 });
+      if (url === treeUrl) return new Response(JSON.stringify({ tree: [
+        { path: ".agents/skills/todo-discipline/SKILL.md", type: "blob", size: skill.length },
+      ] }), { status: 200 });
+      if (url === skillUrl) return new Response(skill, { status: 200 });
+      throw new Error(`unexpected profile request: ${url}`);
+    },
+  });
+
+  const resolved = await configuration.resolve({ profile: "https://github.com/bry-guy/dotfiles", packages: [], extensions: [] });
+  const skillPath = resolved.settings.skills?.find(file => file.endsWith(".agents/skills/todo-discipline/SKILL.md"));
+  assert.ok(skillPath);
+  assert.equal(fs.readFileSync(skillPath, "utf8"), skill);
+  assert.deepEqual(requests, [settingsUrl, treeUrl, skillUrl]);
 });
 
 test("profile load errors remain visible while inline resources stay usable", async () => {

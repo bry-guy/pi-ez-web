@@ -34,6 +34,7 @@ class PiSettings extends HTMLElement {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
+    if (e.target.closest("[data-act='refresh-pi-configuration']")) return this.refreshPiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
     const login = e.target.closest("[data-auth-login]");
@@ -81,11 +82,22 @@ class PiSettings extends HTMLElement {
       packages: lines("[data-setting='piPackages']"),
       extensions: lines("[data-setting='piExtensions']"),
     };
+    await this.applyPiConfiguration(pi, "saved");
+  }
+  async refreshPiConfiguration() {
+    const pi = store.state.piConfiguration?.config;
+    if (!pi) return;
+    await this.applyPiConfiguration(pi, "refreshed");
+  }
+  async applyPiConfiguration(pi, verb) {
     try {
       const result = await api.settingsPatch({ pi });
       await refreshState();
       const profileError = result.piConfiguration?.profile?.error;
-      this.setFeedback(profileError ? `Saved, but the profile could not be loaded: ${profileError}` : "Pi configuration saved. Packages install when a session loads.", profileError ? "error" : "success");
+      const message = profileError
+        ? `Pi configuration ${verb}, but the profile could not be loaded: ${profileError}`
+        : `Pi profile ${verb}. Packages and skills reload when a session loads.`;
+      this.setFeedback(message, profileError ? "error" : "success");
     } catch (err) {
       const message = err.error === "pi_configuration_busy"
         ? "Stop active sessions before changing Pi extensions."
@@ -281,7 +293,7 @@ class PiSettings extends HTMLElement {
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div>
           <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div></div>
         </div>
       </section>
       <section class="settings-section">

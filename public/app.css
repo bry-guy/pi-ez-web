@@ -285,6 +285,8 @@ header.bar {
 }
 .msg { min-width: 0; margin-bottom: 22px; }
 .msg-user-row { display: flex; justify-content: flex-end; align-items: flex-start; gap: 6px; }
+.user-message-content { width: min(88%, calc(100% - 42px)); min-width: 0; }
+.user-message-content .bubble { max-width: 100%; }
 .fork-btn {
   border: 0; background: var(--surface); color: var(--muted);
   font-family: var(--mono); font-size: 12px; padding: 4px 8px; border-radius: 8px;
@@ -582,6 +584,7 @@ pi-context-meter { display: block; padding: 0 13px; }
 .settings-select:focus, .settings-inline-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .settings-select:disabled, .settings-inline-input:disabled { opacity: .55; }
 .settings-actions-row { justify-content: space-between; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .settings-row { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .settings-row:last-child { border-bottom: 0; }
 .settings-row .sr-main { flex: 1; }

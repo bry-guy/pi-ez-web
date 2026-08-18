@@ -192,6 +192,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
   assert.match(root.querySelector("[data-setting='piPackages']").value, /npm:context-mode/);
+  const refreshProfile = root.querySelector("pi-settings [data-act='refresh-pi-configuration']");
+  assert.ok(refreshProfile);
+  refreshProfile.click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(root.querySelector("pi-settings").textContent, /Pi profile refreshed/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
@@ -308,6 +313,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
   assert.equal(root.querySelector(".delivery-status"), null);
+  assert.ok(root.querySelector(".user-message-content"));
   assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
   store.state.transcripts.s1.records.push({ id: "failed-1", role: "user", text: "failed", deliveryError: "provider unavailable" });
   store.notify("transcript");
@@ -317,6 +323,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     title: "Compacting context", summary: "Preparing a shorter context…", items: [], source: "pi",
   } });
   assert.match(root.querySelector(".activity-status")?.textContent || "", /Compacting context/);
+  assert.ok(root.querySelector(".activity-inline .activity-status"));
+  assert.equal(root.querySelector(".activity-stack .activity-status"), null);
   assert.equal(store.state.transcripts.s1.compacting, true);
   assert.equal(root.querySelector(".send-btn").disabled, true);
   assert.match(root.querySelector("textarea").placeholder, /Compacting context/);

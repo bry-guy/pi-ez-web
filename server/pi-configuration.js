@@ -5,11 +5,15 @@
 // but can layer the declarative settings.json from another directory or HTTPS
 // URL over each SDK session. Packages from that profile are installed by Pi's
 // normal DefaultResourceLoader into the persistent agent directory.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { appHome, loadConfig, resolvePath } from "./config.js";
 
 const MAX_PROFILE_BYTES = 512 * 1024;
+const MAX_PROFILE_SKILL_BYTES = 128 * 1024;
+const MAX_PROFILE_SKILL_TOTAL = 512 * 1024;
+const MAX_PROFILE_SKILLS = 128;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
 const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"];
@@ -109,14 +113,26 @@ function addInlineResources(settings, inline) {
   return result;
 }
 
-export function githubProfileSettingsUrl(input) {
+function githubProfileParts(input) {
   let url;
-  try { url = new URL(input); } catch { return input; }
-  if (url.hostname.toLowerCase() !== "github.com") return input;
+  try { url = new URL(input); } catch { return null; }
+  if (url.hostname.toLowerCase() !== "github.com") return null;
   const parts = url.pathname.split("/").filter(Boolean);
-  if (parts.length < 2) return input;
+  if (parts.length < 2) return null;
   const [owner, rawRepo, marker, ref, ...rest] = parts;
-  const repo = rawRepo.replace(/\.git$/, "");
+  return { owner, repo: rawRepo.replace(/\.git$/, ""), marker, ref, rest };
+}
+
+export function githubProfileRepository(input) {
+  const parts = githubProfileParts(input);
+  if (!parts) return null;
+  return { owner: parts.owner, repo: parts.repo, ref: parts.marker === "blob" || parts.marker === "tree" ? parts.ref || "HEAD" : "HEAD" };
+}
+
+export function githubProfileSettingsUrl(input) {
+  const parts = githubProfileParts(input);
+  if (!parts) return input;
+  const { owner, repo, marker, ref, rest } = parts;
   if (!marker) return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/.pi/agent/settings.json`;
   if (marker === "blob" && ref && rest.length) {
     return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${rest.join("/")}`;
@@ -162,6 +178,79 @@ async function readRemoteJson(url, fetchImpl) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function readRemoteText(url, fetchImpl) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("Pi profile URLs must be credential-free HTTPS URLs.");
+  if (["localhost", "localhost.localdomain"].includes(parsed.hostname.toLowerCase())) throw new Error("Localhost Pi profile URLs are not allowed.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROFILE_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: { accept: "text/plain" } });
+    if (!response.ok) throw new Error(`Profile skill request returned HTTP ${response.status}.`);
+    if (response.url && new URL(response.url).protocol !== "https:") throw new Error("Pi profile skill URL redirected away from HTTPS.");
+    const declaredSize = Number(response.headers.get("content-length"));
+    if (declaredSize > MAX_PROFILE_SKILL_BYTES) throw new Error("Pi profile skill is too large.");
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.byteLength > MAX_PROFILE_SKILL_BYTES) throw new Error("Pi profile skill is too large.");
+    return new TextDecoder().decode(data);
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Pi profile skill request timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function githubSkillUrl(repository, file) {
+  return `https://raw.githubusercontent.com/${repository.owner}/${repository.repo}/${repository.ref}/${file}`;
+}
+
+async function fetchGithubProfileSkills(source, fetchImpl) {
+  const repository = githubProfileRepository(source);
+  if (!repository) return [];
+  const treeUrl = `https://api.github.com/repos/${repository.owner}/${repository.repo}/git/trees/${repository.ref}?recursive=1`;
+  const tree = await readRemoteJson(treeUrl, fetchImpl);
+  const entries = (tree?.tree || [])
+    .filter(entry => entry?.type === "blob" && typeof entry.path === "string"
+      && entry.path.startsWith(".agents/skills/") && entry.path.endsWith(".md")
+      && !entry.path.split("/").includes(".."))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  if (entries.length > MAX_PROFILE_SKILLS) throw new Error("Pi profile contains too many skills.");
+
+  const skills = [];
+  let total = 0;
+  for (const entry of entries) {
+    if (Number(entry.size) > MAX_PROFILE_SKILL_BYTES) throw new Error(`Pi profile skill is too large: ${entry.path}`);
+    const content = await readRemoteText(githubSkillUrl(repository, entry.path), fetchImpl);
+    total += Buffer.byteLength(content, "utf8");
+    if (total > MAX_PROFILE_SKILL_TOTAL) throw new Error("Pi profile skills are too large.");
+    skills.push({ path: entry.path, content });
+  }
+  return skills;
+}
+
+function profileSkillsRoot(location) {
+  const key = createHash("sha256").update(location.resolved).digest("hex").slice(0, 24);
+  return path.join(appHome(), "pi-profile-skills", key);
+}
+
+function materializeProfileSkills(location, skills) {
+  const root = path.resolve(profileSkillsRoot(location));
+  const paths = [];
+  for (const skill of skills || []) {
+    if (!skill || typeof skill.path !== "string" || typeof skill.content !== "string") continue;
+    const relative = skill.path.replaceAll("/", path.sep);
+    if (!relative.startsWith(`.agents${path.sep}skills${path.sep}`) || relative.split(path.sep).includes("..")) continue;
+    const target = path.resolve(root, relative);
+    if (!target.startsWith(`${root}${path.sep}`)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(target, skill.content, { encoding: "utf8", mode: 0o600 });
+    if (target.endsWith(`${path.sep}SKILL.md`)) paths.push(target);
+  }
+  return paths;
 }
 
 function readLocalJson(file) {
@@ -231,7 +320,7 @@ function readProfileCache(location) {
       ? cached : null;
   } catch { return null; }
 }
-function writeProfileCache(location, settings) {
+function writeProfileCache(location, settings, skills = []) {
   const file = profileCachePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -241,6 +330,7 @@ function writeProfileCache(location, settings) {
       resolvedSource: location.resolved,
       fetchedAt: new Date().toISOString(),
       settings,
+      skills,
     }, null, 2) + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
     fs.renameSync(temporary, file);
   } finally {
@@ -339,9 +429,10 @@ export class PiConfiguration {
     const inline = inlineSettings(piConfig, warnings);
     let settings = {};
     let profile = { status: "none", source: null, resolvedSource: null, error: null };
+    let location = null;
+    let profileSkills = [];
 
     if (piConfig.profile) {
-      let location;
       try {
         location = profileLocation(piConfig.profile);
         const value = location.type === "url"
@@ -349,7 +440,13 @@ export class PiConfiguration {
           : readLocalJson(location.resolved);
         if (!isObject(value)) throw new Error("Pi profile settings must contain a JSON object.");
         if (location.type === "url") {
-          try { writeProfileCache(location, value); }
+          try {
+            profileSkills = await fetchGithubProfileSkills(location.requested, this.fetchImpl);
+          } catch (error) {
+            profileSkills = readProfileCache(location)?.skills || [];
+            warnings.push(`Could not refresh Pi profile skills: ${publicError(error)}`);
+          }
+          try { writeProfileCache(location, value, profileSkills); }
           catch (error) { warnings.push(`Could not cache Pi profile: ${publicError(error)}`); }
         }
         settings = prepareProfileSettings(value, {
@@ -367,6 +464,7 @@ export class PiConfiguration {
       } catch (error) {
         const cached = location?.type === "url" ? readProfileCache(location) : null;
         if (cached) {
+          profileSkills = cached.skills || [];
           settings = prepareProfileSettings(cached.settings, { baseDir: appHome(), remote: true, warnings });
           warnings.push(`Using cached Pi profile because refresh failed: ${publicError(error)}`);
           profile = {
@@ -383,6 +481,9 @@ export class PiConfiguration {
     }
 
     const overlay = addInlineResources(settings, inline);
+    if (location?.type === "url" && profileSkills.length) {
+      overlay.skills = unique([...(overlay.skills || []), ...materializeProfileSkills(location, profileSkills)]);
+    }
     // Package setup runs in managed Git checkouts that may contain mise.toml.
     // Use the image's system npm and avoid auto-installing peer dependency trees;
     // an explicitly supplied profile npmCommand remains authoritative.

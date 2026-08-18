@@ -88,7 +88,9 @@ URL can select another file, for example
 onto each web session, while `packages` and `extensions` add sources directly.
 Relative paths in the web config resolve from `PI_WEB_HOME`. Missing npm/git
 packages are installed by Pi into the persistent `PI_CODING_AGENT_DIR` when a
-session loads. The last successfully fetched remote profile is cached for
+session loads. GitHub profiles also fetch markdown skills under `.agents/skills`
+into a deployment-local cache; **Settings → Refresh profile** re-fetches them.
+The last successfully fetched remote profile and skills are cached for
 restart/offline fallback.
 
 Profiles intentionally do **not** import `auth.json`, models, or transcripts:

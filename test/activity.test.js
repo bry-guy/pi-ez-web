@@ -51,9 +51,10 @@ test("compaction is recovered as one safe status activity", () => {
   });
   const records = entriesToRecords([
     { type: "compaction", id: "c1" },
+    { type: "message", id: "user-2", message: { role: "user", content: "after" } },
     { type: "compaction", id: "c2" },
   ]);
-  assert.deepEqual(records.map(item => item.id), ["activity:compaction"]);
+  assert.deepEqual(records.map(item => item.id), ["user-2", "activity:compaction"]);
 });
 
 test("activity is recovered beside ordinary transcript records", () => {

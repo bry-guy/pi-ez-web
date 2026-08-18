@@ -148,7 +148,7 @@ export class MockSupervisor {
     if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Mock sessions use the configured web trust policy." };
     if (parsed.name === "fork" || parsed.name === "clone") return { action: parsed.name };
     if (parsed.name === "new") return { action: "new" };
-    if (parsed.name === "compact") return { action: "refresh", message: "Session context compacted." };
+    if (parsed.name === "compact") return { action: "refresh", message: "Session context compacted.", notice: false };
     if (parsed.name === "reload") return { action: "refresh", message: "Pi resources reloaded." };
     if (parsed.name === "quit") return { action: "quit" };
     if (parsed.name === "debug") return { action: "notice", title: "Pi diagnostics", message: `Session ${id} · mock` };

@@ -532,7 +532,7 @@ export class RealSupervisor {
         }
         throw error;
       }
-      return { action: "refresh", message: "Session context compacted." };
+      return { action: "refresh", message: "Session context compacted.", notice: false };
     }
     if (parsed.name === "reload") {
       const st = await this._attachById(id);
@@ -979,7 +979,10 @@ export function entriesToRecords(entries) {
     const activity = activityFromEntry(entry);
     if (activity) {
       const index = records.findIndex(record => record.id === activity.id);
-      if (index >= 0) records[index] = activity;
+      if (index >= 0 && activity.key === "compaction") {
+        records.splice(index, 1);
+        records.push(activity);
+      } else if (index >= 0) records[index] = activity;
       else records.push(activity);
     }
     if (entry.type === "custom" || entry.type === "custom_message") continue;
