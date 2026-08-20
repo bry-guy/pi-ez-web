@@ -381,13 +381,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     ],
   } });
   assert.match(root.querySelector(".todo-panel")?.textContent || "", /1\/2/);
-  assert.match(root.querySelector(".todo-panel")?.textContent || "", /checking/);
+  assert.equal(root.querySelector(".todo-panel .activity-body"), null);
   assert.equal(root.querySelector(".todo-panel safe"), null);
   root.querySelector(".todo-panel [data-activity-toggle]").click();
-  assert.equal(root.querySelector(".todo-panel .activity-body"), null);
-  root.querySelector(".todo-panel [data-activity-toggle]").click();
   assert.ok(root.querySelector(".todo-panel .activity-body"));
-  applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "activity", record: {
+  assert.match(root.querySelector(".todo-panel")?.textContent || "", /checking/);
+  applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "turn_end", reason: "done" });
+  assert.equal(root.querySelector(".todo-panel .activity-body"), null);
+  applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "activity", record: {
     id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "running",
     title: "Explore", summary: "Checking files…", items: [], source: "test",
   } });

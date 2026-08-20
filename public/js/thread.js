@@ -39,7 +39,7 @@ class PiThread extends HTMLElement {
     const activityToggle = e.target.closest("[data-activity-toggle]");
     if (activityToggle) {
       const key = activityToggle.dataset.activityToggle;
-      const open = store.state.openActivity[key] ?? (key === "todo");
+      const open = store.state.openActivity[key] ?? false;
       store.state.openActivity[key] = !open;
       this.render();
       return;
@@ -192,7 +192,7 @@ class PiThread extends HTMLElement {
       </section>`;
     };
     const todoPanel = todoItems.length
-      ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, true)
+      ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, false)
       : "";
     const agentPanels = agents.map(agent => panel(
       agent.key,
