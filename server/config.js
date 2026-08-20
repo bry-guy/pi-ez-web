@@ -14,7 +14,7 @@ const configPath = () => path.join(appHome(), "config.json");
 const bindingsPath = () => path.join(appHome(), "bindings.json");
 
 const DEFAULTS = {
-  projects: [], // { id, name, repoPath, hooks?, mode? }
+  projects: [], // { id, name, repoPath, hooks? }
   projectHooks: {}, // deployment-wide hook defaults, overridden per project
   projectHookSets: {}, // deployment hook defaults keyed by project name
   worktreeRoot: null, // null -> worktreeRootDefault()
@@ -111,7 +111,11 @@ export function loadConfig() {
   const raw = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : {};
   const sources = raw.repositorySources && typeof raw.repositorySources === "object" ? raw.repositorySources : {};
   const github = sources.github && typeof sources.github === "object" ? sources.github : {};
-  const projects = Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects;
+  const projects = (Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects).map(project => {
+    if (!project || typeof project !== "object" || Array.isArray(project)) return project;
+    const { mode: _legacyMode, ...current } = project;
+    return current;
+  });
   return {
     ...DEFAULTS,
     ...raw,
@@ -190,10 +194,6 @@ export function loadBindings() {
 }
 export function saveBindings(b) {
   writeJson(bindingsPath(), b);
-}
-
-export function projectMode(project) {
-  return project?.mode === "auto" || project?.mode === "manual" ? project.mode : "manual";
 }
 
 export function sessionSlug(firstMessage) {

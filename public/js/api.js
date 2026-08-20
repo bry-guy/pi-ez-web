@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
-const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity", "file-explorer"];
+const API_CONTRACT_VERSION = 3;
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "file-explorer"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -84,8 +84,10 @@ export const api = {
   }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
-  fork: (id, atRecordId) => fetch(`/api/sessions/${id}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ atRecordId }) }).then(j),
-  branch: (id, branch, create = false, fromRef = undefined) => fetch(`/api/sessions/${id}/branch`, { method: "POST", headers: JH, body: JSON.stringify({ branch, create, ...(fromRef ? { fromRef } : {}) }) }).then(j),
+  worktree: (id, { branch = "", fromRef = undefined, fork = false, atRecordId = undefined } = {}) => fetch(`/api/sessions/${id}/worktree`, {
+    method: "POST", headers: JH, body: JSON.stringify({ branch, fork, ...(fromRef ? { fromRef } : {}), ...(atRecordId ? { atRecordId } : {}) }),
+  }).then(j),
+  pull: id => fetch(`/api/sessions/${id}/pull`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
   context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),
   thinking: id => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`).then(j),
@@ -111,7 +113,6 @@ export async function refreshState() {
   store.set({
     projects: s.projects,
     chats: s.chats,
-    mode: s.mode,
     buildId: s.buildId || null,
     reconnecting: false,
     defaultModel: s.defaultModel || null,
@@ -410,9 +411,6 @@ export function applyEvent(evt, replay = false) {
       }
       break;
     }
-    case "workspace_busy":
-      tOf(evt.bySessionId).streaming = true;
-      break;
     case "extension_error":
       store.setError(`Extension ${evt.extensionPath || "error"}: ${evt.error || "failed"}`);
       break;
@@ -429,24 +427,28 @@ export function applyEvent(evt, replay = false) {
       refreshState().then(() => {
         const s = store.state;
         if (wasChat) {
-          store.set({ ...fileReset, chatId: null, filesOpen: false, branchMenuOpen: false });
+          store.set({ ...fileReset, chatId: null, filesOpen: false, workspaceSettingsOpen: false });
           return;
         }
         if (!wasSession) return;
         const p = s.projects.find(x => x.id === s.projectId);
         if (p?.sessions[0]) {
-          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, branchMenuOpen: false, model: p.sessions[0].model || s.effectiveDefaultModel || null });
+          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, workspaceSettingsOpen: false, model: p.sessions[0].model || s.effectiveDefaultModel || null });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
-          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, branchMenuOpen: false, filesOpen: false });
+          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, workspaceSettingsOpen: false, filesOpen: false });
           openTranscript(s.chats[0].id);
         } else {
-          store.set({ ...fileReset, sessionId: null, chatId: null, branchMenuOpen: false, filesOpen: false });
+          store.set({ ...fileReset, sessionId: null, chatId: null, workspaceSettingsOpen: false, filesOpen: false });
         }
       }).catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;
     }
     default: break;
+  }
+  if (["turn_end", "bang_end"].includes(evt.type)
+    && findSessionInState({ projects: store.state.projects, chats: [] }, evt.sessionId)) {
+    refreshState().catch(err => store.setError(`Could not refresh workspace state: ${err.message || err}`));
   }
   store.notify(evt.type === "text_delta" ? "delta:" + evt.sessionId : "transcript");
 }

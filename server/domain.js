@@ -1,9 +1,9 @@
-// Assembles the /api/state shape: projects with branches + session trees,
-// occupied map, plain chats. Session->project/branch is derived from cwd
+// Assembles /api/state: projects with branch-backed workspace status and
+// session trees. Session->project/branch is derived from cwd
 // (bindings.json overrides for re-homed sessions).
 import fs from "node:fs";
 import path from "node:path";
-import { chatsDir, loadBindings, loadClosed, loadConfig, projectMode, saveBindings, worktreeRoot } from "./config.js";
+import { chatsDir, loadBindings, loadClosed, loadConfig, saveBindings, worktreeRoot } from "./config.js";
 import * as ws from "./workspaces.js";
 import { publicHooks } from "./hooks.js";
 
@@ -36,29 +36,53 @@ export function reconcileBindings(cfg, bindings) {
   if (changed) saveBindings(bindings);
 }
 
+async function discoverProjectSessions(worktrees, bindings, closed, sup) {
+  const discovered = new Map();
+  const add = session => {
+    if (!session?.id || discovered.has(session.id)) return;
+    discovered.set(session.id, {
+      ...session,
+      cwd: bindings[session.id]?.workspacePath || session.cwd,
+      closed: closed.has(session.id),
+    });
+  };
+  for (const workspacePath of Object.values(worktrees)) {
+    for (const session of await sup.listSessions(workspacePath)) add(session);
+  }
+  for (const [id, binding] of Object.entries(bindings)) {
+    if (!binding?.workspacePath || !Object.values(worktrees).some(workspacePath => pathKey(workspacePath) === pathKey(binding.workspacePath))) continue;
+    if (discovered.has(id)) continue;
+    try { add(await sup.meta(id)); } catch { /* bindings can outlive a removed transcript */ }
+  }
+  return [...discovered.values()];
+}
+
+export async function sessionsUsingWorkspace(project, workspacePath, sup) {
+  const bindings = loadBindings();
+  const closed = loadClosed();
+  const worktrees = ws.listWorktrees(project.repoPath);
+  const discovered = await discoverProjectSessions(worktrees, bindings, closed, sup);
+  return discovered
+    .filter(session => !session.closed && pathKey(session.cwd) === pathKey(workspacePath))
+    .map(session => ({
+      id: session.id,
+      title: titleOf(session),
+      streaming: sup.isStreaming(session.id),
+      updatedAt: isoTime(session.modified),
+      when: rel(session.modified),
+      workspacePath,
+    }));
+}
+
 export async function projectState(project, sup) {
   const cfg = loadConfig();
   const bindings = loadBindings();
   const worktrees = ws.listWorktrees(project.repoPath); // branch -> path
-  const pathToBranch = Object.fromEntries(Object.entries(worktrees).map(([b, p]) => [p, b]));
+  const pathToBranch = Object.fromEntries(Object.entries(worktrees).map(([b, p]) => [pathKey(p), b]));
 
-  // Discover all sessions first, including closed nodes. Closed sessions stay
-  // available as lineage anchors so closing a middle node does not re-root its
-  // children. They are removed only when the visible tree is assembled.
   const closed = loadClosed();
-  const discovered = [];
-  for (const wt of Object.values(worktrees)) {
-    for (const s of await sup.listSessions(wt)) {
-      discovered.push({ ...s, cwd: bindings[s.id]?.workspacePath || s.cwd, closed: closed.has(s.id) });
-    }
-  }
+  const discovered = await discoverProjectSessions(worktrees, bindings, closed, sup);
   const all = discovered.filter(s => !s.closed);
-  // occupied: branch -> sessionId (first bound session wins for display)
-  const occupied = {};
-  for (const s of all) {
-    const b = pathToBranch[s.cwd];
-    if (b && !occupied[b]) occupied[b] = { sessionId: s.id, title: titleOf(s) };
-  }
 
   // Session tree from fork lineage. Walk through closed ancestors so visible
   // descendants occupy the closed node's former position.
@@ -77,7 +101,7 @@ export async function projectState(project, sup) {
     return {
       id: n.id,
       title: titleOf(n),
-      branch: pathToBranch[n.cwd] || null,
+      branch: pathToBranch[pathKey(n.cwd)] || null,
       workspacePath: n.cwd || null,
       streaming: sup.isStreaming(n.id),
       model: n.model || null,
@@ -91,6 +115,22 @@ export async function projectState(project, sup) {
   const sessions = roots.sort((a, b) => compareTimestamp(treeActivity(b), treeActivity(a))).map(toNode);
   const updatedAt = all.reduce((latest, session) => newerTimestamp(latest, isoTime(session.modified)), null);
 
+  const workspaceStatus = Object.fromEntries(Object.entries(worktrees).map(([branch, workspacePath]) => [
+    branch,
+    {
+      ...ws.workspaceStatus({ repoPath: project.repoPath, branch, workspacePath }),
+      sessions: all
+        .filter(session => pathKey(session.cwd) === pathKey(workspacePath))
+        .map(session => ({
+          id: session.id,
+          title: titleOf(session),
+          streaming: sup.isStreaming(session.id),
+          updatedAt: isoTime(session.modified),
+          when: rel(session.modified),
+        })),
+    },
+  ]));
+
   return {
     id: project.id,
     name: project.name,
@@ -100,13 +140,11 @@ export async function projectState(project, sup) {
     branches: ws.listBranches(project.repoPath),
     remoteBranches: ws.listRemoteBranches(project.repoPath),
     worktrees,
-    occupied,
+    workspaceStatus,
     sessions,
     updated: updatedAt ? rel(updatedAt) : "—",
     updatedAt,
     worktreeRoot: worktreeRoot(cfg),
-    mode: projectMode(project),
-    modeInvalid: project.mode !== undefined && project.mode !== "manual" && project.mode !== "auto",
     hooks: publicHooks(cfg, project),
   };
 }

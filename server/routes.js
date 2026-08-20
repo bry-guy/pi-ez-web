@@ -4,9 +4,9 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
-import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
+import { chatsState, projectState, reconcileBindings, sessionWorkspace } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
@@ -64,7 +64,9 @@ function settingsState(cfg, github) {
   };
 }
 
-function suggestedSessionBranch(repoPath, firstMessage) {
+async function suggestedWorktreeBranch(repoPath, sessionId, sup) {
+  const records = await sup.transcript(sessionId);
+  const firstMessage = records.find(record => record.role === "user")?.text || "";
   const base = sessionSlug(firstMessage);
   const branches = ws.listBranches(repoPath);
   if (!branches.includes(base)) return base;
@@ -109,7 +111,7 @@ export function buildApi(sup) {
     const projects = [];
     for (const p of cfg.projects) {
       try { projects.push(await projectState(p, sup)); }
-      catch (e) { projects.push({ id: p.id, name: p.name, repoPath: p.repoPath, error: String(e.message || e), branches: [], sessions: [], occupied: {}, worktrees: {} }); }
+      catch (e) { projects.push({ id: p.id, name: p.name, repoPath: p.repoPath, error: String(e.message || e), branches: [], sessions: [], worktrees: {}, workspaceStatus: {} }); }
     }
     return c.json({
       apiContractVersion: API_CONTRACT_VERSION,
@@ -315,7 +317,6 @@ export function buildApi(sup) {
     const project = {
       id: newId("p"), name: body.name || path.basename(repoPath), repoPath, source: sourceInfo,
       hooks: normalizeHooks(body.hooks),
-      mode: body.mode === "auto" || body.mode === "manual" ? body.mode : undefined,
     };
     cfg.projects.push(project);
     saveConfig(cfg);
@@ -397,9 +398,6 @@ export function buildApi(sup) {
     const text = typeof body?.text === "string" ? body.text : "";
     const mode = body?.mode || "prompt";
     if (!text.trim().startsWith("/")) return err(c, 400, "invalid_slash_command");
-    const cwd = await sessionWorkspace(id, sup);
-    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
-    if (busyBy) return err(c, 409, "workspace_busy", { bySessionId: busyBy });
     try {
       const result = await sup.command(id, text.trim(), mode);
       if (result.action === "settings") return c.json({ ok: true, action: "settings" });
@@ -444,31 +442,6 @@ export function buildApi(sup) {
       image?.type !== "image" || typeof image.data !== "string" || !/^image\/(png|jpeg|webp|gif)$/.test(image.mimeType || "") ||
       image.data.length > 8_000_000
     )) return err(c, 400, "invalid_images");
-    const cwd = await sessionWorkspace(id, sup);
-    // one-active-turn-per-workspace backstop (external/legacy sessions sharing a cwd)
-    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
-    if (busyBy) {
-      hub.emit(id, "workspace_busy", { workspacePath: cwd, bySessionId: busyBy });
-      return err(c, 409, "workspace_busy", { bySessionId: busyBy });
-    }
-
-    const bindings = loadBindings();
-    if (!bindings[id]) {
-      const found = cwd && findProjectByWorkspace(cwd);
-      if (found && projectMode(found.project) === "auto" && cwd === found.project.repoPath) {
-        const occupier = Object.entries(bindings).find(([sessionId, binding]) =>
-          sessionId !== id && binding?.workspacePath === found.project.repoPath);
-        if (occupier) {
-          const meta = await sup.meta(occupier[0]);
-          const suggestedBranch = suggestedSessionBranch(found.project.repoPath, messageText);
-          return err(c, 409, "checkout_occupied", {
-            suggestedBranch, bySessionId: occupier[0], byTitle: titleOf(meta || { firstMessage: "another session" }),
-          });
-        }
-        bindings[id] = { branch: ws.currentBranch(found.project.repoPath), workspacePath: found.project.repoPath };
-        saveBindings(bindings);
-      }
-    }
     try {
       await sup.message(id, messageText, mode, images, clientMessageId);
       return c.json({ ok: true });
@@ -531,48 +504,74 @@ export function buildApi(sup) {
     return c.json({ ok: true, name: String(name || "").trim() || null });
   });
 
-  // Branch switch / create: re-home the session to that branch's workspace.
-  // Occupied rule: one session per workspace — moving onto a branch whose
-  // worktree is bound to another session is a 409.
-  api.post("/sessions/:id/branch", async c => {
+  api.post("/sessions/:id/worktree", async c => {
     const id = c.req.param("id");
-    const { branch: rawBranch, create = false, fromRef = null } = await c.req.json();
-    const branch = slug(rawBranch || "");
-    if (!branch) return err(c, 400, "bad_branch");
-    if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
-
+    const body = await c.req.json().catch(() => ({}));
+    const fork = body.fork === true;
     const cwd = await sessionWorkspace(id, sup);
     const found = cwd && findProjectByWorkspace(cwd);
     if (!found) return err(c, 404, "no_project_for_session");
-    const { project } = found;
+    if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
+    const { project, worktrees } = found;
     const cfg = loadConfig();
-
     const localBranches = ws.listBranches(project.repoPath);
     const remoteBranches = ws.listRemoteBranches(project.repoPath);
-    const remoteSource = fromRef || null;
-    if (!create && !localBranches.includes(branch)) return err(c, 404, "no_such_branch");
-    if (remoteSource && (!create || !remoteBranches.includes(remoteSource))) return err(c, 400, "invalid_remote_branch");
-    if (remoteSource && localBranches.includes(branch)) return err(c, 409, "branch_exists");
-    if (create && !remoteSource && !localBranches.includes(branch)) {
-      const matchingRemote = ws.remoteBranchForLocal(project.repoPath, branch);
-      if (matchingRemote) return err(c, 409, "branch_exists", { remoteBranch: matchingRemote });
+    const remoteSource = typeof body.fromRef === "string" && body.fromRef.trim() ? body.fromRef.trim() : null;
+    let branch = slug(body.branch || "");
+    if (remoteSource && !remoteBranches.includes(remoteSource)) return err(c, 400, "invalid_remote_branch");
+    if (!branch && remoteSource) branch = ws.localBranchForRemote(remoteSource);
+    if (!branch && !fork) branch = await suggestedWorktreeBranch(project.repoPath, id, sup);
+    if (!branch && remoteSource) return err(c, 400, "bad_branch");
+    const existingTarget = branch ? ws.listWorktrees(project.repoPath)[branch] || null : null;
+    if (!fork && existingTarget && path.resolve(existingTarget) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: existingTarget, setup: null });
+    if (remoteSource && branch && localBranches.includes(branch)) return err(c, 409, "branch_exists");
+    if (remoteSource && fork) return err(c, 400, "invalid_fork_source");
+
+    const parentBranch = Object.entries(worktrees).find(([, workspacePath]) => path.resolve(workspacePath) === path.resolve(cwd))?.[0] || ws.currentBranch(cwd);
+    if (fork) {
+      const records = await sup.transcript(id);
+      if (!records.length) return err(c, 400, "fork_requires_transcript");
+      let branchName = branch;
+      let branchWorkspace;
+      try {
+        ({ branch: branchName, workspacePath: branchWorkspace } = ws.forkWorkspace({
+          repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
+          parentWorkspace: cwd, parentBranch, existingBranches: localBranches, branch: branch || undefined,
+        }));
+      } catch (e) {
+        if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
+        if (e.code === "branch_exists") return err(c, 409, "branch_exists");
+        throw e;
+      }
+      const setup = projectHooks(cfg, project).setup;
+      const setupResult = setup ? hookResult(await runHook(setup, { cwd: branchWorkspace }), "setup") : null;
+      try {
+        const { id: childId } = await sup.fork(id, body.atRecordId || null, { cwd: branchWorkspace });
+        hub.emit(childId, "session_forked", { session: { id: childId, branch: branchName }, parentSessionId: id });
+        return c.json({ id: childId, branch: branchName, workspacePath: branchWorkspace, setup: setupResult });
+      } catch (e) {
+        try { ws.removeWorkspace({ repoPath: project.repoPath, workspacePath: branchWorkspace, force: true }); } catch { /* best effort cleanup */ }
+        try { execFileSync("git", ["branch", "-D", branchName], { cwd: project.repoPath, stdio: "ignore" }); } catch { /* best effort cleanup */ }
+        if (e.code === "bad_fork_record") return err(c, 400, "bad_fork_record");
+        throw e;
+      }
     }
-    const existingTarget = ws.listWorktrees(project.repoPath)[branch] || null;
-    const target = ws.ensureWorkspace({
-      repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg),
-      projectId: project.id, branch, fromRef: create ? (fromRef || "HEAD") : undefined,
-    });
-    if (target === cwd) return c.json({ ok: true, branch, workspacePath: target, setup: null });
 
-    // occupied?
+    let target;
+    try {
+      target = ws.ensureWorkspace({
+        repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg),
+        projectId: project.id, branch, fromRef: remoteSource || "HEAD",
+      });
+    } catch (e) {
+      if (e.code === "checkout_branch") return err(c, 409, e.code);
+      throw e;
+    }
+    if (path.resolve(target) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: target, setup: null });
+
     const bindings = loadBindings();
-    const bound = await sup.listSessions(target);
-    const boundHere = bound.filter(s => (bindings[s.id]?.workspacePath || s.cwd) === target && s.id !== id);
-    const rebound = Object.entries(bindings).find(([sid, binding]) => binding?.workspacePath === target && sid !== id);
-    const occupier = boundHere[0] || (rebound && { id: rebound[0] });
-    if (occupier) return err(c, 409, "branch_occupied", { bySessionId: occupier.id, byTitle: occupier.firstMessage ? titleOf(occupier) : undefined });
-
-    await sup.rehome(id, target);
+    try { await sup.rehome(id, target); }
+    catch (e) { if (e.code === "session_streaming") return err(c, 409, e.code); throw e; }
     bindings[id] = { branch, workspacePath: target };
     saveBindings(bindings);
     hub.emit(id, "session_meta", { branch });
@@ -581,46 +580,18 @@ export function buildApi(sup) {
     return c.json({ ok: true, branch, workspacePath: target, setup: setupResult });
   });
 
-  // Fork: point-in-time conversation + code. New branch + worktree from the
-  // parent workspace HEAD carrying dirty state; transcript forked at message.
-  api.post("/sessions/:id/fork", async c => {
-    const id = c.req.param("id");
-    const { atRecordId } = await c.req.json();
-    const cwd = await sessionWorkspace(id, sup);
+  api.post("/sessions/:id/pull", async c => {
+    const cwd = await sessionWorkspace(c.req.param("id"), sup);
     const found = cwd && findProjectByWorkspace(cwd);
-    if (!found) return err(c, 400, "fork_requires_project");
-    const { project, worktrees } = found;
-    const cfg = loadConfig();
-    const parentBranch = Object.entries(worktrees).find(([, p]) => p === cwd)?.[0] || ws.currentBranch(cwd);
-
-    let branch, workspacePath;
-    const forkBranchBase = projectMode(project) === "auto"
-      ? sessionSlug((await sup.transcript(id)).find(record => record.role === "user")?.text)
-      : undefined;
+    if (!found) return err(c, 404, "no_project_for_session");
     try {
-      ({ branch, workspacePath } = ws.forkWorkspace({
-        repoPath: project.repoPath, worktreeRoot: worktreeRoot(cfg), projectId: project.id,
-        parentWorkspace: cwd, parentBranch, existingBranches: ws.listBranches(project.repoPath), forkBranchBase,
-      }));
+      const result = ws.pullWorkspace(cwd);
+      hub.emit(c.req.param("id"), "session_meta", { branch: ws.currentBranch(cwd) });
+      return c.json({ ok: true, branch: ws.currentBranch(cwd), workspacePath: cwd, ...result });
     } catch (e) {
-      if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
+      if (e.code === "git_pull_failed") return err(c, 409, e.code, { detail: e.detail });
       throw e;
     }
-    const setup = projectHooks(cfg, project).setup;
-    const setupResult = setup ? hookResult(await runHook(setup, { cwd: workspacePath }), "setup") : null;
-    let childId;
-    try {
-      ({ id: childId } = await sup.fork(id, atRecordId, { cwd: workspacePath }));
-    } catch (e) {
-      try { ws.removeWorkspace({ repoPath: project.repoPath, workspacePath, force: true }); } catch { /* best effort cleanup */ }
-      try { execFileSync("git", ["branch", "-D", branch], { cwd: project.repoPath, stdio: "ignore" }); } catch { /* best effort cleanup */ }
-      if (e.code === "bad_fork_record") return err(c, 400, "bad_fork_record");
-      throw e;
-    }
-    hub.emit(childId, "session_forked", {
-      session: { id: childId, branch }, parentSessionId: id, atEntryId: atRecordId,
-    });
-    return c.json({ id: childId, branch, workspacePath, setup: setupResult });
   });
 
   // Configured project hooks run in the current session workspace. Hook names
@@ -645,13 +616,6 @@ export function buildApi(sup) {
     const { cmd } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
-    // A bang is a workspace operation too; do not let it mutate a workspace
-    // while another session has an active agent turn there.
-    const busyBy = cwd ? sup.activeInCwd(cwd, id) : null;
-    if (busyBy) {
-      hub.emit(id, "workspace_busy", { workspacePath: cwd, bySessionId: busyBy });
-      return err(c, 409, "workspace_busy", { bySessionId: busyBy });
-    }
     const bangId = newId("bg");
     hub.emit(id, "bang_start", { bangId, cmd });
     const t0 = Date.now();
@@ -667,8 +631,8 @@ export function buildApi(sup) {
     return c.json({ exit, durationMs });
   });
 
-  // Close: checkout session -> archival only; worktree session -> DESTRUCTIVE
-  // (worktree removed, branch force-deleted). Confirmation lives in the UI.
+  // Close: checkout sessions are archival; the last session in a worktree
+  // removes that worktree and branch. Confirmation lives in the UI.
   api.post("/sessions/:id/close", async c => {
     const id = c.req.param("id");
     try {
@@ -686,7 +650,7 @@ export function buildApi(sup) {
     try {
       return c.json(await mergeSession(sup, hub, c.req.param("id")));
     } catch (e) {
-      const codes = { session_streaming: 409, no_project_for_session: 404, nothing_to_merge: 400, workspace_dirty: 409, checkout_dirty: 409, merge_conflict: 409 };
+      const codes = { session_streaming: 409, sessions_active: 409, merge_rehome_failed: 409, no_project_for_session: 404, nothing_to_merge: 400, checkout_dirty: 409, merge_conflict: 409 };
       if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail } : {});
       throw e;
     }

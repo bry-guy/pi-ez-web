@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -55,10 +55,9 @@ test("default thinking mode accepts extended levels and rejects invalid settings
   assert.equal(loadConfig().defaultThinkingLevel, "xhigh");
 });
 
-test("project modes default to manual and preserve only valid values", () => {
-  assert.equal(projectMode({}), "manual");
-  assert.equal(projectMode({ mode: "auto" }), "auto");
-  assert.equal(projectMode({ mode: "invalid" }), "manual");
+test("legacy project modes are ignored", () => {
+  saveConfig({ projects: [{ id: "p", name: "demo", repoPath: "/tmp/demo", mode: "auto" }] });
+  assert.equal(loadConfig().projects[0].mode, undefined);
 });
 
 test("repository source config merges nested defaults and validates the default", () => {

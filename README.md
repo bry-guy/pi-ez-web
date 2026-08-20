@@ -39,14 +39,13 @@ first prompt asks you to connect a model provider when no usable model is
 available. Assistant replies render GitHub-flavored Markdown (headings, lists,
 tables, links, quotes, and code blocks); model-supplied HTML is removed and the
 rendered output is sanitized. The composer discovers Pi extension, prompt-template,
-and skill commands. Pi's built-in slash commands are web-adapted too: model selection, compaction, export/download, copy, session stats, reload, fork/clone, navigation, and provider settings work from the same `/` palette.
+and skill commands. Pi's built-in slash commands are web-adapted too: model selection, compaction, export/download, copy, session stats, reload, navigation, and provider settings work from the same `/` palette.
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
-OpenAI API-key login, and the default-model selector. Branch switching, the file
-tree, and forking appear only inside a **project** session — connect a repo first
-(the `+` next to PROJECTS, or the Projects screen). Project branch menus show
-local worktrees plus already-fetched remote refs; selecting a remote ref creates
-a local branch/worktree from it. Plain chats intentionally have none of those
-affordances.
+OpenAI API-key login, and the default-model selector. The file tree and
+Workspace settings appear only inside a **project** session — connect a repo first
+(the `+` next to PROJECTS). Workspace settings expose explicit Worktree, Pull,
+and Merge actions, show every session sharing the current workspace, and offer
+Worktree → Open as fork. Plain chats intentionally have none of those affordances.
 
 ## Install and configure
 
@@ -136,15 +135,15 @@ leaving the repository dialog open.
 The default local repository root is `$HOME/src`. The picker also accepts an
 absolute or `~/...` repository path directly. Omit `worktreeRoot` to use the
 Pi-adjacent default `~/.pi/worktrees`, or set it to an absolute path. Project
-entries may set `mode` to `manual` (default) or `auto`; change that in
-`config.json` for now. Project hooks are inherited from `projectHooks` and may
-be overridden per project with a `hooks` object, for example
-`"hooks": { "setup": "./script/install", "check": "./script/check" }`.
-Configured hooks run in the project checkout/worktree and can be run from the
-branch header. Auto-mode branch names: colliding sessions with the same
-opening message get `-2`, `-3`…; fork children get `.1`, `.2`. Pi-web's config,
-bindings, chats, and UI state remain under `~/.pi-web-ui`; existing worktrees
-are discovered in place and are not moved. Plain chats use private scratch
+entries do not need a mode setting. Project hooks are inherited from
+`projectHooks` and may be overridden per project with a `hooks` object, for
+example `"hooks": { "setup": "./script/install", "check": "./script/check" }`.
+The setup hook runs after connecting a repository or creating a worktree and can
+be rerun from Workspace settings. Other configured hooks are manual workspace
+actions. Worktree names are explicit, with an automatic name based on the
+session's first message when the name is left blank. Pi-web's config, bindings,
+chats, and UI state remain under `~/.pi-web-ui`; existing worktrees are
+discovered in place and are not moved. Plain chats use private scratch
 workspaces under `~/.pi-web-ui/chats/<scratch-id>` and scratch directories are
 retained for manual cleanup. The model picker is backed by Pi's available model
 runtime.

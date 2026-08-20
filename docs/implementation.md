@@ -2,8 +2,8 @@
 
 Self-hostable web UI for [pi](https://github.com/earendil-works/pi) coding-agent
 sessions. One Node process: pi SDK in-process, REST + SSE out, zero-build web
-components in front. Projects map to git repos; sessions map to branch
-worktrees; fork ⑂ branches both the conversation and the code.
+components in front. Projects map to git repos; workspaces map to concrete
+checkouts; sessions are Pi conversations running inside workspaces.
 
 ## Run
 
@@ -25,8 +25,8 @@ server/
   index.js            entry: Hono app, static UI, startup worktree prune
   routes.js           REST + SSE + slash commands + bang execution
   commands.js         Pi-native slash-command discovery and parsing
-  workspaces.js       git: worktree-per-branch, remote branches, occupied rules, safe fork transfer
-  domain.js           /api/state assembly (projects, session trees, occupied map)
+  workspaces.js       git: worktree-per-branch, status/pull, remote branches, safe fork transfer
+  domain.js           /api/state assembly (projects, session trees, shared workspaces)
   events.js           SSE hub (event contract v1 + sequence snapshots)
   lifecycle.js        explicit close and merge lifecycle
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
@@ -56,7 +56,7 @@ storage. The web supervisor binds extensions in headless JSON mode so tools,
 commands, hooks, `session_start`, and dynamic resources work, while TUI/RPC
 extension dialogs remain unavailable. Pi's built-in slash commands are
 translated into web actions (model selection, compaction, export/download,
-copy, session stats, reload, fork/clone, and navigation) instead of being sent
+copy, session stats, reload, and navigation) instead of being sent
 to the model; terminal-only actions get a safe browser equivalent. Durable todo
 and background-agent activity is projected into a bounded `activity` transcript/SSE
 record; arbitrary extension widgets and renderer functions are not exposed to
@@ -65,7 +65,7 @@ scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
 
-The app supports Local, GitHub, and public HTTPS Git URL repository sources. Projects can inherit deployment-wide `projectHooks` and override them with a per-project `hooks` object; configured hooks run in the selected project checkout/worktree and expose their result through the branch header.
+The app supports Local, GitHub, and public HTTPS Git URL repository sources. Projects can inherit deployment-wide `projectHooks` and override them with a per-project `hooks` object; configured hooks run in the selected project checkout/worktree and expose their result through Workspace settings.
 A configured GitHub owner can browse and clone public repositories without
 signing in; GitHub device authorization adds private repositories and stores
 its token separately from `config.json`. Private clones use a temporary
@@ -79,29 +79,29 @@ use locally served `marked` GFM parsing followed by DOMPurify sanitization;
 raw model HTML is not rendered. The composer discovers Pi slash commands and
 passes them to the SDK, with `/settings` and `/name` handled as first-class web
 actions. Transcript SSE remains contract version 1; REST state is contract
-version 2 and includes a capability marker so stale server processes produce a
+version 3 and includes a capability marker so stale server processes produce a
 restart prompt.
 
 ## Invariants
 
-- Workspace = worktree, one per branch (git's own constraint). The app never
-  mutates your checkout — it only adds worktrees under `worktreeRoot`.
-- One session per workspace by convention: moving a session onto a branch
-  occupied by another session is a 409; the branch popover disables those rows.
-  The app-managed one-active-turn lock serializes attached sessions; external
-  Pi CLI concurrency is user-managed because the SDK exposes no reliable
-  cross-process active-turn signal.
-- Fork carries dirty state from app-owned worktrees: tracked modifications +
-  untracked files land in the fork and survive in the parent. A dirty project
-  checkout is refused (`409 checkout_dirty`) rather than stashed. Code forks at
-  *present* state; the conversation forks at the chosen message.
-- Lifecycle is explicit and git-only (PRs deferred). **Merge** (header button):
-  `git merge --no-ff` into the checkout's branch — the one sanctioned checkout
-  mutation; preflight requires worktree + checkout clean; conflicts abort
-  cleanly and leave everything untouched. Success removes the worktree,
-  deletes the branch, and the session continues on the default branch.
-  **Close ×** (sidebar): worktree sessions are destroyed — worktree removed,
-  branch force-deleted, changes lost (the confirm dialog is the guard);
+- A project is a configured repository; a workspace is its checkout or a
+  worktree; a session is a Pi conversation with a workspace cwd. Git enforces
+  one worktree per branch, but multiple sessions may share that worktree.
+- The app never changes the user's checkout branch implicitly. Worktree,
+  Pull, and Merge are explicit Workspace settings actions. The title bar shows
+  branch, checkout/worktree type, dirty state, and ahead/behind counts.
+- Worktree → Open as fork creates a child conversation and worktree. Tracked
+  and untracked dirty state transfers to the fork and is restored in the
+  parent. A dirty project checkout is refused before stashing. Blank branch
+  names use a session-based automatic name.
+- Lifecycle is explicit and git-only (PRs deferred). **Merge** stops all
+  sessions sharing the source worktree, merges with `git merge --no-ff`, moves
+  them to the checkout, force-removes the source worktree and branch, and warns
+  that uncommitted source changes will be lost. Checkout changes still block
+  the merge; conflicts abort cleanly and preserve the source worktree.
+  **Close ×** (sidebar): a worktree is removed only when its closing session
+  is the last session using it; otherwise the shared workspace remains. A
+  standalone worktree session is destroyed with its branch and changes lost;
   checkout sessions and chats are archived, nothing in git touched.
   Transcripts always survive; stale-session cleanup is explicit rather than
   timer-driven.
@@ -111,7 +111,7 @@ restart prompt.
 ```sh
 npm test               # no credentials: git, mock HTTP+SSE, SDK, and DOM gates
 npm run test:dom       # DOM interaction gate alone
-npm run verify:real    # with ~/.pi/agent: real turn, model, fork, and edit gate
+npm run verify:real    # with ~/.pi/agent: real turn, model, worktree, and edit gate
 ```
 
 The DOM suite is a jsdom floor; use a real browser for visual and interaction
@@ -121,8 +121,8 @@ sandbox and must remain inside a trusted LAN/tailnet/VPN.
 `GET /api/sessions/:id/commands` and `POST /api/sessions/:id/command` expose
 Pi's command surface to the web composer. `/settings` changes the web view and
 `/name <name>` updates Pi session metadata; other discovered commands pass
-through Pi's SDK command handling. Branch popovers include local, worktree,
-default, and fetched remote refs; selecting a remote ref creates a local
+through Pi's SDK command handling. Workspace settings include local branches,
+worktrees, and fetched remote refs; selecting a remote ref creates a local
 worktree branch from that ref. The branch cleanup endpoint remains API-only.
 
 Unnamed sessions display a compact whitespace-normalized truncation of their

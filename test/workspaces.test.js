@@ -38,6 +38,13 @@ test("remote branch listing preserves remote names and supports local mapping", 
   assert.equal(ws.remoteBranchForLocal(repo, "feature/remote-ui"), "origin/feature/remote-ui");
 });
 
+test("worktree status reports checkout state and pull surfaces Git failures", () => {
+  assert.deepEqual(ws.workspaceStatus({ repoPath: repo, branch: "main", workspacePath: repo }), {
+    branch: "main", path: repo, kind: "checkout", dirty: false, upstream: null, ahead: 0, behind: 0,
+  });
+  assert.throws(() => ws.pullWorkspace(repo), error => error?.code === "git_pull_failed");
+});
+
 test("worktree map includes the checkout", () => {
   assert.deepEqual(ws.listWorktrees(repo), { main: repo });
 });

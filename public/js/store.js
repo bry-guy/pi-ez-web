@@ -54,22 +54,25 @@ export const store = {
     view: "chat",            // chat | settings
     projectId: null,
     sessionId: null,
-    chatId: null,            // non-null => plain chat (no branch chip/files/fork)
+    chatId: null,            // non-null => plain chat (no project workspace controls)
     railOpen: true,
     drawerOpen: false,
     openTree: {},
     openTools: {},
     openActivity: {},
     openDirs: {},
-    branchMenuOpen: false,
-    branchError: null,
-    confirm: null,          // { type: "merge"|"close"|"bind", id, branch, error? }
+    workspaceSettingsOpen: false,
+    worktreeFormOpen: false,
+    worktreeBranch: "",
+    worktreeRemote: "",
+    worktreeFork: false,
+    workspaceError: null,
+    confirm: null,          // { type: "merge"|"close", id, branch, sessions, error? }
     filesOpen: false,
     repoPickerOpen: false,
     repoPickerSource: null,
     query: "",
     repoQuery: "",
-    newBranch: "",
     drafts: {},              // sessionId -> unsent composer text
     model: null,             // active session model reference
     defaultModel: null,      // configured setting; null means Automatic
@@ -93,7 +96,6 @@ export const store = {
     // server data
     projects: [],
     chats: [],
-    mode: "real",
     buildId: null,
     reconnecting: false,
     offline: globalThis.navigator?.onLine === false,
@@ -200,18 +202,14 @@ export const store = {
     }
     return this.state.chats.find(chat => chat.id === id) || null;
   },
-  workspaceBusy(id) {
-    const me = this.findAnySession(id);
-    const workspacePath = me?.workspacePath;
-    if (!workspacePath) return null;
+  sessionsUsingWorkspace(workspacePath) {
+    const sessions = [];
     for (const project of this.state.projects) {
       for (const node of iterateSessions(project.sessions)) {
-        if (node.id !== id && node.workspacePath === workspacePath && this.transcript(node.id).streaming) {
-          return { id: node.id, title: node.title };
-        }
+        if (node.workspacePath === workspacePath) sessions.push(node);
       }
     }
-    return null;
+    return sessions;
   },
   inProject() {
     return this.state.view === "chat" && !this.state.chatId && !!this.state.sessionId;

@@ -134,8 +134,9 @@ test("serves the UI", async () => {
 
 test("state exposes the API contract and health marker", async () => {
   const state = await (await get("/api/state")).json();
-  assert.equal(state.apiContractVersion, 2);
+  assert.equal(state.apiContractVersion, 3);
   assert.ok(state.capabilities.includes("provider-auth"));
+  assert.ok(state.capabilities.includes("workspace-actions"));
   assert.ok(state.capabilities.includes("slash-commands"));
   assert.ok(state.capabilities.includes("project-hooks"));
   assert.ok(state.capabilities.includes("pi-resources"));
@@ -144,7 +145,7 @@ test("state exposes the API contract and health marker", async () => {
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
-  assert.equal(health.apiContractVersion, 2);
+  assert.equal(health.apiContractVersion, 3);
 });
 
 test("repository picker uses the configured local repositories root", async () => {
@@ -186,10 +187,8 @@ test("plain chats use isolated scratch workspaces and retain legacy discovery", 
 
   const branchResponse = await post(`/api/sessions/${a.id}/branch`, { branch: "not-a-chat-branch", create: true });
   assert.equal(branchResponse.status, 404);
-  assert.equal((await branchResponse.json()).error, "no_project_for_session");
   const forkResponse = await post(`/api/sessions/${b.id}/fork`, {});
-  assert.equal(forkResponse.status, 400);
-  assert.equal((await forkResponse.json()).error, "fork_requires_project");
+  assert.equal(forkResponse.status, 404);
   const mergeResponse = await post(`/api/sessions/${b.id}/merge`, {});
   assert.equal(mergeResponse.status, 404);
   assert.equal((await mergeResponse.json()).error, "no_project_for_session");
@@ -386,7 +385,9 @@ test("project creation: first session on the checkout branch", async () => {
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.equal(p.branch, "main");
-  assert.equal(p.occupied.main.sessionId, firstSessionId);
+  assert.deepEqual(p.workspaceStatus.main.sessions.map(session => session.id), [firstSessionId]);
+  assert.equal(p.occupied, undefined);
+  assert.equal(p.mode, undefined);
   assert.equal(p.sessions[0].id, firstSessionId);
   assert.equal(p.sessions[0].branch, "main");
   assert.equal(p.sessions[0].model, "mock/fast");
@@ -414,25 +415,28 @@ test("slash command discovery supports /settings and /name", async () => {
 });
 
 test("dirty checkout fork is refused without stashing the checkout", async () => {
+  const sse = new SSE(base + "/api/events");
+  await post(`/api/sessions/${firstSessionId}/message`, { text: "prepare a fork" });
+  await sse.wait(e => e.sessionId === firstSessionId && e.type === "turn_end");
   const marker = path.join(repo, "local-only.txt");
   fs.writeFileSync(marker, "keep me\n");
-  const r = await post(`/api/sessions/${firstSessionId}/fork`, {});
+  const r = await post(`/api/sessions/${firstSessionId}/worktree`, { fork: true });
   assert.equal(r.status, 409);
   assert.equal((await r.json()).error, "checkout_dirty");
   assert.equal(fs.readFileSync(marker, "utf8"), "keep me\n");
   fs.rmSync(marker);
 });
 
-test("branch create re-homes the session to a new worktree", async () => {
-  const r = await post(`/api/sessions/${firstSessionId}/branch`, { branch: "feat/json", create: true });
+test("explicit worktree action re-homes the session and exposes shared workspace state", async () => {
+  const r = await post(`/api/sessions/${firstSessionId}/worktree`, { branch: "feat/json" });
   assert.equal(r.status, 200);
   const { workspacePath } = await r.json();
   assert.ok(fs.existsSync(path.join(workspacePath, "README.md")));
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.equal(p.sessions[0].branch, "feat/json");
-  assert.equal(p.occupied["feat/json"].sessionId, firstSessionId);
-  assert.equal(p.occupied.main, undefined); // main is free again
+  assert.deepEqual(p.workspaceStatus["feat/json"].sessions.map(session => session.id), [firstSessionId]);
+  assert.deepEqual(p.workspaceStatus.main.sessions, []);
 });
 
 test("file explorer returns current content and HEAD/main diffs safely", async () => {
@@ -516,71 +520,51 @@ test("remote branch selection creates from the fetched ref", async () => {
   const p = state.projects.find(x => x.id === projectId);
   assert.ok(p.remoteBranches.includes("origin/feature/remote-ui"));
 
-  const selected = await post(`/api/sessions/${firstSessionId}/branch`, {
-    branch: "remote-ui", create: true, fromRef: "origin/feature/remote-ui",
+  const selected = await post(`/api/sessions/${firstSessionId}/worktree`, {
+    branch: "remote-ui", fromRef: "origin/feature/remote-ui",
   });
-  assert.equal(selected.status, 200);
+  assert.equal(selected.status, 200, await selected.clone().text());
   const selectedBody = await selected.json();
   assert.equal(ws.currentBranch(selectedBody.workspacePath), "remote-ui");
   assert.equal(git(selectedBody.workspacePath, "rev-parse", "HEAD").trim(), git(repo, "rev-parse", "HEAD").trim());
 
-  const duplicate = await post(`/api/sessions/${firstSessionId}/branch`, {
-    branch: "remote-ui", create: true, fromRef: "origin/feature/remote-ui",
+  const duplicate = await post(`/api/sessions/${firstSessionId}/worktree`, {
+    branch: "remote-ui", fromRef: "origin/feature/remote-ui",
   });
-  assert.equal(duplicate.status, 409);
-  assert.equal((await duplicate.json()).error, "branch_exists");
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).branch, "remote-ui");
 
-  const restored = await post(`/api/sessions/${firstSessionId}/branch`, { branch: "feat/json" });
+  const restored = await post(`/api/sessions/${firstSessionId}/worktree`, { branch: "feat/json" });
   assert.equal(restored.status, 200);
 });
 
-test("project state exposes streaming and bang respects the workspace lock", async () => {
+test("shared sessions can run turns and workspace commands without occupancy locks", async () => {
   const sse = new SSE(base + "/api/events");
   const a = await supervisor.createSession({ cwd: repo });
   const a2 = await supervisor.createSession({ cwd: repo });
-  await post(`/api/sessions/${a.id}/message`, { text: "lock owner" });
-  await sse.wait(e => e.sessionId === a.id && e.type === "message_start");
-
-  let state = await (await get("/api/state")).json();
-  const project = state.projects.find(p => p.id === projectId);
-  const node = project.sessions.find(s => s.id === a.id);
-  const sibling = project.sessions.find(s => s.id === a2.id);
-  assert.equal(node.streaming, true);
-  assert.equal(sibling.streaming, false);
-
-  const busyBang = await post(`/api/sessions/${a2.id}/bang`, { cmd: "pwd" });
-  assert.equal(busyBang.status, 409);
-  assert.equal((await busyBang.json()).error, "workspace_busy");
+  await post(`/api/sessions/${a.id}/message`, { text: "shared session one" });
+  await post(`/api/sessions/${a2.id}/message`, { text: "shared session two" });
   await sse.wait(e => e.sessionId === a.id && e.type === "turn_end");
-
-  const freeBang = await post(`/api/sessions/${a2.id}/bang`, { cmd: "pwd" });
-  assert.equal(freeBang.status, 200);
+  await sse.wait(e => e.sessionId === a2.id && e.type === "turn_end");
+  const bang = await post(`/api/sessions/${a2.id}/bang`, { cmd: "pwd" });
+  assert.equal(bang.status, 200);
   await sse.wait(e => e.sessionId === a2.id && e.type === "bang_end");
-  state = await (await get("/api/state")).json();
-  const refreshed = state.projects.find(p => p.id === projectId);
-  assert.equal(refreshed.sessions.find(s => s.id === a.id).streaming, false);
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(p => p.id === projectId);
+  const shared = project.workspaceStatus.main.sessions.map(session => session.id);
+  assert.ok(shared.includes(a.id));
+  assert.ok(shared.includes(a2.id));
 });
 
-test("occupied branch blocks another session moving onto it (409 branch_occupied)", async () => {
-  // second session in this project: create on main (free), then try to move onto feat/json
-  const { id: s2 } = await (await post("/api/chats")).json(); // plain chat first…
-  // …no: create a real project session by re-homing a chat is not the shape; use the project checkout:
-  // simulate an externally created session bound to the checkout:
-  const res = await post(`/api/sessions/${s2}/branch`, { branch: "feat/json", create: false });
-  // s2 is a plain chat with no project — expect 404 no_project_for_session
-  assert.equal(res.status, 404);
-
-  // proper second project session: fork the first one, then try to move the fork onto feat/json
-  const fr = await (await post(`/api/sessions/${firstSessionId}/fork`, {})).json();
-  assert.ok(fr.id && fr.branch.startsWith("branch/"));
-  const mv = await post(`/api/sessions/${fr.id}/branch`, { branch: "feat/json" });
-  assert.equal(mv.status, 409);
-  const body = await mv.json();
-  assert.equal(body.error, "branch_occupied");
-  assert.equal(body.bySessionId, firstSessionId);
+test("worktree action allows another session to share the same workspace", async () => {
+  const shared = await (await post(`/api/projects/${projectId}/sessions`, {})).json();
+  const moved = await post(`/api/sessions/${shared.id}/worktree`, { branch: "feat/json" });
+  assert.equal(moved.status, 200);
+  const p = (await (await get("/api/state")).json()).projects.find(project => project.id === projectId);
+  assert.deepEqual(new Set(p.workspaceStatus["feat/json"].sessions.map(session => session.id)), new Set([firstSessionId, shared.id]));
 });
 
-test("fork carries dirty workspace state point-in-time", async () => {
+test("fork option carries dirty workspace state point-in-time", async () => {
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   const parentWs = p.worktrees["feat/json"];
@@ -588,14 +572,15 @@ test("fork carries dirty workspace state point-in-time", async () => {
 
   const sse = new SSE(base + "/api/events");
   await sse.ready;
-  const fr = await (await post(`/api/sessions/${firstSessionId}/fork`, {})).json();
-  assert.ok(fs.existsSync(path.join(fr.workspacePath, "dirty.txt"))); // fork has it
-  assert.ok(fs.existsSync(path.join(parentWs, "dirty.txt")));          // parent keeps it
+  const response = await post(`/api/sessions/${firstSessionId}/worktree`, { fork: true, branch: "branch/json-dirty" });
+  assert.equal(response.status, 200);
+  const fr = await response.json();
+  assert.ok(fs.existsSync(path.join(fr.workspacePath, "dirty.txt")));
+  assert.ok(fs.existsSync(path.join(parentWs, "dirty.txt")));
   await sse.wait(e => e.type === "session_forked" && e.sessionId === fr.id);
-  // forked session is bound to its own fresh branch — occupied maps update
   const st2 = await (await get("/api/state")).json();
   const p2 = st2.projects.find(x => x.id === projectId);
-  assert.equal(p2.occupied[fr.branch].sessionId, fr.id);
+  assert.equal(p2.workspaceStatus[fr.branch].sessions[0].id, fr.id);
 });
 
 test("fork transcript truncates at the forked message and seeds lineage", async () => {
@@ -608,10 +593,10 @@ test("fork transcript truncates at the forked message and seeds lineage", async 
 
   const snap = await (await get(`/api/sessions/${firstSessionId}/transcript`)).json();
   const secondUser = snap.records.filter(r => r.role === "user")[1];
-  const fr = await (await post(`/api/sessions/${firstSessionId}/fork`, { atRecordId: secondUser.id })).json();
+  const fr = await (await post(`/api/sessions/${firstSessionId}/worktree`, { fork: true, branch: "branch/json-truncated", atRecordId: secondUser.id })).json();
   const forkSnap = await (await get(`/api/sessions/${fr.id}/transcript`)).json();
   const users = forkSnap.records.filter(r => r.role === "user").map(r => r.text);
-  assert.deepEqual(users, ["turn one"]); // truncated before "turn two"
+  assert.deepEqual(users, ["prepare a fork"]); // truncated before "turn one"
 
   const st = await (await get("/api/state")).json();
   const p = st.projects.find(x => x.id === projectId);
@@ -619,37 +604,11 @@ test("fork transcript truncates at the forked message and seeds lineage", async 
   assert.match(parentNode, new RegExp(fr.id)); // fork appears in the tree
 });
 
-test("workspace_busy backstop: two sessions sharing a cwd cannot both run turns", async () => {
-  // Simulate an externally created second session in the same workspace (pi CLI style):
-  const st = await (await get("/api/state")).json();
-  const p = st.projects.find(x => x.id === projectId);
-  const wsPath = p.worktrees["feat/json"];
-  // create a mock session directly in that cwd via the chats endpoint trick is wrong;
-  // use supervisor storage shape: easiest honest path is the API — a fork lands in
-  // its own worktree, so instead re-home a fresh fork onto a NEW branch, then
-  // hand-bind it to feat/json by writing bindings.json like an external tool would.
-  const fr = await (await post(`/api/sessions/${firstSessionId}/fork`, {})).json();
-  const bindingsPath = path.join(home, "bindings.json");
-  const bindings = JSON.parse(fs.readFileSync(bindingsPath, "utf8").trim() || "{}");
-  bindings[fr.id] = { branch: "feat/json", workspacePath: wsPath };
-  fs.writeFileSync(bindingsPath, JSON.stringify(bindings));
-  // also point the mock session's cwd there (external creation would have done this)
-  const mockFile = path.join(home, "mock-sessions", fr.id + ".json");
-  const mock = JSON.parse(fs.readFileSync(mockFile, "utf8"));
-  mock.cwd = wsPath;
-  fs.writeFileSync(mockFile, JSON.stringify(mock));
-
-  const sse = new SSE(base + "/api/events");
-  await post(`/api/sessions/${firstSessionId}/message`, { text: "long running" });
-  await sse.wait(e => e.sessionId === firstSessionId && e.type === "message_start");
-  const res = await post(`/api/sessions/${fr.id}/message`, { text: "collide" });
-  assert.equal(res.status, 409);
-  const body = await res.json();
-  assert.equal(body.error, "workspace_busy");
-  assert.equal(body.bySessionId, firstSessionId);
-  const busyEvt = await sse.wait(e => e.sessionId === fr.id && e.type === "workspace_busy");
-  assert.equal(busyEvt.bySessionId, firstSessionId);
-  await post(`/api/sessions/${firstSessionId}/stop`);
+test("standalone branch and fork endpoints are removed", async () => {
+  const branch = await post(`/api/sessions/${firstSessionId}/branch`, { branch: "legacy" });
+  assert.equal(branch.status, 404);
+  const fork = await post(`/api/sessions/${firstSessionId}/fork`, {});
+  assert.equal(fork.status, 404);
 });
 
 test("branch delete: dirty refused, force removes", async () => {
@@ -740,88 +699,78 @@ test("checkout workspace cannot be deleted", async () => {
   assert.equal(r.status, 400);
 });
 
-let autoProjectId, autoFirstId, autoSecondId, autoRepo, autoFirstMessage, autoSecondMessage, autoBranch;
-test("auto projects bind an unbound checkout session on first send", async () => {
-  autoRepo = makeRepo("auto-repo");
-  const created = await (await post("/api/projects", { repoPath: autoRepo })).json();
-  autoProjectId = created.id;
-  autoFirstId = created.sessionId;
-  const cfg = loadConfig();
-  cfg.projects.find(project => project.id === autoProjectId).mode = "auto";
-  saveConfig(cfg);
-
-  autoFirstMessage = "Create the auto session parent";
-  const sse = new SSE(base + "/api/events");
-  const response = await post(`/api/sessions/${autoFirstId}/message`, { text: autoFirstMessage });
-  assert.equal(response.status, 200);
-  await sse.wait(e => e.sessionId === autoFirstId && e.type === "turn_end");
-  const binding = loadBindings()[autoFirstId];
-  assert.deepEqual(binding, { branch: "main", workspacePath: autoRepo });
-});
-
-test("auto checkout collision suggests a deterministic session branch", async () => {
-  const created = await (await post(`/api/projects/${autoProjectId}/sessions`, {})).json();
-  autoSecondId = created.id;
-  autoSecondMessage = "Second auto session needs a branch";
-  const response = await post(`/api/sessions/${autoSecondId}/message`, { text: autoSecondMessage });
-  assert.equal(response.status, 409);
-  const body = await response.json();
-  assert.equal(body.error, "checkout_occupied");
-  assert.equal(body.suggestedBranch, sessionSlug(autoSecondMessage));
-  assert.equal(body.bySessionId, autoFirstId);
-
-  git(autoRepo, "branch", body.suggestedBranch);
-  const third = await (await post(`/api/projects/${autoProjectId}/sessions`, {})).json();
-  const collide = await post(`/api/sessions/${third.id}/message`, { text: autoSecondMessage });
-  assert.equal(collide.status, 409);
-  assert.equal((await collide.json()).suggestedBranch, `${sessionSlug(autoSecondMessage)}-2`);
-});
-
-test("auto collision branch can be created before sending", async () => {
-  autoBranch = sessionSlug(autoSecondMessage);
-  const branchResponse = await post(`/api/sessions/${autoSecondId}/branch`, { branch: autoBranch, create: true });
-  assert.equal(branchResponse.status, 200);
-  const branch = await branchResponse.json();
-  const binding = loadBindings()[autoSecondId];
-  assert.equal(binding.branch, autoBranch);
-  assert.equal(binding.workspacePath, branch.workspacePath);
-  assert.notEqual(binding.workspacePath, autoRepo);
-
-  const sse = new SSE(base + "/api/events");
-  const response = await post(`/api/sessions/${autoSecondId}/message`, { text: "send on the suggested branch" });
-  assert.equal(response.status, 200);
-  await sse.wait(e => e.sessionId === autoSecondId && e.type === "turn_end");
-});
-
-test("manual projects never create a lazy binding", async () => {
+test("sessions stay on their current workspace unless Worktree is requested", async () => {
   const manualRepo = makeRepo("manual-repo");
   const created = await (await post("/api/projects", { repoPath: manualRepo })).json();
+  const second = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
   const sse = new SSE(base + "/api/events");
-  const response = await post(`/api/sessions/${created.sessionId}/message`, { text: "manual project turn" });
-  assert.equal(response.status, 200);
+  await post(`/api/sessions/${created.sessionId}/message`, { text: "manual project turn" });
   await sse.wait(e => e.sessionId === created.sessionId && e.type === "turn_end");
   assert.equal(loadBindings()[created.sessionId], undefined);
+  assert.equal(loadBindings()[second.id], undefined);
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(item => item.id === created.id);
+  assert.equal(project.workspaceStatus.main.sessions.length, 2);
 });
 
-test("state reconciliation removes bindings for deleted worktrees", async () => {
-  const binding = loadBindings()[autoSecondId];
-  ws.removeWorkspace({ repoPath: autoRepo, workspacePath: binding.workspacePath, force: true });
-  const otherProjectWorktreePath = repo;
-  const bindings = loadBindings();
-  bindings["cross-project-session"] = { branch: "main", workspacePath: otherProjectWorktreePath };
-  saveBindings(bindings);
-  await get("/api/state");
-  const reconciled = loadBindings();
-  assert.equal(reconciled[autoSecondId], undefined);
-  assert.ok(reconciled["cross-project-session"]);
+test("blank Worktree names use the session slug and avoid collisions", async () => {
+  const namedRepo = makeRepo("named-worktree-repo");
+  const created = await (await post("/api/projects", { repoPath: namedRepo })).json();
+  const message = "Create the manual session workspace";
+  const sse = new SSE(base + "/api/events");
+  await post(`/api/sessions/${created.sessionId}/message`, { text: message });
+  await sse.wait(e => e.sessionId === created.sessionId && e.type === "turn_end");
+  const first = await (await post(`/api/sessions/${created.sessionId}/worktree`, {})).json();
+  assert.equal(first.branch, sessionSlug(message));
+  const second = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  const secondSse = new SSE(base + "/api/events");
+  await post(`/api/sessions/${second.id}/message`, { text: message });
+  await secondSse.wait(e => e.sessionId === second.id && e.type === "turn_end");
+  await post(`/api/sessions/${second.id}/worktree`, {});
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(item => item.id === created.id);
+  assert.ok(project.branches.includes(`${sessionSlug(message)}-2`));
 });
 
-test("auto forks use the deterministic session slug with a numeric suffix", async () => {
-  const transcript = await (await get(`/api/sessions/${autoFirstId}/transcript`)).json();
-  const firstUser = transcript.records.find(record => record.role === "user");
-  const response = await post(`/api/sessions/${autoFirstId}/fork`, { atRecordId: firstUser.id });
+test("Pull fast-forwards the current workspace and returns Git output", async () => {
+  const pullRepo = makeRepo("pull-repo");
+  const remote = path.join(tmp, "pull-remote.git");
+  execFileSync("git", ["init", "--bare", remote], { encoding: "utf8" });
+  git(pullRepo, "remote", "add", "origin", remote);
+  git(pullRepo, "push", "-u", "origin", "main");
+  const clone = path.join(tmp, "pull-clone");
+  execFileSync("git", ["clone", "--branch", "main", remote, clone], { encoding: "utf8" });
+  git(clone, "config", "user.email", "t@t"); git(clone, "config", "user.name", "t");
+  fs.writeFileSync(path.join(clone, "pulled.txt"), "pulled\n");
+  git(clone, "add", "-A"); git(clone, "commit", "-m", "remote change"); git(clone, "push");
+  const created = await (await post("/api/projects", { repoPath: pullRepo })).json();
+  const response = await post(`/api/sessions/${created.sessionId}/pull`);
   assert.equal(response.status, 200);
-  const fork = await response.json();
-  assert.equal(fork.branch, `${sessionSlug(autoFirstMessage)}.1`);
-  assert.ok(fs.existsSync(fork.workspacePath));
+  assert.match((await response.json()).stdout, /Fast-forward|Updating|Already up to date/);
+  assert.equal(fs.readFileSync(path.join(pullRepo, "pulled.txt"), "utf8"), "pulled\n");
+});
+
+test("merge stops and rehomes every session sharing a dirty worktree", async () => {
+  const mergeRepo = makeRepo("shared-merge-repo");
+  const created = await (await post("/api/projects", { repoPath: mergeRepo })).json();
+  const second = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  await post(`/api/sessions/${created.sessionId}/worktree`, { branch: "feat/shared-merge" });
+  await post(`/api/sessions/${second.id}/worktree`, { branch: "feat/shared-merge" });
+  const state = await (await get("/api/state")).json();
+  const workspace = state.projects.find(item => item.id === created.id).workspaceStatus["feat/shared-merge"].path;
+  fs.writeFileSync(path.join(workspace, "merged.txt"), "merged\n");
+  git(workspace, "add", "-A"); git(workspace, "commit", "-m", "shared merge");
+  fs.writeFileSync(path.join(workspace, "uncommitted.txt"), "discard me\n");
+  const sse = new SSE(base + "/api/events");
+  await post(`/api/sessions/${created.sessionId}/message`, { text: "active before merge" });
+  await sse.wait(e => e.sessionId === created.sessionId && e.type === "message_start");
+  const merged = await post(`/api/sessions/${created.sessionId}/merge`);
+  assert.equal(merged.status, 200);
+  const body = await merged.json();
+  assert.deepEqual(new Set(body.sessionIds), new Set([created.sessionId, second.id]));
+  assert.equal(fs.existsSync(workspace), false);
+  assert.equal(fs.readFileSync(path.join(mergeRepo, "merged.txt"), "utf8"), "merged\n");
+  const after = await (await get("/api/state")).json();
+  const project = after.projects.find(item => item.id === created.id);
+  assert.deepEqual(new Set(project.workspaceStatus.main.sessions.map(session => session.id)), new Set([created.sessionId, second.id]));
 });

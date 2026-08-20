@@ -13,8 +13,6 @@ export const WEB_PI_COMMANDS = Object.freeze([
   { name: "session", description: "Show session info and stats", source: "pi" },
   { name: "changelog", description: "Show changelog entries", source: "pi" },
   { name: "hotkeys", description: "Show browser keyboard shortcuts", source: "pi" },
-  { name: "fork", description: "Fork from the latest user message", source: "pi" },
-  { name: "clone", description: "Duplicate the current session", source: "pi" },
   { name: "tree", description: "Open the session tree", source: "pi" },
   { name: "trust", description: "Use the server's project trust policy", source: "pi" },
   { name: "login", description: "Configure provider authentication", argumentHint: "<provider>", source: "pi" },

@@ -254,10 +254,6 @@ class PiSettings extends HTMLElement {
     </div>`;
   }
   render() {
-    const invalidModes = store.state.projects.filter(project => project.modeInvalid);
-    const modeWarning = invalidModes.length
-      ? `<div class="settings-warning">Invalid project mode for ${esc(invalidModes.map(project => project.name).join(", "))}; using manual mode. Edit config.json to set <span class="settings-mono">mode: manual</span> or <span class="settings-mono">mode: auto</span>.</div>`
-      : "";
     const providers = (store.state.providers || []).filter(provider => provider.id !== "openai" || provider.configured);
     const settings = store.state.settings || {};
     const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "local";
@@ -292,7 +288,6 @@ class PiSettings extends HTMLElement {
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title">Settings</div>
       ${feedback}
-      ${modeWarning}
       <section class="settings-section">
         <div class="settings-section-title">AI providers</div>
         <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
@@ -657,7 +652,7 @@ class PiRepoPicker extends HTMLElement {
       await refreshState();
       store.state.openTree[result.id] = true;
       selectSession(result.id, result.sessionId);
-      store.set({ hookResult: result.setup || null });
+      store.set({ hookResult: result.setup || null, workspaceSettingsOpen: result.setup && !result.setup.ok });
     } catch (err) {
       this.connecting = false;
       const messages = {
@@ -881,6 +876,11 @@ class PiConfirm extends HTMLElement {
       const scrim = this.querySelector(".confirm-scrim");
       if (e.target === scrim || e.target.closest("[data-act='cancel']")) {
         store.set({ confirm: null });
+      } else if (e.target.closest("[data-act='navigate-session']")) {
+        const id = e.target.closest("[data-act='navigate-session']")?.dataset.id;
+        const p = store.project();
+        if (p && id) selectSession(p.id, id);
+        store.set({ confirm: null });
       } else if (e.target.closest("[data-act='go']")) {
         this.go();
       }
@@ -893,14 +893,6 @@ class PiConfirm extends HTMLElement {
     const c = store.state.confirm;
     if (!c) return;
     try {
-      if (c.type === "bind") {
-        await api.branch(c.id, c.branch, true);
-        await refreshState();
-        store.setDraft(c.text, c.id);
-        store.set({ confirm: null });
-        document.querySelector("pi-composer")?.send(c.mode);
-        return;
-      }
       if (c.type === "merge") await api.merge(c.id);
       else await api.close(c.id);
       store.set({ confirm: null });
@@ -910,7 +902,8 @@ class PiConfirm extends HTMLElement {
         workspace_dirty: "worktree has uncommitted changes — commit them first",
         checkout_dirty: "the project checkout has uncommitted changes",
         session_streaming: "session is mid-turn — stop it first",
-        branch_occupied: "that branch is already in use",
+        merge_rehome_failed: "the merge landed, but one session could not be moved; the worktree was kept",
+        sessions_active: "stop the active sessions before merging",
       };
       store.set(s => ({ confirm: { ...s.confirm, error: msgs[err.error] || err.error || "failed" } }));
     }
@@ -922,16 +915,17 @@ class PiConfirm extends HTMLElement {
     const p = store.project();
     const target = p?.branch || "main";
     const isMerge = c.type === "merge";
-    const isBind = c.type === "bind";
-    const title = isBind ? "Continue on a new branch?" : isMerge ? "Merge branch" : c.kind === "chat" ? "Close chat" : "Close session";
-    const body = isBind
-      ? `${esc(c.fromBranch || target)} is in use by <strong>${esc(c.byTitle || "another session")}</strong>. Continue on ${esc(c.branch)}?`
-      : isMerge
-        ? `Merge ${esc(c.branch)} into ${esc(target)}. The session stays open and continues on ${esc(target)}.`
-        : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
-    const warn = !isBind && !isMerge && c.branch && c.branch !== target
-      ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
-    const cta = isBind ? "Continue" : isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
+    const active = (c.sessions || []).filter(session => session.streaming || store.transcript(session.id).streaming);
+    const title = isMerge ? "Merge workspace" : c.kind === "chat" ? "Close chat" : "Close session";
+    const body = isMerge
+      ? `Merge ${esc(c.branch)} into ${esc(target)}. All sessions using this workspace will move to ${esc(target)}.`
+        + (active.length ? `<div class="confirm-sessions"><strong>Active sessions will be interrupted:</strong>${active.map(session => `<button data-act="navigate-session" data-id="${esc(session.id)}">${esc(session.title)}</button>`).join("")}</div>` : "")
+      : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
+    const warn = isMerge
+      ? `The worktree and branch will be removed. Any uncommitted worktree changes will be lost.`
+      : !isMerge && c.branch && c.branch !== target
+        ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
+    const cta = isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
     this.innerHTML = `<div class="confirm-scrim">
       <div class="confirm-modal">
         <div class="confirm-title">${title}</div>
@@ -940,7 +934,7 @@ class PiConfirm extends HTMLElement {
         ${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}
         <div class="confirm-actions">
           <button class="confirm-back" data-act="cancel">Go back</button>
-          <button class="confirm-cta ${isMerge || isBind ? "accent" : "danger"}" data-act="go">${cta}</button>
+          <button class="confirm-cta ${isMerge ? "accent" : "danger"}" data-act="go">${cta}</button>
         </div>
       </div>
     </div>`;

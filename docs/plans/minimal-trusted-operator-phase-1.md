@@ -21,7 +21,6 @@ Configuration supports deployment-wide defaults and per-project overrides:
       "id": "p_pi_ez_web",
       "name": "pi-ez-web",
       "repoPath": "/data/pi-ez-workspaces/pi-ez-web",
-      "mode": "auto",
       "hooks": {
         "setup": "mise trust --yes && mise install && mise run bootstrap"
       }
@@ -47,8 +46,8 @@ App repository changes:
    - session forks.
 5. Add `POST /api/sessions/:id/hooks/:name` for manual execution in that session's workspace.
 6. Expose effective hook names, but not command strings, in project state.
-7. Add a small current-project **Hooks** menu. Show exit status and output; automatic setup failures open the same result view.
-8. Add the `project-hooks` API capability and document configuration.
+7. Add a **Workspace settings** modal with Git actions and a Workspace setup section. Show exit status and output; automatic setup failures open the same result view.
+8. Add the `project-hooks` and `workspace-actions` API capabilities and document configuration.
 
 Hook output is returned only to the requesting browser, is not persisted or written to server logs, and passes through the existing credential redaction rules before crossing HTTP.
 
@@ -91,7 +90,7 @@ No SSH private key is mounted permanently. Existing fnox-backed tasks obtain key
 ## Changeset 4 — onboard and prove dogfooding
 
 1. Deploy from the laptop and verify the commit-derived health build ID.
-2. Configure `pi-ez-web` and `infra` as `auto` projects with their hook commands.
+2. Configure `pi-ez-web` and `infra` with their hook commands.
 3. Connect private `infra`, then run setup in both checkout and worktree sessions.
 4. Run each project's configured check hook.
 5. Verify Git fetch, branch commit, and push for both repositories.

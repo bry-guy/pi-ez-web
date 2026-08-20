@@ -24,6 +24,43 @@ export function isDirty(dir) {
   try { return git(dir, "status", "--porcelain").trim().length > 0; } catch { return false; }
 }
 
+export function workspaceStatus({ repoPath, branch, workspacePath }) {
+  let upstream = null;
+  let ahead = 0;
+  let behind = 0;
+  try {
+    upstream = git(workspacePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").trim() || null;
+    if (upstream) {
+      const counts = git(workspacePath, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").trim().split(/\s+/).map(Number);
+      behind = Number.isFinite(counts[0]) ? counts[0] : 0;
+      ahead = Number.isFinite(counts[1]) ? counts[1] : 0;
+    }
+  } catch { /* a branch without an upstream has no ahead/behind counts */ }
+  return {
+    branch,
+    path: workspacePath,
+    kind: path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree",
+    dirty: isDirty(workspacePath),
+    upstream,
+    ahead,
+    behind,
+  };
+}
+
+export function pullWorkspace(workspacePath) {
+  try {
+    return {
+      stdout: execFileSync("git", ["pull", "--ff-only"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+      stderr: "",
+    };
+  } catch (error) {
+    throw Object.assign(new Error("git_pull_failed"), {
+      code: "git_pull_failed",
+      detail: String(error.stderr || error.stdout || error.message || "git pull failed").trim().slice(0, 1000),
+    });
+  }
+}
+
 export function listBranches(repoPath) {
   try {
     return git(repoPath, "branch", "--format=%(refname:short)").split("\n").map(s => s.trim()).filter(Boolean);
@@ -135,10 +172,12 @@ export function removeWorkspace({ repoPath, workspacePath, force = false }) {
 // Fork: new branch + worktree from the parent workspace's HEAD. Dirty state
 // may be transferred from an app-owned worktree, but the user's checkout is
 // sacred and is rejected before any stash mutation.
-export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase }) {
+export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch }) {
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
-  let n = 1, branch;
-  if (forkBranchBase) {
+  let n = 1, branch = String(requestedBranch || "").trim();
+  if (branch) {
+    if (existingBranches.includes(branch)) throw Object.assign(new Error("branch_exists"), { code: "branch_exists" });
+  } else if (forkBranchBase) {
     do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));
   } else {
     do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));

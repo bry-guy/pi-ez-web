@@ -48,7 +48,7 @@ after(() => {
 });
 
 test("close a worktree session: destructive — worktree AND branch removed, transcript kept", async () => {
-  await post(`/api/sessions/${mainSessionId}/branch`, { branch: "feat/throwaway", create: true });
+  await post(`/api/sessions/${mainSessionId}/worktree`, { branch: "feat/throwaway" });
   const p1 = await proj();
   const wt = p1.worktrees["feat/throwaway"];
   fs.writeFileSync(path.join(wt, "junk.txt"), "uncommitted junk\n"); // dirty: still closes, no handshake
@@ -88,7 +88,7 @@ test("close a checkout session: archival only — nothing in git is touched", as
 
 test("merge: lands work into the checkout, cleans up, session continues on the default branch", async () => {
   const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/ship", create: true });
+  await post(`/api/sessions/${id}/worktree`, { branch: "feat/ship" });
   const wt = (await proj()).worktrees["feat/ship"];
   fs.writeFileSync(path.join(wt, "feature.txt"), "shipped\n");
   git(wt, "add", "-A"); git(wt, "commit", "-m", "feature");
@@ -106,7 +106,7 @@ test("merge: lands work into the checkout, cleans up, session continues on the d
   const p = await proj();
   assert.equal(fs.existsSync(wt), false);
   assert.equal(p.branches.includes("feat/ship"), false);
-  // session still open, now on main (occupied-exemption: co-homed on checkout)
+  // session still open, now on main alongside any other checkout sessions
   assert.ok(JSON.stringify(p.sessions).includes(id));
   const node = p.sessions.find(n => n.id === id) || p.sessions.flatMap(n => n.children).find(n => n?.id === id);
   assert.equal(node.branch, "main");
@@ -115,21 +115,20 @@ test("merge: lands work into the checkout, cleans up, session continues on the d
   await post(`/api/sessions/${id}/stop`);
 });
 
-test("merge preflight: dirty worktree is refused (merge stays safe)", async () => {
+test("merge force-cleans uncommitted worktree changes after explicit confirmation", async () => {
   const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/dirty-merge", create: true });
+  await post(`/api/sessions/${id}/worktree`, { branch: "feat/dirty-merge" });
   const wt = (await proj()).worktrees["feat/dirty-merge"];
   fs.writeFileSync(path.join(wt, "wip.txt"), "uncommitted\n");
   const r = await post(`/api/sessions/${id}/merge`);
-  assert.equal(r.status, 409);
-  assert.equal((await r.json()).error, "workspace_dirty");
-  assert.ok(fs.existsSync(wt)); // untouched
-  await post(`/api/sessions/${id}/close`); // cleanup (destructive close)
+  assert.equal(r.status, 200);
+  assert.equal(fs.existsSync(wt), false);
+  assert.equal(fs.existsSync(path.join(repo, "wip.txt")), false);
 });
 
 test("merge preflight: dirty checkout is refused", async () => {
   const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/co-dirty", create: true });
+  await post(`/api/sessions/${id}/worktree`, { branch: "feat/co-dirty" });
   const wt = (await proj()).worktrees["feat/co-dirty"];
   fs.writeFileSync(path.join(wt, "ok.txt"), "ok\n");
   git(wt, "add", "-A"); git(wt, "commit", "-m", "ok");
@@ -143,7 +142,7 @@ test("merge preflight: dirty checkout is refused", async () => {
 
 test("merge conflict: aborted cleanly — checkout restored, branch and worktree untouched", async () => {
   const id = await checkoutSession();
-  await post(`/api/sessions/${id}/branch`, { branch: "feat/conflict", create: true });
+  await post(`/api/sessions/${id}/worktree`, { branch: "feat/conflict" });
   const wt = (await proj()).worktrees["feat/conflict"];
   // both sides edit the same line of README.md
   fs.writeFileSync(path.join(wt, "README.md"), "branch version\n");
@@ -174,7 +173,10 @@ test("merge from a checkout session is nothing_to_merge", async () => {
 
 test("closing a parent re-attaches its child at the visible tree position", async () => {
   const parent = await checkoutSession();
-  const fork = await (await post(`/api/sessions/${parent}/fork`, {})).json();
+  await post(`/api/sessions/${parent}/message`, { text: "parent transcript" });
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await post(`/api/sessions/${parent}/stop`);
+  const fork = await (await post(`/api/sessions/${parent}/worktree`, { fork: true, branch: "branch/parent-child" })).json();
   await post(`/api/sessions/${parent}/close`);
   const p = await proj();
   assert.ok(p.sessions.some(node => node.id === fork.id), JSON.stringify(p.sessions));

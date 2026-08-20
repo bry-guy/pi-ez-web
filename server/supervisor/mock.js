@@ -147,7 +147,6 @@ export class MockSupervisor {
     if (parsed.name === "hotkeys") return { action: "notice", title: "Web shortcuts", message: "Enter send · Shift+Enter newline · Alt+Enter follow-up · !command shell · /command Pi command." };
     if (["tree", "resume"].includes(parsed.name)) return { action: "sidebar" };
     if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Mock sessions use the configured web trust policy." };
-    if (parsed.name === "fork" || parsed.name === "clone") return { action: parsed.name };
     if (parsed.name === "new") return { action: "new" };
     if (parsed.name === "compact") return { action: "refresh", message: "Session context compacted.", notice: false };
     if (parsed.name === "reload") return { action: "refresh", message: "Pi resources reloaded." };
@@ -176,15 +175,6 @@ export class MockSupervisor {
   }
   isStreaming(id) { return !!this.live.get(id)?.streaming; }
   isCompacting(id) { return !!this.live.get(id)?.compacting; }
-  activeInCwd(cwd, exceptId) {
-    for (const [id, st] of this.live) {
-      if (id === exceptId || !st.streaming) continue;
-      const s = this._load(id);
-      if (s && s.cwd === cwd) return id;
-    }
-    return null;
-  }
-
   async rehome(id, newCwd) {
     const s = this._load(id);
     if (!s) throw new Error("no such session");
@@ -241,8 +231,8 @@ export class MockSupervisor {
   // Fork transcript at (before) a user message; new session in newCwd.
   async fork(parentId, atRecordId, { cwd, name }) {
     const p = this._load(parentId);
-    const idx = p.records.findIndex(r => r.id === atRecordId);
-    const kept = idx > 0 ? p.records.slice(0, idx) : [];
+    const idx = atRecordId ? p.records.findIndex(r => r.id === atRecordId) : -1;
+    const kept = atRecordId ? (idx > 0 ? p.records.slice(0, idx) : []) : [...p.records];
     const s = {
       id: newId("s"), cwd, name: name || null, model: p.model, thinkingLevel: p.thinkingLevel || "medium",
       parentSessionId: parentId, created: new Date().toISOString(),

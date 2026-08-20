@@ -5,9 +5,9 @@ import { marked } from "marked";
 import createDOMPurify from "dompurify";
 
 const state = {
-  apiContractVersion: 2,
+  apiContractVersion: 3,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity", "file-explorer"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "file-explorer"],
   mode: "mock",
   defaultModel: "mock/fast",
   defaultThinkingLevel: "xhigh",
@@ -17,7 +17,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, occupied: {}, hooks: { check: true }, updated: "now",
+    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [] } }, hooks: { check: true }, updated: "now",
     sessions: [
       { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
       { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
@@ -135,21 +135,24 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.transcripts.sibling = { records: [], streaming: true, seq: -1 };
   store.notify("transcript");
   const send = root.querySelector(".send-btn");
-  assert.equal(send.disabled, true);
-  assert.match(root.querySelector(".composer textarea").placeholder, /steering message/);
+  assert.equal(send.disabled, false);
+  assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /Another session/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
-  store.set({ branchMenuOpen: true });          // user had the menu open
+  store.set({ workspaceSettingsOpen: true });
+  assert.ok(root.querySelector(".workspace-modal"));
   store.state.transcripts.sibling.streaming = true;
   store.notify("transcript");
-  assert.equal(store.state.branchMenuOpen, false);
-  assert.equal(root.querySelector(".branch-pop"), null);
+  assert.equal(store.state.workspaceSettingsOpen, true);
+  assert.match(root.querySelector(".workspace-modal")?.textContent || "", /Sessions using this workspace/);
+  store.set({ workspaceSettingsOpen: false });
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
-  assert.equal(root.querySelector(".branch-pop"), null); // does not reappear
 
-  store.set({ branchMenuOpen: true });
-  assert.match(root.querySelector(".branch-pop")?.textContent || "", /origin\/feature\/remote-ui/);
-  store.set({ branchMenuOpen: false });
+  store.set({ workspaceSettingsOpen: true });
+  root.querySelector("[data-act='open-worktree']").click();
+  assert.ok(root.querySelector(".worktree-form"));
+  assert.ok(root.querySelector("[data-worktree-fork]"));
+  store.set({ workspaceSettingsOpen: false, worktreeFormOpen: false });
 
   store.state.openTree.p1 = false;
   store.notify("state");
@@ -165,7 +168,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.transcripts.s1.streaming = true;
   store.notify("transcript");
   applyEvent({ v: 1, seq: 99, sessionId: "s1", type: "queue_update", followUp: 1 });
-  assert.match(root.querySelector(".composer textarea").placeholder, /steering message/);
+  assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /steering message/);
   applyEvent({ v: 1, seq: 100, sessionId: "s1", type: "turn_end", reason: "done" });
   assert.equal(store.state.queued.s1, undefined);
   assert.equal(send.disabled, false);
@@ -482,8 +485,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   thread.querySelector("[data-load-earlier]").click();
   assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
 
-  assert.equal(root.querySelector(".merge-btn")?.textContent.trim(), "Merge");
-  assert.match(root.querySelector(".merge-btn")?.getAttribute("title") || "", /feat\/ship.*main/);
+  store.set({ workspaceSettingsOpen: true });
+  assert.equal(root.querySelector(".workspace-modal [data-act='merge']")?.textContent.trim(), "Merge");
+  assert.match(root.querySelector(".workspace-modal")?.textContent || "", /feat\/ship/);
+  assert.equal(root.querySelector(".fork-btn"), null);
 
   dom.window.close();
 });

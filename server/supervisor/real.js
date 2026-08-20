@@ -538,8 +538,6 @@ export class RealSupervisor {
     }
     if (parsed.name === "changelog") return { action: "notice", title: "Changelog", message: "See the Pi release notes in the configured Pi installation." };
     if (parsed.name === "hotkeys") return { action: "notice", title: "Web shortcuts", message: "Enter send · Shift+Enter newline · Alt+Enter follow-up · !command shell · /command Pi command." };
-    if (parsed.name === "fork") return { action: "fork" };
-    if (parsed.name === "clone") return { action: "clone" };
     if (parsed.name === "tree" || parsed.name === "resume") return { action: "sidebar" };
     if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Web sessions run with the server's configured headless trust policy." };
     if (parsed.name === "new") return { action: "new" };
@@ -658,13 +656,6 @@ export class RealSupervisor {
 
   isStreaming(id) { return !!this.live.get(id)?.session?.isStreaming; }
   isCompacting(id) { return !!this.live.get(id)?.session?.isCompacting; }
-  activeInCwd(cwd, exceptId) {
-    for (const [id, st] of this.live) {
-      if (id !== exceptId && st.cwd === cwd && st.session.isStreaming) return id;
-    }
-    return null;
-  }
-
   async transcript(id) {
     const st = this.live.get(id);
     if (st) return snapshotRecords(st);
@@ -704,7 +695,7 @@ export class RealSupervisor {
   async rehome(id, newCwd) {
     const st = this.live.get(id);
     if (st) {
-      if (st.session.isStreaming) throw Object.assign(new Error("busy"), { code: "workspace_busy" });
+      if (st.session.isStreaming) throw Object.assign(new Error("session_streaming"), { code: "session_streaming" });
       await this._disposeLiveState(st, "reload");
       this.live.delete(id);
     }

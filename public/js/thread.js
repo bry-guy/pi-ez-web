@@ -1,7 +1,7 @@
-import { api, openTranscript, refreshState } from "./api.js";
+import { api, openTranscript } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
-import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
+import { esc, newChat, newProjectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -29,8 +29,6 @@ class PiThread extends HTMLElement {
   disconnectedCallback() { this.unsub?.(); }
 
   async onClick(e) {
-    const fork = e.target.closest("[data-fork]");
-    if (fork) return this.fork(fork.dataset.fork);
     const loadEarlier = e.target.closest("[data-load-earlier]");
     if (loadEarlier) {
       this.loadEarlier();
@@ -49,23 +47,6 @@ class PiThread extends HTMLElement {
       const id = tog.dataset.toggle;
       store.state.openTools[id] = !this.isOpen(id);
       this.render();
-    }
-  }
-
-  async fork(recordId) {
-    const id = store.state.sessionId;
-    if (!id) return;
-    const rec = store.transcript().records.find(r => r.id === recordId);
-    try {
-      const result = await api.fork(id, recordId);
-      const childId = result.id;
-      await refreshState();
-      store.state.openTree[id] = true;
-      selectSession(store.state.projectId, childId);
-      store.setDraft(rec?.text || "");
-      store.set({ hookResult: result.setup || null });
-    } catch (err) {
-      store.setError(`Fork failed: ${err.error || err.message || err}`);
     }
   }
 
@@ -137,7 +118,6 @@ class PiThread extends HTMLElement {
       this.scrollOnNextRender = true;
     }
     if (!activeKey) { this.innerHTML = ""; return; }
-    const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
     const visibleRecords = t.records.filter(record => record.role !== "activity"
       || record.key === "compaction"
@@ -155,7 +135,7 @@ class PiThread extends HTMLElement {
       this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    const records = history.records.map(m => this.renderRecordCached(m, noFork)).join("");
+    const records = history.records.map(m => this.renderRecordCached(m)).join("");
     const earlier = history.hasEarlier
       ? `<div class="history-loader"><button type="button" data-load-earlier>Load earlier messages</button></div>`
       : "";
@@ -215,20 +195,20 @@ class PiThread extends HTMLElement {
     return `<section class="command-notice" role="status"><strong>${esc(notice.title || "Pi")}</strong><span>${esc(message)}</span></section>`;
   }
 
-  renderRecordCached(m, noFork) {
+  renderRecordCached(m) {
     const open = m.role === "tool" || m.role === "diff"
       ? this.isOpen(m.id)
       : m.role === "activity" ? (store.state.openActivity[m.key] ?? false) : false;
     const cached = this.renderCache.get(m);
     const signature = [m.role, m.id, m.key, m.status, m.title, m.summary, m.text, m.streaming, m.pending, m.deliveryError, m.meta, m.file, m.add, m.del, m.cmd, open, open ? m.out : null];
-    if (cached?.noFork === noFork && cached.signature.length === signature.length
+    if (cached?.signature.length === signature.length
       && cached.signature.every((value, index) => value === signature[index])) return cached.html;
-    const html = this.renderRecord(m, noFork);
-    this.renderCache.set(m, { noFork, signature, html });
+    const html = this.renderRecord(m);
+    this.renderCache.set(m, { signature, html });
     return html;
   }
 
-  renderRecord(m, noFork) {
+  renderRecord(m) {
     if (m.role === "activity" && m.key === "compaction") {
       const status = m.status || "completed";
       return `<div class="msg activity-inline"><div class="activity-status ${esc(status)}" role="status" aria-live="polite">
@@ -247,9 +227,8 @@ class PiThread extends HTMLElement {
     }
     if (m.role === "user") {
       const delivery = m.deliveryError ? "ERROR: Unable to send." : "";
-      return `<div class="msg ${noFork ? "no-fork" : ""} ${m.deliveryError ? "delivery-failed" : ""}">
+      return `<div class="msg ${m.deliveryError ? "delivery-failed" : ""}">
         <div class="msg-user-row">
-          ${m.pending || m.deliveryError ? "" : `<button class="fork-btn" data-fork="${esc(m.id)}" title="Fork"><span class="sigil">⑂</span><span class="word">fork</span></button>`}
           <div class="user-message-content"><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
         </div></div>`;
     }
@@ -836,18 +815,7 @@ class PiComposer extends HTMLElement {
       return;
     }
     if (action === "clone" || action === "fork") {
-      const projectId = store.state.projectId;
-      if (!projectId) { store.setError("Forking is available for project sessions."); return; }
-      const user = [...store.transcript(id).records].reverse().find(record => record.role === "user");
-      if (action === "fork" && !user) { store.setError("There is no user message to fork yet."); return; }
-      const forked = await api.fork(id, action === "fork" ? user.id : undefined);
-      await refreshState();
-      store.state.openTree[id] = true;
-      selectSession(projectId, forked.id);
-      if (action === "fork") {
-        store.setDraft(user.text || "");
-        store.notify("state");
-      }
+      store.setError("Open Workspace settings and choose Worktree → Open as fork.");
       return;
     }
     if (action === "quit") {
@@ -877,7 +845,7 @@ class PiComposer extends HTMLElement {
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || (!text && !this.attachments.length) || store.workspaceBusy(id) || store.transcript(id).compacting) return;
+    if (!id || (!text && !this.attachments.length) || store.transcript(id).compacting) return;
     const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
     const pendingId = !text.startsWith("/") && !text.startsWith("!")
       ? this.addPendingMessage(id, text, images)
@@ -907,21 +875,9 @@ class PiComposer extends HTMLElement {
     } catch (err) {
       const message = err.error === "model_required"
         ? "No model is available."
-        : err.error === "workspace_busy"
-          ? "Workspace is busy."
-          : err.error === "checkout_occupied"
-            ? "Not sent: another session is using this workspace."
-            : err.message || err.error || String(err);
+        : err.message || err.error || String(err);
       this.markPendingMessage(id, pendingId, message);
-      if (err.error === "workspace_busy") {
-        await refreshState().catch(refreshErr => store.setError(`Could not refresh state: ${refreshErr.message || refreshErr}`));
-      } else if (err.error === "checkout_occupied") {
-        store.setDraft(text);
-        store.set({ confirm: {
-          type: "bind", id, text, mode, branch: err.suggestedBranch,
-          fromBranch: store.project()?.branch || "main", byTitle: err.byTitle || "another session",
-        } });
-      } else if (err.error === "model_required") {
+      if (err.error === "model_required") {
         store.setDraft(text);
         this.ta.value = text;
         this.attachments = images;
@@ -941,7 +897,6 @@ class PiComposer extends HTMLElement {
     const id = store.activeKey();
     const t = store.transcript();
     const p = store.project();
-    const lock = store.workspaceBusy(id);
     const compacting = !!t.compacting;
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     const activeId = store.activeKey();
@@ -958,16 +913,15 @@ class PiComposer extends HTMLElement {
     else this.renderCommands();
     const error = store.state.error;
     const nQueued = store.state.queued[id] || 0;
-    this.ta.classList.toggle("busy", t.streaming || compacting || !!lock);
+    this.ta.classList.toggle("busy", t.streaming || compacting);
     this.ta.classList.toggle("error", !!error);
     this.ta.placeholder = error || (compacting
       ? "Compacting context…"
       : t.streaming ? "Enter a steering message, alt+enter a follow-up…"
-        : lock ? "Another session is streaming — open it to send a steering message…"
-          : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
+        : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     // Keep Send available during a turn so it can steer or queue a follow-up.
-    this.sendBtn.disabled = compacting || !!lock;
+    this.sendBtn.disabled = compacting;
   }
 }
 
