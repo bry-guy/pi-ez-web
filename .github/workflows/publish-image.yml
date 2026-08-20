@@ -1,10 +1,18 @@
 name: Publish pi-ez-web image
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
 
 permissions:
   contents: write
   packages: write
+
+concurrency:
+  group: pi-ez-web-${{ startsWith(github.ref_name, 'feature/') && 'preview' || github.ref_name }}
+  cancel-in-progress: ${{ startsWith(github.ref_name, 'feature/') }}
 
 jobs:
   publish:
@@ -98,3 +106,18 @@ jobs:
           git add "$target"
           git commit -m "chore(deploy): update ${GITHUB_REF_NAME} image digest [skip ci]"
           git push
+
+      - name: Advance preview pointer
+        if: startsWith(github.ref_name, 'feature/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Do not let an older build win if the feature branch moved while
+          # this image was building. The newest workflow run will advance it.
+          branch_sha="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
+          if [[ "$branch_sha" != "$(git rev-parse HEAD)" ]]; then
+            echo "${GITHUB_REF_NAME} advanced during the build; leaving preview/pi unchanged"
+            exit 0
+          fi
+          git push --force origin HEAD:refs/heads/preview/pi
+          echo "Advanced preview/pi to ${GITHUB_SHA}"
