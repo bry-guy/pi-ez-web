@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
-import { chatsState, projectState, reconcileBindings, sessionWorkspace } from "./domain.js";
+import { chatsState, projectState, reconcileBindings, sessionWorkspace, sessionsUsingWorkspace } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
@@ -578,6 +578,41 @@ export function buildApi(sup) {
     const setup = !existingTarget && projectHooks(cfg, project).setup;
     const setupResult = setup ? hookResult(await runHook(setup, { cwd: target }), "setup") : null;
     return c.json({ ok: true, branch, workspacePath: target, setup: setupResult });
+  });
+
+  api.post("/sessions/:id/switch", async c => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const cwd = await sessionWorkspace(id, sup);
+    const found = cwd && findProjectByWorkspace(cwd);
+    if (!found) return err(c, 404, "no_project_for_session");
+    const { project } = found;
+    const branch = slug(body.branch || "");
+    const remoteSource = typeof body.fromRef === "string" && body.fromRef.trim() ? body.fromRef.trim() : null;
+    const localBranches = ws.listBranches(project.repoPath);
+    const remoteBranches = ws.listRemoteBranches(project.repoPath);
+    if (!branch) return err(c, 400, "bad_branch");
+    if (remoteSource && !remoteBranches.includes(remoteSource)) return err(c, 400, "invalid_remote_branch");
+    if (remoteSource && localBranches.includes(branch)) return err(c, 409, "branch_exists");
+    if (!remoteSource && !localBranches.includes(branch)) return err(c, 404, "no_such_branch");
+    const current = ws.currentBranch(cwd);
+    if (current === branch) return c.json({ ok: true, branch, workspacePath: cwd, switched: false });
+    const worktrees = ws.listWorktrees(project.repoPath);
+    const target = worktrees[branch];
+    if (target && path.resolve(target) !== path.resolve(cwd)) return err(c, 409, "branch_in_use", { workspacePath: target });
+    const sessions = await sessionsUsingWorkspace(project, cwd, sup);
+    if (sessions.some(session => session.streaming)) return err(c, 409, "sessions_active");
+    if (ws.isDirty(cwd)) return err(c, 409, "workspace_dirty");
+    try { ws.switchWorkspace({ workspacePath: cwd, branch, fromRef: remoteSource }); }
+    catch (e) { if (e.code === "git_switch_failed") return err(c, 409, e.code, { detail: e.detail }); throw e; }
+    const bindings = loadBindings();
+    for (const session of sessions) bindings[session.id] = { branch, workspacePath: cwd };
+    saveBindings(bindings);
+    for (const session of sessions) {
+      hub.emit(session.id, "session_meta", { branch });
+      hub.emit(session.id, "workspace_switched", { branch, workspacePath: cwd });
+    }
+    return c.json({ ok: true, branch, workspacePath: cwd, switched: true });
   });
 
   api.post("/sessions/:id/pull", async c => {

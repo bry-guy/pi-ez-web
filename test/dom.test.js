@@ -17,7 +17,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [] } }, hooks: { check: true }, updated: "now",
+    branches: ["main", "develop"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [] } }, hooks: { check: true }, updated: "now",
     sessions: [
       { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
       { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
@@ -154,6 +154,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
 
   store.set({ workspaceSettingsOpen: true });
+  root.querySelector("[data-act='open-branch-switch']").click();
+  assert.ok(root.querySelector(".branch-switch-form"));
+  assert.ok(root.querySelector("[data-act='select-branch-switch'][data-branch='develop']"));
+  root.querySelector("[data-act='cancel-branch-switch']").click();
   root.querySelector("[data-act='open-worktree']").click();
   assert.ok(root.querySelector(".worktree-form"));
   assert.ok(root.querySelector("[data-worktree-fork]"));

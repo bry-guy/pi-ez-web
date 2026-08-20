@@ -87,8 +87,9 @@ restart prompt.
 - A project is a configured repository; a workspace is its checkout or a
   worktree; a session is a Pi conversation with a workspace cwd. Git enforces
   one worktree per branch, but multiple sessions may share that worktree.
-- The app never changes the user's checkout branch implicitly. Worktree,
-  Pull, and Merge are explicit Workspace settings actions. The title bar shows
+- The app never changes the user's checkout branch implicitly. Switch branch,
+  Worktree, Pull, and Merge are explicit Workspace settings actions; Switch
+  branch changes the current workspace without creating a worktree. The title bar shows
   branch, checkout/worktree type, dirty state, and ahead/behind counts.
 - Worktree → Open as fork creates a child conversation and worktree. Tracked
   and untracked dirty state transfers to the fork and is restored in the

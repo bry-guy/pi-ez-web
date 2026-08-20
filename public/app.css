@@ -747,8 +747,11 @@ aside.files.file-viewer {
 .worktree-form .new-branch-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .workspace-branch-options { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
 .workspace-branch-options > span { flex: 1 1 100%; color: var(--faint); font: 10px var(--mono); text-transform: uppercase; }
-.workspace-branch-option { padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--muted); font: 10.5px var(--mono); cursor: pointer; }
+.workspace-branch-option { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--muted); font: 10.5px var(--mono); cursor: pointer; }
 .workspace-branch-option:hover, .workspace-branch-option:focus-visible { border-color: var(--accent); color: var(--accent); outline: 0; }
+.workspace-branch-option:disabled { cursor: default; opacity: .55; }
+.workspace-branch-option.current { border-color: var(--accent); color: var(--text); }
+.workspace-branch-option small { color: var(--faint); font-size: 9px; }
 .workspace-branch-option.remote { color: var(--accent); }
 .workspace-check { display: grid; grid-template-columns: auto 1fr; column-gap: 7px; align-items: center; margin-top: 12px; color: var(--text); font-size: 12px; }
 .workspace-check input { accent-color: var(--accent); }

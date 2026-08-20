@@ -87,6 +87,9 @@ export const api = {
   worktree: (id, { branch = "", fromRef = undefined, fork = false, atRecordId = undefined } = {}) => fetch(`/api/sessions/${id}/worktree`, {
     method: "POST", headers: JH, body: JSON.stringify({ branch, fork, ...(fromRef ? { fromRef } : {}), ...(atRecordId ? { atRecordId } : {}) }),
   }).then(j),
+  switchBranch: (id, branch, fromRef = undefined) => fetch(`/api/sessions/${id}/switch`, {
+    method: "POST", headers: JH, body: JSON.stringify({ branch, ...(fromRef ? { fromRef } : {}) }),
+  }).then(j),
   pull: id => fetch(`/api/sessions/${id}/pull`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
   context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),

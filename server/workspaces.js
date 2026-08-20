@@ -1,7 +1,7 @@
 // Git workspace operations. Invariants:
 // - Workspace = worktree, one per branch (git enforces one checkout per branch).
-// - The app NEVER mutates the user's checkout (no `git switch` there); it only
-//   adds worktrees under worktreeRoot.
+// - Git mutations are explicit: Switch changes the current workspace branch;
+//   Worktree and Fork add worktrees under worktreeRoot.
 // - Fork carries dirty state via stash transfer (stashes share the object store).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -57,6 +57,23 @@ export function pullWorkspace(workspacePath) {
     throw Object.assign(new Error("git_pull_failed"), {
       code: "git_pull_failed",
       detail: String(error.stderr || error.stdout || error.message || "git pull failed").trim().slice(0, 1000),
+    });
+  }
+}
+
+export function switchWorkspace({ workspacePath, branch, fromRef = null }) {
+  const args = ["switch"];
+  if (fromRef) args.push("-c", branch, fromRef);
+  else args.push(branch);
+  try {
+    return {
+      stdout: execFileSync("git", args, { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+      stderr: "",
+    };
+  } catch (error) {
+    throw Object.assign(new Error("git_switch_failed"), {
+      code: "git_switch_failed",
+      detail: String(error.stderr || error.stdout || error.message || "git switch failed").trim().slice(0, 1000),
     });
   }
 }

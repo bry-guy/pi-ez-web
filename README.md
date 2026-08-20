@@ -43,9 +43,10 @@ and skill commands. Pi's built-in slash commands are web-adapted too: model sele
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
 OpenAI API-key login, and the default-model selector. The file tree and
 Workspace settings appear only inside a **project** session — connect a repo first
-(the `+` next to PROJECTS). Workspace settings expose explicit Worktree, Pull,
-and Merge actions, show every session sharing the current workspace, and offer
-Worktree → Open as fork. Plain chats intentionally have none of those affordances.
+(the `+` next to PROJECTS). Workspace settings expose explicit Switch branch, Worktree, Pull, and Merge
+actions, show every session sharing the current workspace, and offer Worktree →
+Open as fork. Switch branch changes the current workspace without creating a
+worktree. Plain chats intentionally have none of those affordances.
 
 ## Install and configure
 

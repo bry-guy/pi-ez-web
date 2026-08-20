@@ -713,6 +713,29 @@ test("sessions stay on their current workspace unless Worktree is requested", as
   assert.equal(project.workspaceStatus.main.sessions.length, 2);
 });
 
+test("switch changes the session workspace branch without creating a worktree", async () => {
+  const switchRepo = makeRepo("switch-repo");
+  git(switchRepo, "branch", "feature/switch");
+  const created = await (await post("/api/projects", { repoPath: switchRepo })).json();
+  assert.deepEqual(ws.listWorktrees(switchRepo), { main: switchRepo });
+
+  const switched = await post(`/api/sessions/${created.sessionId}/switch`, { branch: "feature/switch" });
+  assert.equal(switched.status, 200, await switched.clone().text());
+  assert.equal((await switched.json()).workspacePath, switchRepo);
+  assert.equal(ws.currentBranch(switchRepo), "feature/switch");
+  assert.deepEqual(ws.listWorktrees(switchRepo), { "feature/switch": switchRepo });
+
+  let state = await (await get("/api/state")).json();
+  let project = state.projects.find(item => item.id === created.id);
+  const node = project.sessions.find(session => session.id === created.sessionId);
+  assert.equal(node.branch, "feature/switch");
+
+  const restored = await post(`/api/sessions/${created.sessionId}/switch`, { branch: "main" });
+  assert.equal(restored.status, 200);
+  assert.equal(ws.currentBranch(switchRepo), "main");
+  assert.deepEqual(ws.listWorktrees(switchRepo), { main: switchRepo });
+});
+
 test("blank Worktree names use the session slug and avoid collisions", async () => {
   const namedRepo = makeRepo("named-worktree-repo");
   const created = await (await post("/api/projects", { repoPath: namedRepo })).json();
