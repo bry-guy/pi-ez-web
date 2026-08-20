@@ -286,10 +286,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-files [data-act='close']").click();
 
   const sidebar = root.querySelector("pi-sidebar");
-  sidebar.querySelector("[data-act='collapse']").click();
+  root.querySelector("pi-header [data-act='sidebar-toggle']").click();
   assert.equal(store.state.railOpen, false);
   assert.equal(sidebar.dataset.layout, "mini");
-  sidebar.querySelector("[data-act='collapse']").click();
+  root.querySelector("pi-header [data-act='sidebar-toggle']").click();
   assert.equal(store.state.railOpen, true);
   assert.equal(sidebar.dataset.layout, "rail");
   assert.equal(sidebar.querySelector("[data-act='projects']"), null, "projects has no separate navigation entry");
