@@ -8,6 +8,7 @@ import { appHome, loadConfig, newId } from "../config.js";
 import { WEB_PI_COMMANDS, parseSlashCommand } from "../commands.js";
 import { PiConfiguration } from "../pi-configuration.js";
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MOCK_MODELS = [
   { id: "mock/fast", provider: "mock", label: "Mock Fast" },
   { id: "mock/smart", provider: "mock", label: "Mock Smart" },
@@ -217,12 +218,12 @@ export class MockSupervisor {
   async thinking(id) {
     const s = this._load(id);
     if (!s) throw new Error("no such session");
-    return { level: s.thinkingLevel || "medium", levels: ["off", "low", "medium", "high"], supported: true };
+    return { level: s.thinkingLevel || "medium", levels: THINKING_LEVELS, supported: true };
   }
 
   async setThinking(id, level) {
     const s = this._load(id);
-    const levels = ["off", "low", "medium", "high"];
+    const levels = THINKING_LEVELS;
     if (!s || !levels.includes(level)) throw Object.assign(new Error("invalid_thinking_level"), { code: "invalid_thinking_level" });
     s.thinkingLevel = level;
     this._save(s);

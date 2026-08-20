@@ -4,6 +4,7 @@ import { store } from "./store.js";
 import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["pending", "in_progress", "running", "queued"]);
 const liveAgent = record => record?.role === "activity"
   && record.kind === "agent" && LIVE_AGENT_STATUSES.has(record.status);
@@ -11,6 +12,7 @@ const liveAgent = record => record?.role === "activity"
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
   connectedCallback() {
+    this.renderCache = new WeakMap();
     this.unsub = store.subscribe(w => {
       if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
@@ -63,6 +65,19 @@ class PiThread extends HTMLElement {
   isOpen(id) { return store.state.openTools[id] ?? false; }
 
   applyDelta() {
+    if (this.deltaFrame !== undefined) return;
+    const now = globalThis.performance?.now?.() || Date.now();
+    const elapsed = now - (this.lastDeltaRender || 0);
+    if (elapsed < 32) {
+      const run = () => { this.deltaFrame = undefined; this.applyDeltaNow(); };
+      this.deltaFrame = globalThis.requestAnimationFrame ? requestAnimationFrame(run) : setTimeout(run, 32 - elapsed);
+      return;
+    }
+    this.applyDeltaNow();
+  }
+
+  applyDeltaNow() {
+    this.lastDeltaRender = globalThis.performance?.now?.() || Date.now();
     const holder = this.querySelector("[data-live-text]");
     const recs = store.transcript().records;
     const last = [...recs].reverse().find(r => r.role === "assistant" && r.streaming);
@@ -104,7 +119,7 @@ class PiThread extends HTMLElement {
       this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    const records = visibleRecords.map(m => this.renderRecord(m, noFork)).join("");
+    const records = visibleRecords.map(m => this.renderRecordCached(m, noFork)).join("");
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
@@ -159,6 +174,19 @@ class PiThread extends HTMLElement {
     return `<section class="command-notice" role="status"><strong>${esc(notice.title || "Pi")}</strong><span>${esc(message)}</span></section>`;
   }
 
+  renderRecordCached(m, noFork) {
+    const open = m.role === "tool" || m.role === "diff"
+      ? this.isOpen(m.id)
+      : m.role === "activity" ? (store.state.openActivity[m.key] ?? false) : false;
+    const cached = this.renderCache.get(m);
+    const signature = [m.role, m.id, m.key, m.status, m.title, m.summary, m.text, m.streaming, m.pending, m.deliveryError, m.meta, m.file, m.add, m.del, m.cmd, open, open ? m.out : null];
+    if (cached?.noFork === noFork && cached.signature.length === signature.length
+      && cached.signature.every((value, index) => value === signature[index])) return cached.html;
+    const html = this.renderRecord(m, noFork);
+    this.renderCache.set(m, { noFork, signature, html });
+    return html;
+  }
+
   renderRecord(m, noFork) {
     if (m.role === "activity" && m.key === "compaction") {
       const status = m.status || "completed";
@@ -184,6 +212,9 @@ class PiThread extends HTMLElement {
           <div class="user-message-content"><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
         </div></div>`;
     }
+    if (m.role === "error") {
+      return `<div class="msg"><div class="turn-error" role="alert">ERROR: ${esc(m.text || "Service unavailable.")}</div></div>`;
+    }
     if (m.role === "assistant") {
       const thinking = m.streaming && !m.text;
       const caret = m.streaming && m.text;
@@ -206,10 +237,10 @@ class PiThread extends HTMLElement {
     }
     if (m.role === "diff") {
       const open = this.isOpen(m.id);
-      const lines = (m.lines || []).map(l => {
+      const lines = open ? (m.lines || []).map(l => {
         const cls = l.sign === "+" ? "add" : l.sign === "-" ? "del" : l.sign === "" ? "hunk" : "";
         return `<div class="diff-line ${cls}"><span class="sign">${esc(l.sign)}</span>${esc(l.text)}</div>`;
-      }).join("");
+      }).join("") : "";
       return `<div class="msg"><div class="block">
         <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
           <span class="bh-caret">${open ? "▾" : "▸"}</span>
@@ -511,7 +542,7 @@ class PiThinkingPicker extends HTMLElement {
     this.open = false;
     // Keep the effort control present even when a provider does not advertise
     // reasoning metadata. Pi will clamp unsupported choices server-side.
-    this.info = { level: "medium", levels: ["off", "low", "medium", "high"], supported: true };
+    this.info = { level: "medium", levels: THINKING_LEVELS, supported: true };
     this.render();
     try {
       const info = await api.thinking(id);

@@ -184,6 +184,7 @@ export class RealSupervisor {
         settingsManager,
       });
       await resourceLoader.reload();
+      const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
       const result = await SDKModule.createAgentSession({
         cwd,
         sessionManager,
@@ -191,6 +192,7 @@ export class RealSupervisor {
         settingsManager,
         resourceLoader,
         ...(model ? { model } : {}),
+        ...(!hasThinkingLevel ? { thinkingLevel: loadConfig().defaultThinkingLevel } : {}),
       });
       // pi-ez-web is headless today. Binding still matters: it fires
       // session_start, enables resources_discover, and activates tools that
@@ -253,6 +255,17 @@ export class RealSupervisor {
     return st;
   }
 
+  _endTurnWithError(id, st, error) {
+    if (st.turnEnded) return;
+    st.turnEnded = true;
+    st.pendingMessages = [];
+    const message = turnErrorMessage(error);
+    const record = st.msgId && st.liveRecords?.get(st.msgId);
+    if (record) delete record.streaming;
+    if (st.msgId) this.hub.emit(id, "message_end", { messageId: st.msgId });
+    this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "errored", error: message });
+  }
+
   // ---- pi AgentEvent -> wire contract ----
   _onEvent(id, st, evt) {
     const hub = this.hub;
@@ -313,11 +326,20 @@ export class RealSupervisor {
         break;
       case "message_update": {
         const e = evt.assistantMessageEvent;
+        if (e?.type === "error") {
+          this._endTurnWithError(id, st, e.error);
+          break;
+        }
         if (e?.type === "text_delta" && e.delta && st.msgId) {
           const record = st.liveRecords.get(st.msgId);
           if (record) record.text += e.delta;
           hub.emit(id, "text_delta", { messageId: st.msgId, delta: e.delta });
         }
+        break;
+      }
+      case "turn_end": {
+        const error = st.aborted ? "" : assistantErrorMessage(evt.message);
+        if (error) this._endTurnWithError(id, st, error);
         break;
       }
       case "message_end":
@@ -367,6 +389,11 @@ export class RealSupervisor {
         break;
       }
       case "agent_end": {
+        const error = st.aborted ? "" : [...(evt.messages || [])].reverse().map(assistantErrorMessage).find(Boolean);
+        if (error) {
+          this._endTurnWithError(id, st, error);
+          break;
+        }
         if (st.turnEnded) break;
         const reason = st.aborted ? "stopped" : "done";
         st.aborted = false;
@@ -422,9 +449,7 @@ export class RealSupervisor {
     }
     st.session.prompt(text, { images }).catch(err => {
       if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
-      if (st.turnEnded) return;
-      st.turnEnded = true;
-      this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "errored", error: String(err?.message || err) });
+      this._endTurnWithError(id, st, err);
     });
   }
 
@@ -1070,6 +1095,19 @@ export function maybeDiff(toolName, args, result) {
   if (!hunks.length && lines.length) hunks.push({ header: "", lines });
   if (!hunks.length) return null;
   return { path: filePath, adds, dels, hunks };
+}
+
+function assistantErrorMessage(message) {
+  if (!message || message.role !== "assistant") return "";
+  if (message.stopReason !== "error" && message.stopReason !== "aborted" && !message.errorMessage) return "";
+  return message.errorMessage || contentText(message.content);
+}
+
+function turnErrorMessage(error) {
+  const raw = typeof error === "string"
+    ? error
+    : error?.errorMessage || error?.message || error?.code || contentText(error?.content);
+  return publicError(raw || "Service unavailable.");
 }
 
 function contentText(content) {

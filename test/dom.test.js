@@ -10,6 +10,7 @@ const state = {
   capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity"],
   mode: "mock",
   defaultModel: "mock/fast",
+  defaultThinkingLevel: "xhigh",
   models: [
     { id: "mock/fast", provider: "mock", label: "Mock Fast" },
     { id: "mock/smart", provider: "mock", label: "Mock Smart" },
@@ -33,7 +34,7 @@ const state = {
     config: { profile: "https://github.com/bry-guy/dotfiles", packages: ["npm:context-mode"], extensions: [] },
     profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
     warnings: [],
-    runtime: { extensions: [{ path: "context-mode" }], errors: [], skills: 0, prompts: 0 },
+    runtime: { extensions: [{ path: "context-mode" }], errors: [], skills: [{ name: "todo-discipline", path: "/tmp/todo/SKILL.md" }], prompts: 0 },
   },
 };
 const transcript = { sessionId: "s1", seq: 0, streaming: false, records: [] };
@@ -198,6 +199,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   store.set({ view: "settings" });
   assert.match(root.querySelector("pi-settings").textContent, /Default model/);
+  assert.match(root.querySelector("pi-settings").textContent, /Default thinking mode/);
+  assert.equal(root.querySelector("pi-settings [data-setting='defaultThinkingLevel']").value, "xhigh");
+  assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
@@ -357,6 +361,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.projects[0].sessions[0].branch = "feat/ship";
   store.state.transcripts.s1.compacting = false;
   store.notify("state");
+  applyEvent({ v: 1, seq: 109, sessionId: "s1", type: "turn_start", turnId: "t-error" });
+  applyEvent({ v: 1, seq: 110, sessionId: "s1", type: "message_start", messageId: "a-error", role: "assistant" });
+  applyEvent({ v: 1, seq: 111, sessionId: "s1", type: "turn_end", turnId: "t-error", reason: "errored", error: "Insufficient quota." });
+  assert.equal(store.transcript("s1").streaming, false);
+  assert.equal(root.querySelector(".turn-error")?.textContent, "ERROR: Insufficient quota.");
+  assert.equal(root.querySelector(".pi-think"), null);
   assert.equal(root.querySelector(".merge-btn")?.textContent.trim(), "Merge");
   assert.match(root.querySelector(".merge-btn")?.getAttribute("title") || "", /feat\/ship.*main/);
 

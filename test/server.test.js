@@ -645,6 +645,14 @@ test("model state distinguishes Automatic from an explicit default", async () =>
   assert.equal(body.effectiveDefaultModel, "mock/smart");
   assert.equal(body.defaultModelStatus, "available");
 
+  r = await post("/api/settings", { defaultThinkingLevel: "xhigh" });
+  assert.equal(r.status, 200);
+  body = await r.json();
+  assert.equal(body.defaultThinkingLevel, "xhigh");
+  r = await post("/api/settings", { defaultThinkingLevel: "bogus" });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_thinking_level");
+
   r = await post("/api/settings", { defaultModel: "not-a-model" });
   assert.equal(r.status, 400);
   assert.equal((await r.json()).error, "model_unavailable");

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, projectMode, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, titleOf } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
@@ -116,6 +116,7 @@ export function buildApi(sup) {
       capabilities: API_CAPABILITIES,
       mode: process.env.PI_WEB_MODE || "real",
       defaultModel: modelState.configuredDefault,
+      defaultThinkingLevel: cfg.defaultThinkingLevel,
       effectiveDefaultModel: modelState.effectiveDefault,
       defaultModelStatus: modelState.status,
       modelError: modelState.error || null,
@@ -693,6 +694,13 @@ export function buildApi(sup) {
       if (!models.some(model => model.id === body.defaultModel)) return err(c, 400, "model_unavailable");
       cfg.defaultModel = body.defaultModel;
     }
+    if (body.defaultThinkingLevel !== undefined) {
+      try { cfg.defaultThinkingLevel = normalizeThinkingLevel(body.defaultThinkingLevel, { strict: true }); }
+      catch (e) {
+        if (e.code === "invalid_thinking_level") return err(c, 400, e.code, { message: e.message });
+        throw e;
+      }
+    }
     if (body.reposRoot !== undefined) {
       if (process.env.PI_WEB_REPOS_ROOT) return err(c, 409, "setting_overridden", { field: "reposRoot", source: "PI_WEB_REPOS_ROOT" });
       const value = typeof body.reposRoot === "string" ? body.reposRoot.trim() : "";
@@ -727,6 +735,7 @@ export function buildApi(sup) {
       buildId: BUILD_ID,
       capabilities: API_CAPABILITIES,
       defaultModel: modelState.configuredDefault,
+      defaultThinkingLevel: cfg.defaultThinkingLevel,
       effectiveDefaultModel: modelState.effectiveDefault,
       defaultModelStatus: modelState.status,
       modelError: modelState.error || null,

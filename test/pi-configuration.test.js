@@ -160,6 +160,21 @@ test("GitHub profiles fetch dotfiles agent skills into local resources", async (
   assert.deepEqual(requests, [settingsUrl, treeUrl, skillUrl]);
 });
 
+test("runtime state enumerates loaded skills", () => {
+  const configuration = new PiConfiguration();
+  configuration.recordRuntime({
+    getSkills: () => ({ skills: [{ name: "todo-discipline", description: "Keep TODOs bounded.", filePath: "/tmp/SKILL.md", sourceInfo: { source: "profile" }, disableModelInvocation: false }] }),
+    getPrompts: () => ({ prompts: [] }),
+  }, { extensions: [], errors: [] });
+  assert.deepEqual(configuration.runtime.skills, [{
+    name: "todo-discipline",
+    description: "Keep TODOs bounded.",
+    path: "/tmp/SKILL.md",
+    source: "profile",
+    disableModelInvocation: false,
+  }]);
+});
+
 test("profile load errors remain visible while inline resources stay usable", async () => {
   const configuration = new PiConfiguration({ fetchImpl: async () => { throw new Error("network unavailable"); } });
   const resolved = await configuration.resolve({

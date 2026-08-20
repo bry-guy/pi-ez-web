@@ -501,6 +501,7 @@ export class PiConfiguration {
   }
 
   recordRuntime(resourceLoader, extensionsResult) {
+    const skills = resourceLoader.getSkills().skills || [];
     this.runtime = {
       loadedAt: new Date().toISOString(),
       extensions: (extensionsResult.extensions || []).map(extension => ({
@@ -508,13 +509,19 @@ export class PiConfiguration {
         source: extension.sourceInfo?.source || null,
       })),
       errors: (extensionsResult.errors || []).map(error => ({ path: error.path, error: publicError(error.error) })),
-      skills: resourceLoader.getSkills().skills.length,
+      skills: skills.map(skill => ({
+        name: skill.name,
+        description: skill.description,
+        path: skill.filePath,
+        source: skill.sourceInfo?.source || null,
+        disableModelInvocation: !!skill.disableModelInvocation,
+      })),
       prompts: resourceLoader.getPrompts().prompts.length,
     };
   }
 
   recordRuntimeError(error) {
-    this.runtime = { loadedAt: new Date().toISOString(), extensions: [], errors: [{ path: "<pi-configuration>", error: publicError(error) }], skills: 0, prompts: 0 };
+    this.runtime = { loadedAt: new Date().toISOString(), extensions: [], errors: [{ path: "<pi-configuration>", error: publicError(error) }], skills: [], prompts: 0 };
   }
 
   async state(options) {

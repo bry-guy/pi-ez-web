@@ -8,6 +8,9 @@ class PiSettings extends HTMLElement {
     this.feedback = null;
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("change", e => {
+      if (e.target.matches("[data-setting='defaultThinkingLevel']")) void this.saveDefaultThinking(e.target.value);
+    });
     this.addEventListener("keydown", e => {
       if (e.key === "Enter" && e.target.matches(".repos-root-input")) {
         e.preventDefault();
@@ -56,6 +59,17 @@ class PiSettings extends HTMLElement {
     } catch (err) {
       store.set({ reposRoot: previous });
       this.setFeedback(`Repository path failed: ${err.error || err.message || err}`, "error");
+    }
+  }
+  async saveDefaultThinking(level) {
+    const previous = store.state.defaultThinkingLevel;
+    try {
+      const result = await api.settingsPatch({ defaultThinkingLevel: level });
+      store.set({ defaultThinkingLevel: result.defaultThinkingLevel || level });
+      this.setFeedback("Default thinking mode saved.");
+    } catch (err) {
+      store.set({ defaultThinkingLevel: previous });
+      this.setFeedback(`Default thinking mode failed: ${err.error || err.message || err}`, "error");
     }
   }
   async saveRepositorySettings() {
@@ -258,10 +272,17 @@ class PiSettings extends HTMLElement {
       : piState.profile?.status === "error"
         ? `Profile error: ${piState.profile.error}`
         : "Using the deployment's Pi settings";
+    const loadedSkills = Array.isArray(piState.runtime?.skills) ? piState.runtime.skills : [];
+    const skillList = loadedSkills.length
+      ? `<details class="pi-skill-list"><summary>Loaded skills (${loadedSkills.length})</summary><ul>${loadedSkills.map(skill => `<li><strong>${esc(skill.name || "Unnamed skill")}</strong><span>${esc(skill.path || "")}</span></li>`).join("")}</ul></details>`
+      : "";
+    const skillCount = Array.isArray(piState.runtime?.skills) ? loadedSkills.length : (piState.runtime?.skills || 0);
     const runtimeSummary = piState.runtime
-      ? `${piState.runtime.extensions?.length || 0} extension${piState.runtime.extensions?.length === 1 ? "" : "s"}, ${piState.runtime.skills || 0} skills, and ${piState.runtime.prompts || 0} prompts loaded for the last attached session.`
+      ? `${piState.runtime.extensions?.length || 0} extension${piState.runtime.extensions?.length === 1 ? "" : "s"}, ${skillCount} skill${skillCount === 1 ? "" : "s"}, and ${piState.runtime.prompts || 0} prompts loaded for the last attached session.`
       : "Resources load in the background when a session is first opened.";
     const piProblems = [...(piState.warnings || []), ...(piState.runtime?.errors || []).map(error => `${error.path}: ${error.error}`)];
+    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const defaultThinkingLevel = store.state.defaultThinkingLevel || "medium";
     const feedback = this.feedback
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
@@ -292,7 +313,7 @@ class PiSettings extends HTMLElement {
             <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">One package source or server-local extension path per line. Relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div>
-          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
+          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
           <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div></div>
         </div>
       </section>
@@ -317,6 +338,12 @@ class PiSettings extends HTMLElement {
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Default model</div><div class="sr-sub">Automatic uses the first available authenticated model.${store.state.defaultModelStatus === "unavailable" ? " The configured model is currently unavailable." : ""}</div></div>
           <pi-model-picker data-mode="default" data-variant="settings"></pi-model-picker>
+        </div>
+        <div class="settings-row settings-path-row">
+          <div class="sr-main"><div class="sr-title">Default thinking mode</div><div class="sr-sub">Used for new chats; existing sessions keep their saved mode.</div></div>
+          <select class="settings-select" data-setting="defaultThinkingLevel">
+            ${thinkingLevels.map(level => `<option value="${level}" ${level === defaultThinkingLevel ? "selected" : ""}>${level}</option>`).join("")}
+          </select>
         </div>
         <div class="settings-row settings-path-row">
           <div class="sr-main"><div class="sr-title">Local repositories</div><div class="sr-sub">Folder scanned by the project picker. Empty uses <span class="settings-mono">~/src</span>${store.state.reposRootSource === "environment" ? ". <span class=\"settings-mono\">PI_WEB_REPOS_ROOT</span> currently overrides this value" : ""}.</div></div>

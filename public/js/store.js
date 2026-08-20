@@ -73,6 +73,7 @@ export const store = {
     draft: "",
     model: null,             // active session model reference
     defaultModel: null,      // configured setting; null means Automatic
+    defaultThinkingLevel: "medium",
     effectiveDefaultModel: null,
     defaultModelStatus: "automatic",
     modelError: null,

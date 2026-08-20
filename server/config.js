@@ -21,6 +21,7 @@ const DEFAULTS = {
   reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
   defaultModel: null,
+  defaultThinkingLevel: "medium",
   pi: {
     profile: null, // local profile dir/settings.json or HTTPS settings URL
     packages: [], // additional Pi package sources
@@ -51,6 +52,15 @@ export function normalizeHookSets(value) {
     sets[projectName] = normalizeHooks(hooks);
   }
   return sets;
+}
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+export function normalizeThinkingLevel(value, { strict = false } = {}) {
+  const level = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (THINKING_LEVELS.includes(level)) return level;
+  if (strict) throw Object.assign(new Error(`Invalid thinking level: ${value}`), { code: "invalid_thinking_level" });
+  return "medium";
 }
 
 export function normalizePiConfig(value, { strict = false } = {}) {
@@ -108,6 +118,7 @@ export function loadConfig() {
     projects,
     projectHooks: normalizeHooks(raw.projectHooks),
     projectHookSets: normalizeHookSets(raw.projectHookSets),
+    defaultThinkingLevel: normalizeThinkingLevel(raw.defaultThinkingLevel),
     pi: normalizePiConfig(raw.pi),
     repositorySources: {
       ...DEFAULTS.repositorySources,

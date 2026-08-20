@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, projectMode, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -44,6 +44,15 @@ test("Pi resource config normalizes a profile and unique package/extension sourc
     extensions: ["./extensions/test.ts"],
   });
   assert.throws(() => normalizePiConfig({ packages: "nope" }, { strict: true }), error => error.code === "invalid_pi_configuration");
+});
+
+test("default thinking mode accepts extended levels and rejects invalid settings", () => {
+  assert.equal(normalizeThinkingLevel("xhigh"), "xhigh");
+  assert.equal(normalizeThinkingLevel("max"), "max");
+  assert.equal(normalizeThinkingLevel("unknown"), "medium");
+  assert.throws(() => normalizeThinkingLevel("unknown", { strict: true }), error => error.code === "invalid_thinking_level");
+  saveConfig({ defaultThinkingLevel: "xhigh" });
+  assert.equal(loadConfig().defaultThinkingLevel, "xhigh");
 });
 
 test("project modes default to manual and preserve only valid values", () => {

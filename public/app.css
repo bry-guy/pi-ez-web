@@ -429,6 +429,7 @@ header.bar {
 .activity-status.completed .activity-status-glyph { color: var(--green); }
 .activity-status.failed .activity-status-glyph, .activity-status.aborted .activity-status-glyph { color: var(--red); }
 .delivery-status { margin-top: 4px; color: var(--red); font: 10px var(--mono); text-align: right; }
+.turn-error { width: 100%; color: var(--red); font: 12px var(--mono); line-height: 1.5; white-space: pre-wrap; }
 .delivery-failed .bubble { opacity: .72; }
 .command-notice { display: grid; gap: 4px; width: 100%; margin: 8px 0 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.45; }
 .command-notice strong { color: var(--text); font-weight: 500; }
@@ -566,6 +567,11 @@ pi-context-meter { display: block; padding: 0 13px; }
   font: 11.5px var(--mono);
 }
 .settings-feedback.error { border-color: var(--red); background: color-mix(in oklch, var(--red) 10%, var(--surface)); color: var(--red); }
+.pi-skill-list { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.pi-skill-list summary { cursor: pointer; color: var(--accent); }
+.pi-skill-list ul { display: grid; gap: 4px; margin: 7px 0 0; padding-left: 18px; }
+.pi-skill-list li { display: flex; gap: 8px; min-width: 0; }
+.pi-skill-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-action:hover, .settings-action:focus-visible { border-color: var(--accent); color: var(--accent); }
 .settings-action.quiet { color: var(--muted); }
 .provider-error { margin-top: 9px; padding: 7px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font-family: var(--mono); font-size: 10.5px; line-height: 1.45; }

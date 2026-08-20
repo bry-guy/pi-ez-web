@@ -106,6 +106,7 @@ export async function refreshState() {
     buildId: s.buildId || null,
     reconnecting: false,
     defaultModel: s.defaultModel || null,
+    defaultThinkingLevel: s.defaultThinkingLevel || "medium",
     effectiveDefaultModel: s.effectiveDefaultModel || null,
     defaultModelStatus: s.defaultModelStatus || "automatic",
     modelError: s.modelError || null,
@@ -392,7 +393,10 @@ export function applyEvent(evt, replay = false) {
         if (empty) recs.splice(recs.indexOf(empty), 1);
       }
       for (const r of recs) if (r.role === "assistant" && r.streaming) delete r.streaming;
-      if (evt.reason === "errored" && evt.error) recs.push({ id: "err" + evt.seq, role: "assistant", text: "⚠ " + evt.error });
+      if (evt.reason === "errored" && evt.error) {
+        const id = `error:${evt.turnId || evt.seq || evt.sessionId}`;
+        if (!byId(recs, id)) recs.push({ id, role: "error", text: evt.error });
+      }
       break;
     }
     case "workspace_busy":

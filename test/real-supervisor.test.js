@@ -54,6 +54,29 @@ test("compaction events become visible status activities", () => {
   assert.equal(events.at(-1).data.clientMessageId, "client-1");
 });
 
+test("provider error events end the turn with a public error", () => {
+  const events = [];
+  const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
+  const st = {
+    liveRecords: new Map([["assistant-1", { id: "assistant-1", role: "assistant", text: "", streaming: true }]]),
+    pendingMessages: [], msgId: "assistant-1", turnId: "turn-1", turnEnded: false,
+  };
+  supervisor._onEvent("session-1", st, {
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "error",
+      error: { role: "assistant", stopReason: "error", errorMessage: "Insufficient quota." },
+    },
+  });
+  assert.equal(st.turnEnded, true);
+  assert.equal(st.liveRecords.get("assistant-1").streaming, undefined);
+  assert.deepEqual(events.map(event => [event.type, event.data.reason, event.data.error]), [
+    ["message_end", undefined, undefined], ["turn_end", "errored", "Insufficient quota."],
+  ]);
+  supervisor._onEvent("session-1", st, { type: "agent_end", messages: [] });
+  assert.equal(events.length, 2);
+});
+
 test("manual compact reports expected no-op states instead of an internal error", async () => {
   const supervisor = new RealSupervisor({});
   for (const [message, expected] of [
