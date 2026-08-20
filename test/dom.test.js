@@ -295,10 +295,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files .file-viewer"));
   assert.equal(root.querySelector("pi-files .file-viewer .file-target"), null);
+  assert.equal(root.querySelector("pi-files [data-act='back']"), null);
   assert.ok(root.querySelector(".file-code .hljs-keyword"));
   assert.match(root.querySelector(".file-diff-body")?.textContent || "", /const answer/);
   assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /HEAD/);
-  root.querySelector("pi-files [data-act='back']").click();
+  root.querySelector("pi-files .file-viewer [data-act='close']").click();
   assert.equal(store.state.filePath, null);
   assert.ok(root.querySelector("pi-files .files:not(.file-viewer)"));
   fileTarget = root.querySelector(".file-target");

@@ -366,7 +366,6 @@ class PiFiles extends HTMLElement {
     });
     this.addEventListener("click", e => {
       if (e.target.closest("[data-act='close']")) { this.close(); return; }
-      if (e.target.closest("[data-act='back']")) { this.back(); return; }
       const dir = e.target.closest("[data-dir]");
       if (dir) {
         store.state.openDirs[dir.dataset.dir] = !store.state.openDirs[dir.dataset.dir];
@@ -434,13 +433,12 @@ class PiFiles extends HTMLElement {
     }
   }
 
-  back() {
-    this.requestId++;
-    store.set({ filePath: null, fileView: null, fileLoading: false, fileError: null });
-  }
-
   close() {
     this.requestId++;
+    if (store.state.filePath) {
+      store.set({ filePath: null, fileView: null, fileLoading: false, fileError: null });
+      return;
+    }
     store.set({ filesOpen: false, filePath: null, fileView: null, fileLoading: false, fileError: null });
   }
 
@@ -493,9 +491,8 @@ class PiFiles extends HTMLElement {
     const diff = view ? this.renderDiff(view.diff, view.target || s.fileTarget) : "";
     this.innerHTML = `<aside class="files file-viewer">
       <div class="files-head file-viewer-head">
-        <button class="ghost-btn file-back" data-act="back" title="Back to files" aria-label="Back to files">←</button>
         <div class="file-title-wrap"><div class="sec-label">File</div><div class="file-path" title="${esc(s.filePath || "")}">${esc(s.filePath || "")}</div></div>
-        <button class="ghost-btn" data-act="close" title="Close files">×</button>
+        <button class="ghost-btn" data-act="close" title="Back to files" aria-label="Back to files">×</button>
       </div>
       ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
       <div class="file-view-scroll">
