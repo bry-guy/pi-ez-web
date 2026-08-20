@@ -138,7 +138,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(send.disabled, false);
   assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /Another session/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
-  root.querySelector("pi-header [data-act='settings']").click();
+  assert.equal(root.querySelector("pi-header [data-act='settings']"), null);
+  root.querySelector("pi-sidebar [data-act='settings']").click();
   assert.equal(store.state.view, "settings");
   assert.ok(root.querySelector("pi-settings"));
   store.set({ view: "chat" });

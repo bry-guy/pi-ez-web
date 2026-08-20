@@ -446,17 +446,13 @@ class PiHeader extends HTMLElement {
     const workspace = branch && p ? (p.workspaceStatus?.[branch] || {
       kind: branch === p.branch ? "checkout" : "worktree", path: node?.workspacePath || p.repoPath, dirty: false, ahead: 0, behind: 0, sessions: [],
     }) : null;
-    const status = workspace ? this.statusBits(workspace) : "";
-    const branchChip = inProject && branch ? `
+    const workspaceArea = inProject && branch ? `
       <div class="bar-sub">
-        <span class="repo">${esc(p.name)}</span><span class="dot">·</span>
-        <button class="branch-chip" data-act="workspace-settings" title="Open workspace settings" aria-label="Open workspace settings for ${esc(branch)}">
-          <span class="bname">${esc(branch)}</span><span class="workspace-kind">${esc(workspace.kind)}</span><span class="workspace-state">${esc(status)}</span>
+        <button class="workspace-trigger" data-act="workspace-settings" title="Open workspace settings" aria-label="Open workspace settings for ${esc(p.name)} ${esc(branch)}">
+          <span class="workspace-repo">${esc(p.name)}</span><span class="workspace-divider">·</span>
+          <span class="workspace-branch">${esc(branch)}</span>${this.workspaceLabels(workspace)}
         </button>
       </div>` : "";
-    const workspaceButton = inProject && branch
-      ? `<button class="ghost-btn workspace-settings-link" data-act="workspace-settings" title="Workspace settings">Workspace</button>` : "";
-    const settingsButton = `<button class="ghost-btn header-settings" data-act="settings" title="Settings" aria-label="Settings">${icon("settings")}</button>`;
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
@@ -467,8 +463,8 @@ class PiHeader extends HTMLElement {
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
-      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${branchChip}</div>
-      ${filesBtn}${workspaceButton}${settingsButton}${modal}
+      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}</div>
+      ${filesBtn}${modal}
     </header>`;
     if (preserveBranchInput) {
       const input = this.querySelector(".new-branch-input");
@@ -481,6 +477,13 @@ class PiHeader extends HTMLElement {
 
   statusBits(status) {
     return [status.dirty ? "dirty" : "clean", status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""].filter(Boolean).join(" · ");
+  }
+
+  workspaceLabels(status) {
+    return [status.kind || "workspace", status.dirty ? "dirty" : "clean", status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""]
+      .filter(Boolean)
+      .map((label, index) => `<span class="workspace-badge ${index === 0 ? "kind" : "state"}">${esc(label)}</span>`)
+      .join("");
   }
 
   workspaceSettings(p, node, branch, workspace) {

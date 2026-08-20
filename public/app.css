@@ -185,21 +185,22 @@ header.bar {
 .bar-main { min-width: 0; flex: 1; }
 .bar-title { font-size: 14px; font-weight: 500; letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-sub {
-  display: flex; align-items: center; gap: 6px; margin-top: 1px;
-  font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden;
+  display: flex; align-items: center; min-width: 0; margin-top: 1px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
-.bar-sub .repo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-sub .dot { color: var(--faint); }
-.branch-chip {
-  border: 1px solid transparent; background: var(--orange-soft); color: var(--orange);
-  font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 5px; cursor: pointer;
-  display: flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 220px;
+.workspace-trigger {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; margin: -2px -4px; padding: 2px 4px;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; text-align: left;
 }
-.branch-chip:hover { border-color: var(--orange); }
-.branch-chip .bname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-settings-link { flex: 0 0 auto; border: 1px solid var(--border); color: var(--muted); font-size: 11px; padding: 5px 8px; }
-.workspace-settings-link:hover, .workspace-settings-link:focus-visible { border-color: var(--orange); color: var(--orange); }
-.header-settings { flex: 0 0 auto; }
+.workspace-trigger:hover, .workspace-trigger:focus-visible { border-color: var(--orange); background: var(--orange-soft); outline: 0; }
+.workspace-repo { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-divider { color: var(--faint); }
+.workspace-branch { max-width: 32ch; overflow: hidden; color: var(--orange); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-badge {
+  display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface-2); color: var(--faint); font-size: 9px; letter-spacing: .03em; line-height: 1.35; text-transform: uppercase;
+}
+.workspace-badge.state { color: var(--orange); }
 .hook-result {
   position: absolute; top: calc(100% - 4px); right: 14px; z-index: 32; width: min(520px, calc(100% - 28px));
   max-height: 320px; overflow: auto; padding: 9px 11px; background: var(--surface);
@@ -710,8 +711,6 @@ aside.files.file-viewer {
 .row:hover .row-close, .row .row-close:focus-visible { opacity: 1; pointer-events: auto; }
 .row .row-close:hover, .row .row-close:focus-visible { color: var(--red); }
 
-.workspace-kind, .workspace-state { color: var(--faint); font-size: 10px; }
-.workspace-state { color: var(--orange); }
 .workspace-scrim {
   position: fixed; inset: 0; z-index: 36; display: flex; align-items: flex-start; justify-content: flex-start;
   padding: 64px 14px 20px; background: oklch(0.15 0.02 255 / .48);
@@ -830,7 +829,7 @@ aside.files.file-viewer {
 .row .count, .row .when { font-size: 11.5px; }
 .bar-title { font-size: 14px; }
 .bar-sub { font-size: 11.5px; }
-.branch-chip { font-size: 11.5px; }
+.workspace-trigger { font-size: 11.5px; }
 .hamburger { width: 34px; height: 34px; }
 .ghost-btn { font-size: 14px; }
 .settings-action, .settings-save { font-size: 12px; }
@@ -839,7 +838,7 @@ aside.files.file-viewer {
 .connect-btn { font-size: 13.5px; }
 
 @media (max-width: 760px) {
-  .workspace-settings-link { display: none; }
+  .workspace-trigger { width: 100%; }
   .workspace-scrim { z-index: 100; align-items: stretch; justify-content: stretch; padding: 0; }
   .workspace-modal { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; display: flex; flex-direction: column; }
   .workspace-modal-head { flex: 0 0 auto; padding-top: max(16px, env(safe-area-inset-top)); }
