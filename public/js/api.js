@@ -177,7 +177,7 @@ async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
   }
 }
 
-export async function openTranscript(id) {
+export async function openTranscript(id, { scrollToLatest = true } = {}) {
   if (!id || loading.has(id)) return;
   loading.add(id);
   buffers.set(id, []);
@@ -193,7 +193,7 @@ export async function openTranscript(id) {
       streaming: !!snap.streaming,
       compacting: !!snap.compacting,
       seq: snap.seq ?? -1,
-      scrollToLatest: true,
+      scrollToLatest,
     };
     const snapshotSeq = snap.seq ?? -1;
     for (const evt of buffers.get(id) || []) {
@@ -310,6 +310,12 @@ function byId(records, id) { return records.find(r => r.id === id); }
 
 export function applyEvent(evt, replay = false) {
   const t = tOf(evt.sessionId);
+  const seq = Number(evt.seq);
+  if (Number.isFinite(seq)) {
+    const lastSeq = Number.isFinite(Number(t.seq)) ? Number(t.seq) : -1;
+    if (seq <= lastSeq) return;
+    t.seq = seq;
+  }
   const recs = t.records;
   switch (evt.type) {
     case "user_record": {
@@ -408,6 +414,9 @@ export function applyEvent(evt, replay = false) {
       if (evt.reason === "errored" && evt.error) {
         const id = `error:${evt.turnId || evt.seq || evt.sessionId}`;
         if (!byId(recs, id)) recs.push({ id, role: "error", text: evt.error });
+      }
+      if (!replay && evt.sessionId === store.activeKey()) {
+        openTranscript(evt.sessionId, { scrollToLatest: false });
       }
       break;
     }

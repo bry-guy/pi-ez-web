@@ -6,7 +6,7 @@ import { esc, newChat, newProjectSession } from "./shell.js";
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["pending", "in_progress", "running", "queued"]);
-const HISTORY_PAGE_SIZE = 150;
+const HISTORY_PAGE_SIZE = 500;
 const liveAgent = record => record?.role === "activity"
   && record.kind === "agent" && LIVE_AGENT_STATUSES.has(record.status);
 
@@ -14,6 +14,12 @@ const liveAgent = record => record?.role === "activity"
 class PiThread extends HTMLElement {
   connectedCallback() {
     this.renderCache = new WeakMap();
+    this.onScroll = () => {
+      const scroller = this.scroller;
+      if (!scroller || scroller.scrollTop > 360) return;
+      this.loadEarlier();
+    };
+    this.bindScroller();
     this.unsub = store.subscribe(w => {
       if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
@@ -26,14 +32,20 @@ class PiThread extends HTMLElement {
     });
     this.render();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    this.scroller?.removeEventListener("scroll", this.onScroll);
+  }
+
+  bindScroller() {
+    const scroller = this.closest(".scrollable");
+    if (scroller === this.scroller) return;
+    this.scroller?.removeEventListener("scroll", this.onScroll);
+    this.scroller = scroller;
+    this.scroller?.addEventListener("scroll", this.onScroll, { passive: true });
+  }
 
   async onClick(e) {
-    const loadEarlier = e.target.closest("[data-load-earlier]");
-    if (loadEarlier) {
-      this.loadEarlier();
-      return;
-    }
     const activityToggle = e.target.closest("[data-activity-toggle]");
     if (activityToggle) {
       const key = activityToggle.dataset.activityToggle;
@@ -89,12 +101,27 @@ class PiThread extends HTMLElement {
   }
 
   loadEarlier() {
-    const scroller = this.closest(".scrollable") || this;
+    if (this.historyLoading || !this.hasEarlier()) return;
+    const scroller = this.scroller || this.closest(".scrollable") || this;
     const beforeHeight = scroller.scrollHeight;
     const beforeTop = scroller.scrollTop;
+    this.historyLoading = true;
     this.historyLimit += HISTORY_PAGE_SIZE;
     this.render();
     scroller.scrollTop = beforeTop + scroller.scrollHeight - beforeHeight;
+    this.historyLoading = false;
+  }
+
+  visibleRecords(records) {
+    return records.filter(record => record.role !== "activity"
+      || record.key === "compaction"
+      || (record.kind === "agent" && !liveAgent(record)));
+  }
+
+  hasEarlier() {
+    const id = store.activeKey();
+    const transcript = id && (store.state.transcripts[id] || store.transcript(id));
+    return !!transcript && this.historyRecords(this.visibleRecords(transcript.records)).hasEarlier;
   }
 
   historyRecords(records) {
@@ -119,9 +146,7 @@ class PiThread extends HTMLElement {
     }
     if (!activeKey) { this.innerHTML = ""; return; }
     if (!activeKey) { this.innerHTML = ""; return; }
-    const visibleRecords = t.records.filter(record => record.role !== "activity"
-      || record.key === "compaction"
-      || (record.kind === "agent" && !liveAgent(record)));
+    const visibleRecords = this.visibleRecords(t.records);
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
     // between an assistant message/tool call and the next assistant message.
@@ -136,9 +161,7 @@ class PiThread extends HTMLElement {
       return;
     }
     const records = history.records.map(m => this.renderRecordCached(m)).join("");
-    const earlier = history.hasEarlier
-      ? `<div class="history-loader"><button type="button" data-load-earlier>Load earlier messages</button></div>`
-      : "";
+    const earlier = "";
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";

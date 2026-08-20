@@ -138,7 +138,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(send.disabled, false);
   assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /Another session/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
-  store.set({ workspaceSettingsOpen: true });
+  root.querySelector("pi-header [data-act='settings']").click();
+  assert.equal(store.state.view, "settings");
+  assert.ok(root.querySelector("pi-settings"));
+  store.set({ view: "chat" });
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.ok(root.querySelector(".workspace-modal"));
   store.state.transcripts.sibling.streaming = true;
   store.notify("transcript");
@@ -421,7 +425,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   } });
   assert.match(root.querySelector(".activity-stack .agent-panel")?.textContent || "", /Checking files/);
   assert.equal(root.querySelector(".activity-inline .bh-name"), null);
-  applyEvent({ v: 1, seq: 106, sessionId: "s1", type: "activity", record: {
+  applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "activity", record: {
     id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "completed",
     title: "Explore", summary: "Found the files.", items: [], source: "test",
   } });
@@ -433,14 +437,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   store.state.transcripts.s1.records.unshift({ id: "pending-1", pendingId: "client-1", role: "user", text: "optimistic", pending: true });
   store.notify("transcript");
-  applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
+  applyEvent({ v: 1, seq: 108, sessionId: "s1", type: "user_record", clientMessageId: "client-1", record: { id: "u-1", role: "user", text: "optimistic" } });
   assert.equal(root.querySelector(".delivery-status"), null);
   assert.ok(root.querySelector(".user-message-content"));
   assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
   store.state.transcripts.s1.records.push({ id: "failed-1", role: "user", text: "failed", deliveryError: "provider unavailable" });
   store.notify("transcript");
   assert.equal(root.querySelector(".delivery-status")?.textContent, "ERROR: Unable to send.");
-  applyEvent({ v: 1, seq: 108, sessionId: "s1", type: "activity", record: {
+  applyEvent({ v: 1, seq: 109, sessionId: "s1", type: "activity", record: {
     id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
     title: "Compacting", summary: "context…", items: [], source: "pi",
   } });
@@ -455,9 +459,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.projects[0].sessions[0].branch = "feat/ship";
   store.state.transcripts.s1.compacting = false;
   store.notify("state");
-  applyEvent({ v: 1, seq: 109, sessionId: "s1", type: "turn_start", turnId: "t-error" });
-  applyEvent({ v: 1, seq: 110, sessionId: "s1", type: "message_start", messageId: "a-error", role: "assistant" });
-  applyEvent({ v: 1, seq: 111, sessionId: "s1", type: "turn_end", turnId: "t-error", reason: "errored", error: "Insufficient quota." });
+  applyEvent({ v: 1, seq: 110, sessionId: "s1", type: "turn_start", turnId: "t-error" });
+  applyEvent({ v: 1, seq: 111, sessionId: "s1", type: "message_start", messageId: "a-error", role: "assistant" });
+  applyEvent({ v: 1, seq: 112, sessionId: "s1", type: "turn_end", turnId: "t-error", reason: "errored", error: "Insufficient quota." });
   assert.equal(store.transcript("s1").streaming, false);
   assert.equal(root.querySelector(".turn-error")?.textContent, "ERROR: Insufficient quota.");
   assert.equal(root.querySelector(".pi-think"), null);
@@ -472,7 +476,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   assert.equal(scroller.scrollTop, 1200);
 
-  const longRecords = Array.from({ length: 320 }, (_, index) => ({
+  const longRecords = Array.from({ length: 1020 }, (_, index) => ({
     id: `long-${index}`, role: "assistant", text: `message ${index}`,
   }));
   store.state.transcripts.s1 = { records: longRecords, streaming: false, seq: 320 };
@@ -480,9 +484,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const thread = root.querySelector("pi-thread");
   const initialRendered = thread.querySelectorAll(".assist").length;
   assert.ok(initialRendered < longRecords.length);
-  assert.match(thread.textContent, /message 319/);
+  assert.match(thread.textContent, /message 1019/);
   assert.doesNotMatch(thread.textContent, /message 0/);
-  thread.querySelector("[data-load-earlier]").click();
+  assert.equal(thread.querySelector("[data-load-earlier]"), null);
+  scroller.scrollTop = 0;
+  scroller.dispatchEvent(new dom.window.Event("scroll"));
   assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
 
   store.set({ workspaceSettingsOpen: true });

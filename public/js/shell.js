@@ -334,6 +334,8 @@ class PiHeader extends HTMLElement {
       store.set(mobile()
         ? { drawerOpen: !store.state.drawerOpen }
         : { railOpen: !store.state.railOpen });
+    } else if (act === "settings") {
+      store.set({ view: "settings", workspaceSettingsOpen: false, worktreeFormOpen: false });
     } else if (act === "workspace-settings") {
       store.set(s => ({ workspaceSettingsOpen: !s.workspaceSettingsOpen, worktreeFormOpen: false, workspaceError: null }));
     } else if (act === "close-workspace-settings") {
@@ -448,10 +450,13 @@ class PiHeader extends HTMLElement {
     const branchChip = inProject && branch ? `
       <div class="bar-sub">
         <span class="repo">${esc(p.name)}</span><span class="dot">·</span>
-        <button class="branch-chip" data-act="workspace-settings" title="Open workspace settings">
+        <button class="branch-chip" data-act="workspace-settings" title="Open workspace settings" aria-label="Open workspace settings for ${esc(branch)}">
           <span class="bname">${esc(branch)}</span><span class="workspace-kind">${esc(workspace.kind)}</span><span class="workspace-state">${esc(status)}</span>
         </button>
       </div>` : "";
+    const workspaceButton = inProject && branch
+      ? `<button class="ghost-btn workspace-settings-link" data-act="workspace-settings" title="Workspace settings">Workspace</button>` : "";
+    const settingsButton = `<button class="ghost-btn header-settings" data-act="settings" title="Settings" aria-label="Settings">${icon("settings")}</button>`;
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
@@ -463,7 +468,7 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${branchChip}</div>
-      ${filesBtn}${modal}
+      ${filesBtn}${workspaceButton}${settingsButton}${modal}
     </header>`;
     if (preserveBranchInput) {
       const input = this.querySelector(".new-branch-input");
