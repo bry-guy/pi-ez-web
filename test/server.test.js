@@ -129,6 +129,7 @@ test("serves the UI", async () => {
   // Custom elements default to display:inline; without this rule the sidebar,
   // header, composer, and file panel are not flex items and collapse.
   assert.match(css, /pi-sidebar[\s\S]{0,200}display:\s*contents/);
+  assert.match(css, /aside\.files\s*\{\s*position: absolute; inset: var\(--header-height, 54px\) 0 0 auto;/);
 });
 
 test("state exposes the API contract and health marker", async () => {
