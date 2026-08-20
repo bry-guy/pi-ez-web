@@ -108,9 +108,10 @@ async function boot() {
           { n: "src", p: "src", c: [{ n: "app.js", p: "src/app.js" }] },
           { n: "README.md", p: "README.md" },
         ] : [
-          { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }] },
+          { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }, { n: "untouched.js", p: "src/untouched.js" }] },
           { n: "new.js", p: "new.js", s: "new" },
           { n: "old.js", p: "old.js", s: "removed" },
+          { n: "README.md", p: "README.md" },
         ];
         return json({ target, targets, tree });
       }
@@ -287,18 +288,22 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(store.state.fileTarget, "HEAD");
-  assert.equal(root.querySelector("pi-files [data-file='README.md']"), null);
+  const readmeRow = root.querySelector("pi-files [data-file='README.md']");
+  assert.ok(readmeRow);
+  assert.equal(readmeRow.classList.contains("status-modified"), false);
   assert.ok(root.querySelector("pi-files .file-row.status-new[data-file='new.js']"));
   assert.ok(root.querySelector("pi-files .file-row.status-removed"));
   assert.ok(root.querySelector("pi-files .file-row.dir.status-modified[data-dir='src']"));
   root.querySelector("pi-files [data-dir='src']").click();
+  assert.ok(root.querySelector("pi-files [data-file='src/untouched.js']"));
   assert.ok(root.querySelector("pi-files .file-row.status-modified[data-file='src/app.js']"));
   root.querySelector("pi-files [data-file='src/app.js']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files .file-viewer"));
   assert.equal(root.querySelector("pi-files .file-viewer .file-target"), null);
   assert.equal(root.querySelector("pi-files [data-act='back']"), null);
-  assert.ok(root.querySelector(".file-code .hljs-keyword"));
+  assert.equal(root.querySelector(".file-code"), null);
+  assert.equal(root.querySelector(".file-section-head")?.textContent, "Diff");
   assert.match(root.querySelector(".file-diff-body")?.textContent || "", /const answer/);
   assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /HEAD/);
   root.querySelector("pi-files .file-viewer [data-act='close']").click();
@@ -309,6 +314,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));
+  root.querySelector("pi-files [data-file='src/app.js']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector(".file-code .hljs-keyword"));
+  assert.equal(root.querySelector(".file-diff-body"), null);
+  root.querySelector("pi-files .file-viewer [data-act='close']").click();
   root.querySelector("pi-files [data-act='close']").click();
 
   const sidebar = root.querySelector("pi-sidebar");

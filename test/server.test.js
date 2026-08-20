@@ -473,6 +473,7 @@ test("file explorer returns current content and HEAD/main diffs safely", async (
     assert.equal(changed.get("changes/removed.txt").s, "removed");
     assert.equal(changed.get("changes/modified.txt").s, "modified");
     assert.equal(changed.get("changes").s, "modified");
+    assert.equal(changed.get("README.md").s, undefined);
 
     const current = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=HEAD`)).json();
     assert.equal(current.content, "const value = 1;\n");

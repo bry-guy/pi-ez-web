@@ -159,15 +159,15 @@ function sortStatusTree(nodes) {
   return nodes.sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
 }
 
-function statusTree(statuses) {
-  const tree = [];
+function statusTree(statuses, tree = []) {
   for (const [relative, status] of statuses) addStatusPath(tree, relative, status);
   return sortStatusTree(tree);
 }
 
 export function readFileTree({ workspace, repoPath, target = NO_DIFF_TARGET }) {
   const { targets, statuses } = diffStatuses({ workspace, repoPath, target });
-  return { tree: target === NO_DIFF_TARGET ? fileTree(workspace) : statusTree(statuses), target, targets };
+  const tree = target === NO_DIFF_TARGET ? fileTree(workspace) : statusTree(statuses, fileTree(workspace));
+  return { tree, target, targets };
 }
 
 function contentLines(content) {

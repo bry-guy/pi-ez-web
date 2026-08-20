@@ -488,7 +488,11 @@ class PiFiles extends HTMLElement {
       : view
         ? `<pre class="file-code"><code class="hljs${view.language ? ` language-${esc(view.language)}` : ""}">${view.highlighted ? this.safeHighlighted(view.highlighted) : esc(view.content || "")}</code></pre>`
         : `<div class="file-empty">${s.fileLoading ? "Loading file…" : "Select a file to preview it."}</div>`;
-    const diff = view ? this.renderDiff(view.diff, view.target || s.fileTarget) : "";
+    const target = view?.target || s.fileTarget;
+    const diffMode = !!view && target !== "none";
+    const body = diffMode ? this.renderDiff(view.diff, target) : content;
+    const title = diffMode ? "Diff" : "Current file";
+    const meta = !diffMode && view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : "";
     this.innerHTML = `<aside class="files file-viewer">
       <div class="files-head file-viewer-head">
         <div class="file-title-wrap"><div class="sec-label">File</div><div class="file-path" title="${esc(s.filePath || "")}">${esc(s.filePath || "")}</div></div>
@@ -496,8 +500,7 @@ class PiFiles extends HTMLElement {
       </div>
       ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
       <div class="file-view-scroll">
-        <section class="file-section"><div class="file-section-head"><span>Current file</span>${view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : ""}</div>${content}</section>
-        ${view && view.target !== "none" ? `<section class="file-section"><div class="file-section-head"><span>Diff</span></div>${diff}</section>` : ""}
+        <section class="file-section"><div class="file-section-head"><span>${title}</span>${meta}</div>${body}</section>
       </div>
     </aside>`;
   }
