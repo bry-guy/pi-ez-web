@@ -92,7 +92,12 @@ class PiThread extends HTMLElement {
 
   autoscroll(force = false) {
     const sc = this.closest(".scrollable") || this;
-    if (force || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
+    if (!force && sc.scrollHeight - sc.scrollTop - sc.clientHeight >= 160) return;
+    sc.scrollTop = sc.scrollHeight;
+    if (force) {
+      const raf = globalThis.requestAnimationFrame || this.ownerDocument?.defaultView?.requestAnimationFrame?.bind(this.ownerDocument.defaultView);
+      raf?.(() => { if (this.isConnected) sc.scrollTop = sc.scrollHeight; });
+    }
   }
 
   render() {
@@ -124,7 +129,9 @@ class PiThread extends HTMLElement {
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
     this.innerHTML = records + indicator + activity + notice;
-    this.autoscroll(this.scrollOnNextRender);
+    const forceScroll = this.scrollOnNextRender || !!t.scrollToLatest;
+    this.autoscroll(forceScroll);
+    delete t.scrollToLatest;
     this.scrollOnNextRender = false;
   }
 

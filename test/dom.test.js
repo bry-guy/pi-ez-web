@@ -367,6 +367,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.transcript("s1").streaming, false);
   assert.equal(root.querySelector(".turn-error")?.textContent, "ERROR: Insufficient quota.");
   assert.equal(root.querySelector(".pi-think"), null);
+
+  const scroller = root.querySelector(".scrollable");
+  Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1200 });
+  Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+  store.state.transcripts.s1 = {
+    records: [{ id: "latest", role: "assistant", text: "latest" }],
+    streaming: false, seq: 1, scrollToLatest: true,
+  };
+  store.notify("transcript");
+  assert.equal(scroller.scrollTop, 1200);
+
   assert.equal(root.querySelector(".merge-btn")?.textContent.trim(), "Merge");
   assert.match(root.querySelector(".merge-btn")?.getAttribute("title") || "", /feat\/ship.*main/);
 

@@ -183,6 +183,7 @@ export async function openTranscript(id) {
       streaming: !!snap.streaming,
       compacting: !!snap.compacting,
       seq: snap.seq ?? -1,
+      scrollToLatest: true,
     };
     const snapshotSeq = snap.seq ?? -1;
     for (const evt of buffers.get(id) || []) {
