@@ -284,6 +284,12 @@ header.bar {
   color: var(--accent); display: grid; place-items: center; font-family: var(--mono); font-size: 21px; line-height: 1; margin: 0 auto;
 }
 .msg { min-width: 0; margin-bottom: 22px; }
+.history-loader { display: flex; justify-content: center; margin: 2px 0 18px; }
+.history-loader button {
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px; background: var(--surface-2);
+  color: var(--muted); cursor: pointer; font: 11px var(--mono);
+}
+.history-loader button:hover, .history-loader button:focus-visible { border-color: var(--accent); color: var(--accent); outline: 0; }
 .msg-user-row { display: flex; justify-content: flex-end; align-items: flex-start; gap: 6px; }
 .user-message-content { width: min(88%, calc(100% - 42px)); min-width: 0; }
 .user-message-content .bubble { max-width: 100%; }

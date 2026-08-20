@@ -385,6 +385,19 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   assert.equal(scroller.scrollTop, 1200);
 
+  const longRecords = Array.from({ length: 320 }, (_, index) => ({
+    id: `long-${index}`, role: "assistant", text: `message ${index}`,
+  }));
+  store.state.transcripts.s1 = { records: longRecords, streaming: false, seq: 320 };
+  store.notify("transcript");
+  const thread = root.querySelector("pi-thread");
+  const initialRendered = thread.querySelectorAll(".assist").length;
+  assert.ok(initialRendered < longRecords.length);
+  assert.match(thread.textContent, /message 319/);
+  assert.doesNotMatch(thread.textContent, /message 0/);
+  thread.querySelector("[data-load-earlier]").click();
+  assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
+
   assert.equal(root.querySelector(".merge-btn")?.textContent.trim(), "Merge");
   assert.match(root.querySelector(".merge-btn")?.getAttribute("title") || "", /feat\/ship.*main/);
 

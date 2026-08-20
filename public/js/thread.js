@@ -6,6 +6,7 @@ import { esc, newChat, newProjectSession, selectSession } from "./shell.js";
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["pending", "in_progress", "running", "queued"]);
+const HISTORY_PAGE_SIZE = 150;
 const liveAgent = record => record?.role === "activity"
   && record.kind === "agent" && LIVE_AGENT_STATUSES.has(record.status);
 
@@ -30,6 +31,11 @@ class PiThread extends HTMLElement {
   async onClick(e) {
     const fork = e.target.closest("[data-fork]");
     if (fork) return this.fork(fork.dataset.fork);
+    const loadEarlier = e.target.closest("[data-load-earlier]");
+    if (loadEarlier) {
+      this.loadEarlier();
+      return;
+    }
     const activityToggle = e.target.closest("[data-activity-toggle]");
     if (activityToggle) {
       const key = activityToggle.dataset.activityToggle;
@@ -101,13 +107,36 @@ class PiThread extends HTMLElement {
     }
   }
 
+  loadEarlier() {
+    const scroller = this.closest(".scrollable") || this;
+    const beforeHeight = scroller.scrollHeight;
+    const beforeTop = scroller.scrollTop;
+    this.historyLimit += HISTORY_PAGE_SIZE;
+    this.render();
+    scroller.scrollTop = beforeTop + scroller.scrollHeight - beforeHeight;
+  }
+
+  historyRecords(records) {
+    const limit = this.historyLimit || HISTORY_PAGE_SIZE;
+    if (records.length <= limit) return { records, hasEarlier: false };
+    const keep = new Set(records.slice(-limit));
+    for (const record of records) {
+      if (record.role === "activity" || record.pending || record.deliveryError || record.streaming) keep.add(record);
+    }
+    const selected = records.filter(record => keep.has(record));
+    return { records: selected, hasEarlier: selected.length < records.length };
+  }
+
   render() {
     const activeKey = store.activeKey();
-    if (activeKey !== this.renderedKey) {
+    const t = activeKey ? (store.state.transcripts[activeKey] || store.transcript(activeKey)) : null;
+    if (activeKey !== this.renderedKey || t !== this.renderedTranscript) {
       this.renderedKey = activeKey;
+      this.renderedTranscript = t;
+      this.historyLimit = HISTORY_PAGE_SIZE;
       this.scrollOnNextRender = true;
     }
-    const t = store.transcript();
+    if (!activeKey) { this.innerHTML = ""; return; }
     const noFork = !!store.state.chatId;
     if (!activeKey) { this.innerHTML = ""; return; }
     const visibleRecords = t.records.filter(record => record.role !== "activity"
@@ -121,15 +150,19 @@ class PiThread extends HTMLElement {
     const thinking = t.streaming && !liveAssistant;
     const activity = this.renderActivity(t.records);
     const notice = this.renderCommandNotice();
+    const history = this.historyRecords(visibleRecords);
     if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
       this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
       return;
     }
-    const records = visibleRecords.map(m => this.renderRecordCached(m, noFork)).join("");
+    const records = history.records.map(m => this.renderRecordCached(m, noFork)).join("");
+    const earlier = history.hasEarlier
+      ? `<div class="history-loader"><button type="button" data-load-earlier>Load earlier messages</button></div>`
+      : "";
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
-    this.innerHTML = records + indicator + activity + notice;
+    this.innerHTML = earlier + records + indicator + activity + notice;
     const forceScroll = this.scrollOnNextRender || !!t.scrollToLatest;
     this.autoscroll(forceScroll);
     delete t.scrollToLatest;
