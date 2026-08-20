@@ -290,7 +290,7 @@ export class RealSupervisor {
       case "compaction_start": {
         const record = normalizeActivity({
           id: "activity:compaction", kind: "status", key: "compaction", status: "running",
-          title: "Compacting context", summary: "Preparing a shorter context…",
+          title: "Compacting", summary: "context…",
         }, { source: "pi" });
         st.liveRecords.set(record.id, record);
         hub.emit(id, "activity", { record });

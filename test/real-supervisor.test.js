@@ -41,7 +41,10 @@ test("compaction events become visible status activities", () => {
   const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
   const st = { liveRecords: new Map(), pendingMessages: [] };
   supervisor._onEvent("session-1", st, { type: "compaction_start", reason: "manual" });
-  assert.equal(st.liveRecords.get("activity:compaction").status, "running");
+  assert.deepEqual(st.liveRecords.get("activity:compaction"), {
+    id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
+    title: "Compacting", summary: "context…", items: [], source: "pi",
+  });
   supervisor._onEvent("session-1", st, { type: "compaction_end", reason: "manual", result: {}, aborted: false });
   assert.equal(st.liveRecords.get("activity:compaction").status, "completed");
   assert.deepEqual(events.map(event => [event.type, event.data.record.status]), [

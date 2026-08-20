@@ -70,7 +70,7 @@ export const store = {
     query: "",
     repoQuery: "",
     newBranch: "",
-    draft: "",
+    drafts: {},              // sessionId -> unsent composer text
     model: null,             // active session model reference
     defaultModel: null,      // configured setting; null means Automatic
     defaultThinkingLevel: "medium",
@@ -163,6 +163,14 @@ export const store = {
   },
   activeKey() {
     return this.state.chatId || this.state.sessionId;
+  },
+  draft(id = this.activeKey()) {
+    return id ? this.state.drafts[id] || "" : "";
+  },
+  setDraft(value, id = this.activeKey()) {
+    if (!id) return;
+    if (value) this.state.drafts[id] = value;
+    else delete this.state.drafts[id];
   },
   transcript(id = this.activeKey()) {
     return this.state.transcripts[id] || { records: [], streaming: false };

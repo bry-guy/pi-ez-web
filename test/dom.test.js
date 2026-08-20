@@ -266,6 +266,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
 
   const composer = root.querySelector("pi-composer");
   const textarea = composer.querySelector("textarea");
+  textarea.value = "foo";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  root.querySelector("[data-id='sibling']").click();
+  assert.equal(textarea.value, "", "a different session starts with its own draft");
+  root.querySelector("[data-id='s1']").click();
+  assert.equal(textarea.value, "foo", "returning to a session restores its draft");
   textarea.value = "/";
   textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -349,9 +355,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".delivery-status")?.textContent, "ERROR: Unable to send.");
   applyEvent({ v: 1, seq: 108, sessionId: "s1", type: "activity", record: {
     id: "activity:compaction", role: "activity", kind: "status", key: "compaction", status: "running",
-    title: "Compacting context", summary: "Preparing a shorter context…", items: [], source: "pi",
+    title: "Compacting", summary: "context…", items: [], source: "pi",
   } });
-  assert.match(root.querySelector(".activity-status")?.textContent || "", /Compacting context/);
+  assert.equal(root.querySelector(".activity-status strong")?.textContent, "Compacting");
+  assert.equal(root.querySelector(".activity-status span:last-child")?.textContent, "context…");
   assert.ok(root.querySelector(".activity-inline .activity-status"));
   assert.equal(root.querySelector(".activity-stack .activity-status"), null);
   assert.equal(store.state.transcripts.s1.compacting, true);

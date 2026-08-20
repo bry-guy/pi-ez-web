@@ -56,7 +56,8 @@ class PiThread extends HTMLElement {
       await refreshState();
       store.state.openTree[id] = true;
       selectSession(store.state.projectId, childId);
-      store.set({ draft: rec?.text || "", hookResult: result.setup || null });
+      store.setDraft(rec?.text || "");
+      store.set({ hookResult: result.setup || null });
     } catch (err) {
       store.setError(`Fork failed: ${err.error || err.message || err}`);
     }
@@ -611,7 +612,7 @@ class PiComposer extends HTMLElement {
     this.sendBtn = this.querySelector(".send-btn");
 
     this.ta.addEventListener("input", () => {
-      store.state.draft = this.ta.value;
+      store.setDraft(this.ta.value);
       void this.syncCommands();
     });
     this.attachBtn.addEventListener("click", () => this.imageInput.click());
@@ -744,7 +745,7 @@ class PiComposer extends HTMLElement {
     if (!command) return;
     if (!this.ta.value.startsWith("/")) return;
     this.ta.value = `/${command.name} `;
-    store.state.draft = this.ta.value;
+    store.setDraft(this.ta.value);
     this.closeCommands();
     this.ta.focus();
   }
@@ -810,7 +811,10 @@ class PiComposer extends HTMLElement {
       await refreshState();
       store.state.openTree[id] = true;
       selectSession(projectId, forked.id);
-      if (action === "fork") store.set({ draft: user.text || "" });
+      if (action === "fork") {
+        store.setDraft(user.text || "");
+        store.notify("state");
+      }
       return;
     }
     if (action === "quit") {
@@ -849,7 +853,7 @@ class PiComposer extends HTMLElement {
     this.ta.value = "";
     this.attachments = [];
     this.renderAttachments();
-    store.state.draft = "";
+    store.setDraft("");
     store.set({ commandNotice: null });
     if (text.startsWith("!")) {
       try { await api.bang(id, text.slice(1).trim()); }
@@ -879,18 +883,19 @@ class PiComposer extends HTMLElement {
       if (err.error === "workspace_busy") {
         await refreshState().catch(refreshErr => store.setError(`Could not refresh state: ${refreshErr.message || refreshErr}`));
       } else if (err.error === "checkout_occupied") {
-        store.set({ draft: text, confirm: {
+        store.setDraft(text);
+        store.set({ confirm: {
           type: "bind", id, text, mode, branch: err.suggestedBranch,
           fromBranch: store.project()?.branch || "main", byTitle: err.byTitle || "another session",
         } });
       } else if (err.error === "model_required") {
-        store.set({ draft: text });
+        store.setDraft(text);
         this.ta.value = text;
         this.attachments = images;
         this.renderAttachments();
         store.setError("No model is available. Connect a provider or choose one in Settings.");
       } else {
-        store.set({ draft: text });
+        store.setDraft(text);
         this.ta.value = text;
         this.attachments = images;
         this.renderAttachments();
@@ -906,8 +911,10 @@ class PiComposer extends HTMLElement {
     const lock = store.workspaceBusy(id);
     const compacting = !!t.compacting;
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
-    if (this.ta.value !== store.state.draft && document.activeElement !== this.ta) this.ta.value = store.state.draft;
     const activeId = store.activeKey();
+    const draft = store.draft(activeId);
+    if (activeId !== this.draftSessionId || (this.ta.value !== draft && document.activeElement !== this.ta)) this.ta.value = draft;
+    this.draftSessionId = activeId;
     if (activeId !== this.commandSessionId) {
       this.commandSessionId = null;
       this.commands = [];

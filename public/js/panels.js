@@ -739,7 +739,8 @@ class PiConfirm extends HTMLElement {
       if (c.type === "bind") {
         await api.branch(c.id, c.branch, true);
         await refreshState();
-        store.set({ confirm: null, draft: c.text });
+        store.setDraft(c.text, c.id);
+        store.set({ confirm: null });
         document.querySelector("pi-composer")?.send(c.mode);
         return;
       }
