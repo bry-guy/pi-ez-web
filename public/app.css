@@ -837,3 +837,11 @@ aside.files.file-viewer {
 .settings-section-title { font-size: 10.5px; }
 .settings-select, .settings-inline-input, .repos-root-input { font-size: 12px; }
 .connect-btn { font-size: 13.5px; }
+
+@media (max-width: 760px) {
+  .workspace-settings-link { display: none; }
+  .workspace-scrim { z-index: 100; align-items: stretch; justify-content: stretch; padding: 0; }
+  .workspace-modal { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; display: flex; flex-direction: column; }
+  .workspace-modal-head { flex: 0 0 auto; padding-top: max(16px, env(safe-area-inset-top)); }
+  .workspace-scroll { flex: 1; min-height: 0; max-height: none; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
