@@ -118,10 +118,15 @@ test("removeWorkspace refuses dirty, force removes", () => {
   assert.equal(ws.listWorktrees(repo)["branch/x-1"], undefined);
 });
 
-test("fileTree sorts directories first", () => {
+test("fileTree sorts directories first and keeps full relative paths", () => {
+  fs.mkdirSync(path.join(repo, ".config", "deep"), { recursive: true });
   fs.mkdirSync(path.join(repo, "zdir"), { recursive: true });
+  fs.writeFileSync(path.join(repo, ".config", "deep", "f.txt"), "");
   fs.writeFileSync(path.join(repo, "zdir", "f.txt"), "");
   const tree = ws.fileTree(repo);
-  assert.equal(tree[0].n, "zdir");
+  assert.equal(tree[0].n, ".config");
   assert.ok(tree.some(n => n.n === "a.txt" && !n.c));
+  assert.ok(tree.some(n => n.p === ".config" && n.c?.some(child => child.p === ".config/deep")));
+  assert.equal(tree.some(n => n.n === ".git"), false);
+  assert.equal(tree.some(n => n.n === "node_modules"), false);
 });

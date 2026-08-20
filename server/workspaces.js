@@ -197,17 +197,22 @@ export function findRepos(root, depth = 2) {
   return out;
 }
 
-// File tree for the panel: directories-first, alphabetical, shallow-ish.
-export function fileTree(dir, depth = 4) {
-  const walk = (d, lvl) => {
+// File tree for the panel: directories-first, alphabetical, with stable
+// relative paths for file selection. Git metadata and dependency trees stay
+// hidden; repository dotfiles remain visible because this is a full explorer.
+export function fileTree(dir) {
+  const walk = (d, prefix = "") => {
     let entries;
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return []; }
     return entries
-      .filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
-      .map(e => e.isDirectory()
-        ? { n: e.name, c: lvl < depth ? walk(path.join(d, e.name), lvl + 1) : [] }
-        : { n: e.name })
+      .filter(e => (e.isDirectory() || e.isFile()) && e.name !== ".git" && e.name !== "node_modules")
+      .map(e => {
+        const relative = prefix ? `${prefix}/${e.name}` : e.name;
+        return e.isDirectory()
+          ? { n: e.name, p: relative, c: walk(path.join(d, e.name), relative) }
+          : { n: e.name, p: relative };
+      })
       .sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
   };
-  return walk(dir, 0);
+  return walk(dir);
 }

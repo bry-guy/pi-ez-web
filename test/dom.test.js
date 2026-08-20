@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 2,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity", "file-explorer"],
   mode: "mock",
   defaultModel: "mock/fast",
   defaultThinkingLevel: "xhigh",
@@ -63,6 +63,7 @@ async function boot() {
     Event: dom.window.Event,
     KeyboardEvent: dom.window.KeyboardEvent,
     MouseEvent: dom.window.MouseEvent,
+    CustomEvent: dom.window.CustomEvent,
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     EventSource: class { close() {} },
     marked,
@@ -88,7 +89,21 @@ async function boot() {
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
       if (url === "/api/projects") return json({ id: "p2", sessionId: "s2" });
-      if (url.includes("/api/projects/") && url.endsWith("/files")) return json({ tree: [] });
+      if (url.includes("/api/projects/") && url.includes("/file?")) {
+        const params = new URL(url, "http://pi-web.test").searchParams;
+        const target = params.get("target") || "HEAD";
+        return json({
+          path: "src/app.js", size: 18, binary: false, content: "const answer = 42;\n",
+          highlighted: '<span class="hljs-keyword">const</span> answer = <span class="hljs-number">42</span>;\n',
+          language: "javascript", target, targets: ["HEAD", "main"],
+          diff: { target, targets: ["HEAD", "main"], adds: target === "main" ? 2 : 1, dels: 0, changed: true, binary: false,
+            lines: [{ sign: "", hunk: true, text: "@@ -1 +1,2 @@" }, { sign: "+", text: "const answer = 42;" }] },
+        });
+      }
+      if (url.includes("/api/projects/") && (url.endsWith("/files") || url.includes("/files?"))) return json({ tree: [
+        { n: "src", p: "src", c: [{ n: "app.js", p: "src/app.js" }] },
+        { n: "README.md", p: "README.md" },
+      ] });
       return json({ ok: true });
     },
   });
@@ -249,6 +264,26 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const sessionRow = root.querySelector("[data-id='s1']");
   sessionRow.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   assert.equal(store.state.sessionId, "s1");
+
+  root.querySelector("pi-header [data-act='files']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  root.querySelector("pi-files [data-dir='src']").click();
+  assert.ok(root.querySelector("pi-files .file-row[data-file='src/app.js']"));
+  root.querySelector("pi-files [data-file='src/app.js']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector("pi-files .file-viewer"));
+  assert.ok(root.querySelector(".file-code .hljs-keyword"));
+  assert.match(root.querySelector(".file-diff-body")?.textContent || "", /const answer/);
+  const fileTarget = root.querySelector(".file-target");
+  fileTarget.value = "main";
+  fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.fileTarget, "main");
+  assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /main/);
+  root.querySelector("pi-files [data-act='back']").click();
+  assert.equal(store.state.filePath, null);
+  assert.ok(root.querySelector("pi-files [data-file='README.md']"));
+  root.querySelector("pi-files [data-act='close']").click();
 
   const sidebar = root.querySelector("pi-sidebar");
   sidebar.querySelector("[data-act='collapse']").click();

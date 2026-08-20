@@ -13,6 +13,7 @@ import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
 import { cloneRepository } from "./repositories.js";
+import { readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
@@ -339,8 +340,36 @@ export function buildApi(sup) {
     const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
     if (!p) return err(c, 404, "no_such_project");
     const branch = c.req.query("branch");
-    const dir = branch ? (ws.listWorktrees(p.repoPath)[branch] || p.repoPath) : p.repoPath;
+    const dir = branch ? ws.listWorktrees(p.repoPath)[branch] : p.repoPath;
+    if (!dir) return err(c, 404, "no_such_branch");
     return c.json({ tree: ws.fileTree(dir) });
+  });
+
+  api.get("/projects/:id/file", c => {
+    const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
+    if (!p) return err(c, 404, "no_such_project");
+    const branch = c.req.query("branch");
+    const workspace = branch ? ws.listWorktrees(p.repoPath)[branch] : p.repoPath;
+    if (!workspace) return err(c, 404, "no_such_branch");
+    try {
+      return c.json(readFileView({
+        workspace,
+        repoPath: p.repoPath,
+        path: c.req.query("path"),
+        target: c.req.query("target") || "HEAD",
+      }));
+    } catch (e) {
+      const statuses = {
+        invalid_file_path: 400,
+        file_is_directory: 400,
+        file_unsupported: 400,
+        file_not_found: 404,
+        invalid_diff_target: 400,
+        file_too_large: 413,
+      };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      throw e;
+    }
   });
 
   // ---------- session ops ----------

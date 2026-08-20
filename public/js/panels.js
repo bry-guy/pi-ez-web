@@ -360,37 +360,138 @@ class PiSettings extends HTMLElement {
 /* ---------------- file panel ---------------- */
 class PiFiles extends HTMLElement {
   connectedCallback() {
-    this.unsub = store.subscribe(w => { if (w === "state" || w === "files") this.render(); });
+    this.requestId = 0;
+    this.unsub = store.subscribe(w => {
+      if (["state", "files", "file"].includes(w)) this.render();
+    });
     this.addEventListener("click", e => {
-      if (e.target.closest("[data-act='close']")) { store.set({ filesOpen: false }); return; }
-      const row = e.target.closest("[data-dir]");
-      if (row) { store.state.openDirs[row.dataset.dir] = !store.state.openDirs[row.dataset.dir]; this.render(); }
+      if (e.target.closest("[data-act='close']")) { this.close(); return; }
+      if (e.target.closest("[data-act='back']")) { this.back(); return; }
+      const dir = e.target.closest("[data-dir]");
+      if (dir) {
+        store.state.openDirs[dir.dataset.dir] = !store.state.openDirs[dir.dataset.dir];
+        this.render();
+        return;
+      }
+      const file = e.target.closest("[data-file]");
+      if (file) void this.openFile(file.dataset.file);
+    });
+    this.addEventListener("change", e => {
+      if (e.target.matches(".file-target") && store.state.filePath) void this.openFile(store.state.filePath, e.target.value);
     });
     this.addEventListener("keydown", e => {
-      if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-dir]")) {
-        e.preventDefault(); e.target.closest("[data-dir]").click();
-      }
+      if ((e.key !== "Enter" && e.key !== " ") || e.target.matches("button,select")) return;
+      const target = e.target.closest("[data-dir], [data-file]");
+      if (!target) return;
+      e.preventDefault();
+      target.click();
     });
     this.render();
   }
   disconnectedCallback() { this.unsub?.(); }
 
+  currentBranch() {
+    const project = store.project();
+    const node = store.findSession(store.state.sessionId);
+    return node?.branch || project?.branch || null;
+  }
+
+  availableTargets() {
+    return ["HEAD", ...((store.project()?.branches || []).includes("main") ? ["main"] : [])];
+  }
+
+  async openFile(filePath, target = store.state.fileTarget || "HEAD") {
+    const projectId = store.state.projectId;
+    const branch = this.currentBranch();
+    if (!projectId || !branch || !filePath) return;
+    if (!this.availableTargets().includes(target)) target = "HEAD";
+    const requestId = ++this.requestId;
+    store.set({ filePath, fileView: null, fileTarget: target, fileLoading: true, fileError: null });
+    try {
+      const view = await api.file(projectId, branch, filePath, target);
+      if (requestId !== this.requestId || store.state.filePath !== filePath) return;
+      store.set({ fileView: view, fileTarget: view.target, fileLoading: false, fileError: null });
+    } catch (err) {
+      if (requestId !== this.requestId || store.state.filePath !== filePath) return;
+      store.set({ fileLoading: false, fileError: `Could not load file: ${err.error || err.message || err}` });
+    }
+  }
+
+  back() {
+    this.requestId++;
+    store.set({ filePath: null, fileView: null, fileLoading: false, fileError: null });
+  }
+
+  close() {
+    this.requestId++;
+    store.set({ filesOpen: false, filePath: null, fileView: null, fileLoading: false, fileError: null });
+  }
+
   rows(nodes, depth, prefix, out) {
     const sorted = nodes.slice().sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
     for (const n of sorted) {
-      const path = prefix + "/" + n.n;
-      const dir = !!n.c;
-      const open = !!store.state.openDirs[path];
-      out.push(`<div class="file-row ${dir ? "dir" : ""}" ${dir ? `role="button" tabindex="0" aria-expanded="${open}" data-dir="${esc(path)}"` : ""} style="margin-left:${depth * 13}px">
+      const filePath = n.p || (prefix ? `${prefix}/${n.n}` : n.n);
+      const dir = Array.isArray(n.c);
+      const open = !!store.state.openDirs[filePath];
+      const attrs = dir
+        ? `role="button" tabindex="0" aria-expanded="${open}" data-dir="${esc(filePath)}"`
+        : `role="button" tabindex="0" aria-label="Open ${esc(filePath)}" data-file="${esc(filePath)}"`;
+      out.push(`<div class="file-row ${dir ? "dir" : "file"}" ${attrs} style="margin-left:${depth * 13}px">
         <span class="fcaret">${dir ? (open ? "▾" : "▸") : "·"}</span>
         <span class="fname">${esc(n.n)}</span>
       </div>`);
-      if (dir && open) this.rows(n.c, depth + 1, path, out);
+      if (dir && open) this.rows(n.c, depth + 1, filePath, out);
     }
+  }
+
+  safeHighlighted(value) {
+    if (!value) return "";
+    return globalThis.DOMPurify?.sanitize(value) || esc(value);
+  }
+
+  renderDiff(diff, target) {
+    if (diff?.binary) return `<div class="file-empty">Binary diff preview unavailable.</div>`;
+    if (!diff?.changed) return `<div class="file-empty">No changes against ${esc(target)}.</div>`;
+    const lines = (diff.lines || []).map(line => {
+      const cls = line.hunk ? "hunk" : line.sign === "+" ? "add" : line.sign === "-" ? "del" : "";
+      return `<div class="diff-line ${cls}"><span class="sign">${esc(line.sign || "")}</span>${esc(line.text)}</div>`;
+    }).join("");
+    const stats = `${diff.adds ? `+${diff.adds}` : ""}${diff.dels ? ` −${diff.dels}` : ""}`;
+    return `<div class="file-diff-meta">${esc(target)} ${stats ? `· ${esc(stats)}` : "· textual metadata change"}</div>
+      <div class="diff-body file-diff-body">${lines || `<div class="file-empty">No textual changes.</div>`}</div>`;
+  }
+
+  renderViewer() {
+    const s = store.state;
+    const view = s.fileView;
+    const targets = view?.targets || this.availableTargets();
+    const selectedTarget = targets.includes(s.fileTarget) ? s.fileTarget : targets[0];
+    if (s.fileTarget !== selectedTarget) s.fileTarget = selectedTarget;
+    const options = [...new Set(targets)].map(target => `<option value="${esc(target)}" ${target === selectedTarget ? "selected" : ""}>${esc(target)}</option>`).join("");
+    const content = view?.binary
+      ? `<div class="file-empty">Binary file preview unavailable.</div>`
+      : view
+        ? `<pre class="file-code"><code class="hljs${view.language ? ` language-${esc(view.language)}` : ""}">${view.highlighted ? this.safeHighlighted(view.highlighted) : esc(view.content || "")}</code></pre>`
+        : `<div class="file-empty">${s.fileLoading ? "Loading file…" : "Select a file to preview it."}</div>`;
+    const diff = view ? this.renderDiff(view.diff, view.target || s.fileTarget) : "";
+    this.innerHTML = `<aside class="files file-viewer">
+      <div class="files-head file-viewer-head">
+        <button class="ghost-btn file-back" data-act="back" title="Back to files" aria-label="Back to files">←</button>
+        <div class="file-title-wrap"><div class="sec-label">File</div><div class="file-path" title="${esc(s.filePath || "")}">${esc(s.filePath || "")}</div></div>
+        <button class="ghost-btn" data-act="close" title="Close files">×</button>
+      </div>
+      ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
+      <div class="file-view-scroll">
+        <div class="file-target-row"><label for="file-target">Diff target</label><select id="file-target" class="file-target">${options}</select></div>
+        <section class="file-section"><div class="file-section-head"><span>Current file</span>${view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : ""}</div>${content}</section>
+        ${view ? `<section class="file-section"><div class="file-section-head"><span>Diff</span></div>${diff}</section>` : ""}
+      </div>
+    </aside>`;
   }
 
   render() {
     if (!(store.inProject() && store.state.filesOpen)) { this.innerHTML = ""; return; }
+    if (store.state.filePath) { this.renderViewer(); return; }
     const out = [];
     this.rows(store.state.files, 0, "", out);
     this.innerHTML = `<aside class="files">
@@ -829,7 +930,7 @@ class PiApp extends HTMLElement {
     });
     this.addEventListener("toggle-files", () => {
       const open = !store.state.filesOpen;
-      store.set({ filesOpen: open, fileError: null });
+      store.set({ filesOpen: open, fileError: null, filePath: null, fileView: null, fileLoading: false });
       if (!open) return;
       this.ensureFiles(true);
     });
@@ -853,9 +954,19 @@ class PiApp extends HTMLElement {
   async ensureFiles(force = false) {
     if (!(store.inProject() && store.state.filesOpen)) return;
     const key = this.filesKey();
-    if (!key || (!force && (key === this.loadedFilesKey || key === this.loadingFilesKey))) return;
+    if (!key) return;
+    if (this.activeFilesKey && this.activeFilesKey !== key) {
+      store.state.filePath = null;
+      store.state.fileView = null;
+      store.state.fileTarget = "HEAD";
+      store.state.fileLoading = false;
+      store.notify("file");
+    }
+    this.activeFilesKey = key;
+    if (!force && (key === store.state.filesLoadedKey || key === this.loadingFilesKey)) return;
     this.loadingFilesKey = key;
     store.state.files = [];
+    store.state.filesLoadedKey = null;
     store.state.fileError = null;
     store.notify("files");
     const node = store.findSession(store.state.sessionId);
@@ -863,7 +974,7 @@ class PiApp extends HTMLElement {
       const { tree } = await api.files(store.state.projectId, node?.branch);
       if (this.filesKey() === key) {
         store.state.files = tree;
-        this.loadedFilesKey = key;
+        store.state.filesLoadedKey = key;
         store.notify("files");
       }
     } catch (err) {

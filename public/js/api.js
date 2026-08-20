@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 2;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "pi-resources", "extension-activity", "file-explorer"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -68,6 +68,11 @@ export const api = {
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
   files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
+  file: (projectId, branch, filePath, target = "HEAD") => {
+    const params = new URLSearchParams({ path: filePath, target });
+    if (branch) params.set("branch", branch);
+    return fetch(`/api/projects/${encodeURIComponent(projectId)}/file?${params}`).then(j);
+  },
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
   message: (id, text, mode = "prompt", images = [], clientMessageId = null) => fetch(`/api/sessions/${id}/message`, {
@@ -415,22 +420,23 @@ export function applyEvent(evt, replay = false) {
     case "session_closed": {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
+      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "HEAD", fileLoading: false, filesLoadedKey: null };
       refreshState().then(() => {
         const s = store.state;
         if (wasChat) {
-          store.set({ chatId: null, branchMenuOpen: false });
+          store.set({ ...fileReset, chatId: null, filesOpen: false, branchMenuOpen: false });
           return;
         }
         if (!wasSession) return;
         const p = s.projects.find(x => x.id === s.projectId);
         if (p?.sessions[0]) {
-          store.set({ view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, branchMenuOpen: false, files: [], fileError: null, model: p.sessions[0].model || s.effectiveDefaultModel || null });
+          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, branchMenuOpen: false, model: p.sessions[0].model || s.effectiveDefaultModel || null });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
-          store.set({ view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, branchMenuOpen: false, filesOpen: false });
+          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, branchMenuOpen: false, filesOpen: false });
           openTranscript(s.chats[0].id);
         } else {
-          store.set({ sessionId: null, chatId: null, branchMenuOpen: false, filesOpen: false });
+          store.set({ ...fileReset, sessionId: null, chatId: null, branchMenuOpen: false, filesOpen: false });
         }
       }).catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;

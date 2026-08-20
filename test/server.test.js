@@ -434,6 +434,55 @@ test("branch create re-homes the session to a new worktree", async () => {
   assert.equal(p.occupied.main, undefined); // main is free again
 });
 
+test("file explorer returns current content and HEAD/main diffs safely", async () => {
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(x => x.id === projectId);
+  const workspace = project.sessions.find(session => session.id === firstSessionId).workspacePath;
+  const baseCommit = git(workspace, "rev-parse", "HEAD").trim();
+  const featureFile = path.join(workspace, "feature.js");
+  const untrackedFile = path.join(workspace, "scratch.txt");
+  const binaryFile = path.join(workspace, "image.bin");
+  fs.writeFileSync(featureFile, "const value = 1;\n");
+  fs.writeFileSync(untrackedFile, "scratch\n");
+  fs.writeFileSync(binaryFile, Buffer.from([0, 1, 2, 3]));
+  try {
+    const tree = await (await get(`/api/projects/${projectId}/files?branch=feat%2Fjson`)).json();
+    assert.ok(tree.tree.some(node => node.p === "feature.js"));
+
+    const current = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=HEAD`)).json();
+    assert.equal(current.content, "const value = 1;\n");
+    assert.equal(current.target, "HEAD");
+    assert.equal(current.diff.changed, true);
+    assert.equal(current.diff.adds, 1);
+    assert.match(current.highlighted, /hljs/);
+
+    const traversal = await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=..%2Fpackage.json&target=HEAD`);
+    assert.equal(traversal.status, 400);
+    assert.equal((await traversal.json()).error, "invalid_file_path");
+    const gitConfig = await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=.git%2Fconfig&target=HEAD`);
+    assert.equal(gitConfig.status, 400);
+    assert.equal((await gitConfig.json()).error, "invalid_file_path");
+
+    const binary = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=image.bin&target=HEAD`)).json();
+    assert.equal(binary.binary, true);
+    assert.equal(binary.diff.binary, true);
+    assert.equal(binary.diff.changed, true);
+
+    git(workspace, "add", "feature.js");
+    git(workspace, "commit", "-m", "temporary feature file");
+    const cleanHead = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=HEAD`)).json();
+    assert.equal(cleanHead.diff.changed, false);
+    const mainDiff = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=main`)).json();
+    assert.equal(mainDiff.target, "main");
+    assert.equal(mainDiff.diff.changed, true);
+    assert.equal(mainDiff.diff.adds, 1);
+  } finally {
+    fs.rmSync(untrackedFile, { force: true });
+    fs.rmSync(binaryFile, { force: true });
+    git(workspace, "reset", "--hard", baseCommit);
+  }
+});
+
 test("remote branch selection creates from the fetched ref", async () => {
   git(repo, "update-ref", "refs/remotes/origin/feature/remote-ui", "HEAD");
   const state = await (await get("/api/state")).json();

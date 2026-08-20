@@ -11,7 +11,7 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   const pkg = readJson("package.json");
   const lock = readJson("package-lock.json");
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
-  const runtimeDependencies = ["@earendil-works/pi-coding-agent", "dompurify", "marked"];
+  const runtimeDependencies = ["@earendil-works/pi-coding-agent", "dompurify", "highlight.js", "marked"];
 
   for (const dependency of runtimeDependencies) {
     assert.ok(pkg.dependencies[dependency], `${dependency} must be a production dependency`);

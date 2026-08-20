@@ -84,6 +84,11 @@ export const store = {
     hookResult: null,        // last configured project hook result
     fatalError: null,        // unrecoverable wire-contract error
     fileError: null,
+    filePath: null,
+    fileView: null,
+    fileTarget: "HEAD",
+    fileLoading: false,
+    filesLoadedKey: null,
     // server data
     projects: [],
     chats: [],

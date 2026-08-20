@@ -27,7 +27,8 @@ export function selectSession(projectId, sessionId) {
   const node = findNode(project?.sessions, sessionId);
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
-    filesOpen: store.state.filesOpen, files: [], fileError: null, hookResult: null,
+    filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
+    fileTarget: "HEAD", fileLoading: false, filesLoadedKey: null, hookResult: null,
     branchMenuOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
@@ -38,7 +39,8 @@ export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
-    branchMenuOpen: false, filesOpen: false, files: [], fileError: null, hookResult: null,
+    branchMenuOpen: false, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
+    fileTarget: "HEAD", fileLoading: false, filesLoadedKey: null, hookResult: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "chat", id: chatId });
