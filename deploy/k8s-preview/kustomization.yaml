@@ -11,4 +11,4 @@ resources:
 images:
   - name: ghcr.io/bry-guy/pi-ez-web
     newName: ghcr.io/bry-guy/pi-ez-web
-    digest: sha256:242a655da71de8906de88114e4994c9e4a4ee9f747bc35a0d5f2373d709d7a6b
+    digest: sha256:af5866e139a1cfb73a12b36295a1bd971468d41714015da7f2817a98c0d70e58
