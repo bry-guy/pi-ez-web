@@ -297,6 +297,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-files [data-dir='src']").click();
   assert.ok(root.querySelector("pi-files [data-file='src/untouched.js']"));
   assert.ok(root.querySelector("pi-files .file-row.status-modified[data-file='src/app.js']"));
+  const treeScroll = root.querySelector(".files-scroll");
+  treeScroll.scrollTop = 37;
+  treeScroll.dispatchEvent(new dom.window.Event("scroll", { bubbles: true }));
   root.querySelector("pi-files [data-file='src/app.js']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files .file-viewer"));
@@ -309,6 +312,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-files .file-viewer [data-act='close']").click();
   assert.equal(store.state.filePath, null);
   assert.ok(root.querySelector("pi-files .files:not(.file-viewer)"));
+  assert.equal(root.querySelector(".files-scroll").scrollTop, 37);
   fileTarget = root.querySelector(".file-target");
   fileTarget.value = "none";
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -318,6 +322,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector(".file-code .hljs-keyword"));
   assert.equal(root.querySelector(".file-diff-body"), null);
+  const viewerScroll = root.querySelector(".file-view-scroll");
+  viewerScroll.scrollTop = 73;
+  viewerScroll.dispatchEvent(new dom.window.Event("scroll", { bubbles: true }));
+  assert.equal(viewerScroll.scrollTop, 73);
+  root.querySelector("pi-files .file-viewer [data-act='close']").click();
+  root.querySelector("pi-files [data-file='src/app.js']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(root.querySelector(".file-view-scroll").scrollTop, 73);
   root.querySelector("pi-files .file-viewer [data-act='close']").click();
   root.querySelector("pi-files [data-act='close']").click();
 

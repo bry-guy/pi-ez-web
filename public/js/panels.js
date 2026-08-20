@@ -361,6 +361,8 @@ class PiSettings extends HTMLElement {
 class PiFiles extends HTMLElement {
   connectedCallback() {
     this.requestId = 0;
+    this.treeScroll = new Map();
+    this.viewerScroll = new Map();
     this.unsub = store.subscribe(w => {
       if (["state", "files", "file"].includes(w)) this.render();
     });
@@ -378,6 +380,10 @@ class PiFiles extends HTMLElement {
     this.addEventListener("change", e => {
       if (e.target.matches(".file-target")) this.changeTarget(e.target.value);
     });
+    this.addEventListener("scroll", e => {
+      if (e.target.matches(".files-scroll")) this.treeScroll.set(this.treeScrollKey(), e.target.scrollTop);
+      else if (e.target.matches(".file-view-scroll") && store.state.filePath) this.viewerScroll.set(this.viewerScrollKey(), e.target.scrollTop);
+    }, true);
     this.addEventListener("keydown", e => {
       if ((e.key !== "Enter" && e.key !== " ") || e.target.matches("button,select")) return;
       const target = e.target.closest("[data-dir], [data-file]");
@@ -393,6 +399,30 @@ class PiFiles extends HTMLElement {
     const project = store.project();
     const node = store.findSession(store.state.sessionId);
     return node?.branch || project?.branch || null;
+  }
+
+  treeScrollKey() {
+    const project = store.project();
+    const node = store.findSession(store.state.sessionId);
+    return `${project?.id || ""}:${node?.workspacePath || node?.branch || project?.branch || ""}`;
+  }
+
+  viewerScrollKey() {
+    return `${this.treeScrollKey()}:${store.state.fileTarget}:${store.state.filePath || ""}`;
+  }
+
+  captureScroll() {
+    const tree = this.querySelector(".files-scroll");
+    if (tree) this.treeScroll.set(this.treeScrollKey(), tree.scrollTop);
+    const viewer = this.querySelector(".file-view-scroll");
+    if (viewer && store.state.filePath) this.viewerScroll.set(this.viewerScrollKey(), viewer.scrollTop);
+  }
+
+  restoreScroll() {
+    const tree = this.querySelector(".files-scroll");
+    if (tree) tree.scrollTop = this.treeScroll.get(this.treeScrollKey()) ?? 0;
+    const viewer = this.querySelector(".file-view-scroll");
+    if (viewer && store.state.filePath) viewer.scrollTop = this.viewerScroll.get(this.viewerScrollKey()) ?? 0;
   }
 
   availableTargets() {
@@ -506,8 +536,13 @@ class PiFiles extends HTMLElement {
   }
 
   render() {
+    this.captureScroll();
     if (!(store.inProject() && store.state.filesOpen)) { this.innerHTML = ""; return; }
-    if (store.state.filePath) { this.renderViewer(); return; }
+    if (store.state.filePath) {
+      this.renderViewer();
+      this.restoreScroll();
+      return;
+    }
     const out = [];
     this.rows(store.state.files, 0, "", out);
     const targets = this.availableTargets();
@@ -522,6 +557,7 @@ class PiFiles extends HTMLElement {
       ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
       <div class="files-scroll">${out.join("")}</div>
     </aside>`;
+    this.restoreScroll();
   }
 }
 
