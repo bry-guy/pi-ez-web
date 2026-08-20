@@ -515,7 +515,7 @@ class PiFiles extends HTMLElement {
         <div class="sec-label">Files</div>
         <button class="ghost-btn" data-act="close" title="Collapse">×</button>
       </div>
-      <div class="file-target-row file-tree-target"><label for="file-target">Diff</label><select id="file-target" class="file-target">${this.targetOptions(selectedTarget)}</select></div>
+      <div class="file-target-row file-tree-target" role="group" aria-label="Diff target"><label for="file-target">Diff target</label><select id="file-target" class="file-target" aria-label="Diff target">${this.targetOptions(selectedTarget)}</select></div>
       ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
       <div class="files-scroll">${out.join("")}</div>
     </aside>`;

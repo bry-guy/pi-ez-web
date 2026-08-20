@@ -278,6 +278,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-header [data-act='files']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   let fileTarget = root.querySelector(".file-target");
+  assert.ok(root.querySelector(".file-tree-target"));
+  assert.equal(fileTarget.getAttribute("aria-label"), "Diff target");
   assert.equal(fileTarget.value, "none");
   assert.match(fileTarget.selectedOptions[0].textContent, /No diff/);
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));
