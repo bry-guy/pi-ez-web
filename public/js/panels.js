@@ -377,7 +377,7 @@ class PiFiles extends HTMLElement {
       if (file) void this.openFile(file.dataset.file);
     });
     this.addEventListener("change", e => {
-      if (e.target.matches(".file-target") && store.state.filePath) void this.openFile(store.state.filePath, e.target.value);
+      if (e.target.matches(".file-target")) this.changeTarget(e.target.value);
     });
     this.addEventListener("keydown", e => {
       if ((e.key !== "Enter" && e.key !== " ") || e.target.matches("button,select")) return;
@@ -397,20 +397,37 @@ class PiFiles extends HTMLElement {
   }
 
   availableTargets() {
-    return ["HEAD", ...((store.project()?.branches || []).includes("main") ? ["main"] : [])];
+    const targets = store.state.fileTargets;
+    return Array.isArray(targets) && targets.length
+      ? targets
+      : ["none", "HEAD", ...((store.project()?.branches || []).includes("main") ? ["main"] : [])];
   }
 
-  async openFile(filePath, target = store.state.fileTarget || "HEAD") {
+  targetLabel(target) {
+    return target === "none" ? "No diff" : target;
+  }
+
+  targetOptions(selected = store.state.fileTarget) {
+    return [...new Set(this.availableTargets())].map(target => `<option value="${esc(target)}" ${target === selected ? "selected" : ""}>${esc(this.targetLabel(target))}</option>`).join("");
+  }
+
+  changeTarget(target) {
+    if (!this.availableTargets().includes(target) || target === store.state.fileTarget) return;
+    this.requestId++;
+    store.set({ fileTarget: target, files: [], filesLoadedKey: null, filePath: null, fileView: null, fileLoading: false, fileError: null });
+  }
+
+  async openFile(filePath, target = store.state.fileTarget || "none") {
     const projectId = store.state.projectId;
     const branch = this.currentBranch();
     if (!projectId || !branch || !filePath) return;
-    if (!this.availableTargets().includes(target)) target = "HEAD";
+    if (!this.availableTargets().includes(target)) target = "none";
     const requestId = ++this.requestId;
     store.set({ filePath, fileView: null, fileTarget: target, fileLoading: true, fileError: null });
     try {
       const view = await api.file(projectId, branch, filePath, target);
       if (requestId !== this.requestId || store.state.filePath !== filePath) return;
-      store.set({ fileView: view, fileTarget: view.target, fileLoading: false, fileError: null });
+      store.set({ fileView: view, fileTargets: view.targets || store.state.fileTargets, fileTarget: view.target, fileLoading: false, fileError: null });
     } catch (err) {
       if (requestId !== this.requestId || store.state.filePath !== filePath) return;
       store.set({ fileLoading: false, fileError: `Could not load file: ${err.error || err.message || err}` });
@@ -432,11 +449,15 @@ class PiFiles extends HTMLElement {
     for (const n of sorted) {
       const filePath = n.p || (prefix ? `${prefix}/${n.n}` : n.n);
       const dir = Array.isArray(n.c);
+      const removed = n.s === "removed";
       const open = !!store.state.openDirs[filePath];
       const attrs = dir
         ? `role="button" tabindex="0" aria-expanded="${open}" data-dir="${esc(filePath)}"`
-        : `role="button" tabindex="0" aria-label="Open ${esc(filePath)}" data-file="${esc(filePath)}"`;
-      out.push(`<div class="file-row ${dir ? "dir" : "file"}" ${attrs} style="margin-left:${depth * 13}px">
+        : removed
+          ? `aria-label="Removed ${esc(filePath)}" aria-disabled="true"`
+          : `role="button" tabindex="0" aria-label="Open ${esc(filePath)}" data-file="${esc(filePath)}"`;
+      const statusClass = n.s ? ` status-${esc(n.s)}` : "";
+      out.push(`<div class="file-row ${dir ? "dir" : "file"}${statusClass}" ${attrs} style="margin-left:${depth * 13}px">
         <span class="fcaret">${dir ? (open ? "▾" : "▸") : "·"}</span>
         <span class="fname">${esc(n.n)}</span>
       </div>`);
@@ -464,10 +485,6 @@ class PiFiles extends HTMLElement {
   renderViewer() {
     const s = store.state;
     const view = s.fileView;
-    const targets = view?.targets || this.availableTargets();
-    const selectedTarget = targets.includes(s.fileTarget) ? s.fileTarget : targets[0];
-    if (s.fileTarget !== selectedTarget) s.fileTarget = selectedTarget;
-    const options = [...new Set(targets)].map(target => `<option value="${esc(target)}" ${target === selectedTarget ? "selected" : ""}>${esc(target)}</option>`).join("");
     const content = view?.binary
       ? `<div class="file-empty">Binary file preview unavailable.</div>`
       : view
@@ -482,9 +499,8 @@ class PiFiles extends HTMLElement {
       </div>
       ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
       <div class="file-view-scroll">
-        <div class="file-target-row"><label for="file-target">Diff target</label><select id="file-target" class="file-target">${options}</select></div>
         <section class="file-section"><div class="file-section-head"><span>Current file</span>${view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : ""}</div>${content}</section>
-        ${view ? `<section class="file-section"><div class="file-section-head"><span>Diff</span></div>${diff}</section>` : ""}
+        ${view && view.target !== "none" ? `<section class="file-section"><div class="file-section-head"><span>Diff</span></div>${diff}</section>` : ""}
       </div>
     </aside>`;
   }
@@ -494,11 +510,15 @@ class PiFiles extends HTMLElement {
     if (store.state.filePath) { this.renderViewer(); return; }
     const out = [];
     this.rows(store.state.files, 0, "", out);
+    const targets = this.availableTargets();
+    const selectedTarget = targets.includes(store.state.fileTarget) ? store.state.fileTarget : targets[0];
+    if (store.state.fileTarget !== selectedTarget) store.state.fileTarget = selectedTarget;
     this.innerHTML = `<aside class="files">
       <div class="files-head">
         <div class="sec-label">Files</div>
         <button class="ghost-btn" data-act="close" title="Collapse">×</button>
       </div>
+      <div class="file-target-row file-tree-target"><label for="file-target">Diff</label><select id="file-target" class="file-target">${this.targetOptions(selectedTarget)}</select></div>
       ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
       <div class="files-scroll">${out.join("")}</div>
     </aside>`;
@@ -948,7 +968,7 @@ class PiApp extends HTMLElement {
     const p = store.project();
     if (!p || !store.inProject()) return null;
     const node = store.findSession(store.state.sessionId);
-    return `${p.id}:${node?.workspacePath || node?.branch || p.branch || ""}`;
+    return `${p.id}:${node?.workspacePath || node?.branch || p.branch || ""}:${store.state.fileTarget}`;
   }
 
   async ensureFiles(force = false) {
@@ -958,7 +978,6 @@ class PiApp extends HTMLElement {
     if (this.activeFilesKey && this.activeFilesKey !== key) {
       store.state.filePath = null;
       store.state.fileView = null;
-      store.state.fileTarget = "HEAD";
       store.state.fileLoading = false;
       store.notify("file");
     }
@@ -971,9 +990,11 @@ class PiApp extends HTMLElement {
     store.notify("files");
     const node = store.findSession(store.state.sessionId);
     try {
-      const { tree } = await api.files(store.state.projectId, node?.branch);
+      const result = await api.files(store.state.projectId, node?.branch, store.state.fileTarget);
       if (this.filesKey() === key) {
-        store.state.files = tree;
+        store.state.files = result.tree || [];
+        store.state.fileTargets = result.targets || store.state.fileTargets;
+        store.state.fileTarget = result.target || store.state.fileTarget;
         store.state.filesLoadedKey = key;
         store.notify("files");
       }

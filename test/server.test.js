@@ -442,12 +442,36 @@ test("file explorer returns current content and HEAD/main diffs safely", async (
   const featureFile = path.join(workspace, "feature.js");
   const untrackedFile = path.join(workspace, "scratch.txt");
   const binaryFile = path.join(workspace, "image.bin");
+  const changesDir = path.join(workspace, "changes");
+  const removedFile = path.join(changesDir, "removed.txt");
+  const modifiedFile = path.join(changesDir, "modified.txt");
   fs.writeFileSync(featureFile, "const value = 1;\n");
   fs.writeFileSync(untrackedFile, "scratch\n");
   fs.writeFileSync(binaryFile, Buffer.from([0, 1, 2, 3]));
+  fs.mkdirSync(changesDir, { recursive: true });
+  fs.writeFileSync(removedFile, "removed\n");
+  fs.writeFileSync(modifiedFile, "before\n");
+  git(workspace, "add", "changes");
+  git(workspace, "commit", "-m", "temporary diff tree base");
+  fs.rmSync(removedFile);
+  fs.writeFileSync(modifiedFile, "after\n");
   try {
     const tree = await (await get(`/api/projects/${projectId}/files?branch=feat%2Fjson`)).json();
+    assert.equal(tree.target, "none");
+    assert.ok(tree.targets.includes("HEAD"));
     assert.ok(tree.tree.some(node => node.p === "feature.js"));
+    assert.equal(tree.tree.find(node => node.p === "feature.js").s, undefined);
+    const noDiff = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=none`)).json();
+    assert.equal(noDiff.diff, null);
+
+    const diffTree = await (await get(`/api/projects/${projectId}/files?branch=feat%2Fjson&target=HEAD`)).json();
+    const diffNodes = nodes => nodes.flatMap(node => [node, ...(node.c ? diffNodes(node.c) : [])]);
+    const changed = new Map(diffNodes(diffTree.tree).map(node => [node.p, node]));
+    assert.equal(diffTree.target, "HEAD");
+    assert.equal(changed.get("feature.js").s, "new");
+    assert.equal(changed.get("changes/removed.txt").s, "removed");
+    assert.equal(changed.get("changes/modified.txt").s, "modified");
+    assert.equal(changed.get("changes").s, "modified");
 
     const current = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=HEAD`)).json();
     assert.equal(current.content, "const value = 1;\n");
@@ -479,6 +503,7 @@ test("file explorer returns current content and HEAD/main diffs safely", async (
   } finally {
     fs.rmSync(untrackedFile, { force: true });
     fs.rmSync(binaryFile, { force: true });
+    fs.rmSync(changesDir, { recursive: true, force: true });
     git(workspace, "reset", "--hard", baseCommit);
   }
 });

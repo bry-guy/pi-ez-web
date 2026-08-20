@@ -86,7 +86,8 @@ export const store = {
     fileError: null,
     filePath: null,
     fileView: null,
-    fileTarget: "HEAD",
+    fileTarget: "none",
+    fileTargets: ["none", "HEAD"],
     fileLoading: false,
     filesLoadedKey: null,
     // server data

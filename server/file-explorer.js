@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import hljs from "highlight.js/lib/common";
+import { fileTree } from "./workspaces.js";
 
 const MAX_FILE_BYTES = 1 * 1024 * 1024;
 const MAX_HIGHLIGHT_BYTES = 512 * 1024;
+export const NO_DIFF_TARGET = "none";
 
 const LANGUAGE_BY_EXTENSION = {
   bash: "bash", sh: "bash", zsh: "bash",
@@ -94,9 +96,78 @@ function hasRef(repoPath, ref) {
 }
 
 function targetsFor(repoPath) {
-  return hasRef(repoPath, "HEAD")
-    ? ["HEAD", ...(hasRef(repoPath, "refs/heads/main") ? ["main"] : [])]
-    : [];
+  return [NO_DIFF_TARGET, ...(hasRef(repoPath, "HEAD") ? ["HEAD"] : []), ...(hasRef(repoPath, "refs/heads/main") ? ["main"] : [])];
+}
+
+function visiblePath(relative) {
+  const parts = String(relative || "").split("/");
+  return parts.length > 0 && parts.every(part => part && part !== ".git" && part !== "node_modules");
+}
+
+function statusKind(code) {
+  return code === "A" ? "new" : code === "D" ? "removed" : "modified";
+}
+
+function diffStatuses({ workspace, repoPath, target }) {
+  const targets = targetsFor(repoPath);
+  if (!targets.includes(target)) throw coded("invalid_diff_target", `Diff target ${target} is unavailable.`);
+  const statuses = new Map();
+  if (target === NO_DIFF_TARGET) return { targets, statuses };
+
+  const diff = git(workspace, ["diff", "--no-ext-diff", "--no-color", "--name-status", "--no-renames", "-z", target, "--"], { fallback: "" });
+  const fields = diff.split("\0");
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const code = fields[i];
+    const relative = fields[i + 1];
+    if (code && visiblePath(relative)) statuses.set(relative, statusKind(code[0]));
+  }
+
+  const worktree = git(workspace, ["status", "--porcelain=v1", "--untracked-files=all", "-z", "--"], { fallback: "" });
+  for (const record of worktree.split("\0")) {
+    if (record.startsWith("?? ")) {
+      const relative = record.slice(3);
+      if (visiblePath(relative)) statuses.set(relative, "new");
+    }
+  }
+  return { targets, statuses };
+}
+
+function addStatusPath(nodes, relative, status) {
+  const parts = relative.split("/");
+  let current = nodes;
+  let prefix = "";
+  for (let i = 0; i < parts.length; i++) {
+    prefix = prefix ? `${prefix}/${parts[i]}` : parts[i];
+    let node = current.find(item => item.p === prefix);
+    if (!node) {
+      node = { n: parts[i], p: prefix };
+      if (i < parts.length - 1) node.c = [];
+      current.push(node);
+    }
+    if (i === parts.length - 1) node.s = status;
+    current = node.c || [];
+  }
+}
+
+function sortStatusTree(nodes) {
+  for (const node of nodes) {
+    if (!Array.isArray(node.c)) continue;
+    sortStatusTree(node.c);
+    const kinds = new Set(node.c.map(child => child.s));
+    node.s = kinds.size === 1 ? [...kinds][0] : "modified";
+  }
+  return nodes.sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
+}
+
+function statusTree(statuses) {
+  const tree = [];
+  for (const [relative, status] of statuses) addStatusPath(tree, relative, status);
+  return sortStatusTree(tree);
+}
+
+export function readFileTree({ workspace, repoPath, target = NO_DIFF_TARGET }) {
+  const { targets, statuses } = diffStatuses({ workspace, repoPath, target });
+  return { tree: target === NO_DIFF_TARGET ? fileTree(workspace) : statusTree(statuses), target, targets };
 }
 
 function contentLines(content) {
@@ -144,13 +215,14 @@ function parsePatch(patch, target) {
 function diffForFile({ workspace, repoPath, relative, content, binary, target }) {
   const targets = targetsFor(repoPath);
   if (!targets.includes(target)) throw coded("invalid_diff_target", `Diff target ${target} is unavailable.`);
+  if (target === NO_DIFF_TARGET) return null;
   const status = git(workspace, ["status", "--porcelain=v1", "--", relative], { fallback: "" });
   if (status.split("\n").some(line => line.startsWith("?? "))) return { ...untrackedDiff(content, target, binary), targets };
   const patch = git(workspace, ["diff", "--no-ext-diff", "--no-color", "--unified=3", target, "--", relative]);
   return { ...parsePatch(patch, target), targets };
 }
 
-export function readFileView({ workspace, repoPath, path: rawPath, target = "HEAD" }) {
+export function readFileView({ workspace, repoPath, path: rawPath, target = NO_DIFF_TARGET }) {
   const file = resolveFile(workspace, rawPath);
   let bytes;
   try { bytes = fs.readFileSync(file.absolute); } catch { throw coded("file_not_found"); }

@@ -67,8 +67,12 @@ export const api = {
   githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
-  files: (projectId, branch) => fetch(`/api/projects/${projectId}/files${branch ? "?branch=" + encodeURIComponent(branch) : ""}`).then(j),
-  file: (projectId, branch, filePath, target = "HEAD") => {
+  files: (projectId, branch, target = "none") => {
+    const params = new URLSearchParams({ target });
+    if (branch) params.set("branch", branch);
+    return fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params}`).then(j);
+  },
+  file: (projectId, branch, filePath, target = "none") => {
     const params = new URLSearchParams({ path: filePath, target });
     if (branch) params.set("branch", branch);
     return fetch(`/api/projects/${encodeURIComponent(projectId)}/file?${params}`).then(j);
@@ -420,7 +424,7 @@ export function applyEvent(evt, replay = false) {
     case "session_closed": {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
-      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "HEAD", fileLoading: false, filesLoadedKey: null };
+      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null };
       refreshState().then(() => {
         const s = store.state;
         if (wasChat) {

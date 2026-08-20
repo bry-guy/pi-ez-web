@@ -13,7 +13,7 @@ import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
 import { cloneRepository } from "./repositories.js";
-import { readFileView } from "./file-explorer.js";
+import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 
@@ -340,9 +340,18 @@ export function buildApi(sup) {
     const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
     if (!p) return err(c, 404, "no_such_project");
     const branch = c.req.query("branch");
-    const dir = branch ? ws.listWorktrees(p.repoPath)[branch] : p.repoPath;
-    if (!dir) return err(c, 404, "no_such_branch");
-    return c.json({ tree: ws.fileTree(dir) });
+    const workspace = branch ? ws.listWorktrees(p.repoPath)[branch] : p.repoPath;
+    if (!workspace) return err(c, 404, "no_such_branch");
+    try {
+      return c.json(readFileTree({
+        workspace,
+        repoPath: p.repoPath,
+        target: c.req.query("target") || NO_DIFF_TARGET,
+      }));
+    } catch (e) {
+      if (e.code === "invalid_diff_target") return err(c, 400, e.code, { message: e.message });
+      throw e;
+    }
   });
 
   api.get("/projects/:id/file", c => {
@@ -356,7 +365,7 @@ export function buildApi(sup) {
         workspace,
         repoPath: p.repoPath,
         path: c.req.query("path"),
-        target: c.req.query("target") || "HEAD",
+        target: c.req.query("target") || NO_DIFF_TARGET,
       }));
     } catch (e) {
       const statuses = {
