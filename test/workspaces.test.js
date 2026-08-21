@@ -40,7 +40,7 @@ test("remote branch listing preserves remote names and supports local mapping", 
 
 test("worktree status reports checkout state and pull surfaces Git failures", () => {
   assert.deepEqual(ws.workspaceStatus({ repoPath: repo, branch: "main", workspacePath: repo }), {
-    branch: "main", path: repo, kind: "checkout", dirty: false, upstream: null, ahead: 0, behind: 0,
+    branch: "main", path: repo, kind: "checkout", dirty: false, upstream: null, ahead: 0, behind: 0, externalMain: false, protected: false,
   });
   assert.throws(() => ws.pullWorkspace(repo), error => error?.code === "git_pull_failed");
 });
@@ -57,6 +57,24 @@ test("ensureWorkspace creates a worktree for a new branch without touching the c
   assert.equal(ws.listWorktrees(repo)["feat/x"], wt);
   // idempotent
   assert.equal(ws.ensureWorkspace({ repoPath: repo, worktreeRoot: wtRoot, projectId: "p1", branch: "feat/x" }), wt);
+});
+
+test("main is checkout-only and external main worktrees are protected", () => {
+  assert.throws(() => ws.ensureWorkspace({ repoPath: repo, worktreeRoot: wtRoot, projectId: "p1", branch: "main" }), err => err?.code === "main_worktree_forbidden");
+  assert.throws(() => ws.forkWorkspace({
+    repoPath: repo, worktreeRoot: wtRoot, projectId: "p1", parentWorkspace: ws.listWorktrees(repo)["feat/x"], parentBranch: "feat/x",
+    existingBranches: ws.listBranches(repo), branch: "main",
+  }), err => err?.code === "main_worktree_forbidden");
+
+  git(repo, "switch", "-c", "checkout-away");
+  const external = path.join(tmp, "external-main");
+  git(repo, "worktree", "add", external, "main");
+  assert.equal(ws.workspaceStatus({ repoPath: repo, branch: "main", workspacePath: external }).externalMain, true);
+  assert.throws(() => ws.removeWorkspace({ repoPath: repo, workspacePath: external, force: true }), err => err?.code === "main_worktree_external");
+  assert.throws(() => ws.switchWorkspace({ repoPath: repo, workspacePath: ws.listWorktrees(repo)["feat/x"], branch: "main" }), err => err?.code === "main_worktree_forbidden");
+  git(repo, "worktree", "remove", external);
+  git(repo, "switch", "main");
+  git(repo, "branch", "-D", "checkout-away");
 });
 
 test("git refuses the same branch in two worktrees (the invariant we lean on)", () => {

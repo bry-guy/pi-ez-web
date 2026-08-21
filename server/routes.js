@@ -7,7 +7,7 @@ import {
   chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, sessionsUsingWorkspace } from "./domain.js";
-import { closeSession, findProjectByWorkspace, mergeSession } from "./lifecycle.js";
+import { closeSession, findProjectByWorkspace, mergeSession, returnSessionToMain } from "./lifecycle.js";
 import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
@@ -522,6 +522,7 @@ export function buildApi(sup) {
     if (!branch && remoteSource) branch = ws.localBranchForRemote(remoteSource);
     if (!branch && !fork) branch = await suggestedWorktreeBranch(project.repoPath, id, sup);
     if (!branch && remoteSource) return err(c, 400, "bad_branch");
+    if (branch === ws.MAIN_BRANCH) return err(c, 409, "main_worktree_forbidden");
     const existingTarget = branch ? ws.listWorktrees(project.repoPath)[branch] || null : null;
     if (!fork && existingTarget && path.resolve(existingTarget) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: existingTarget, setup: null });
     if (remoteSource && branch && localBranches.includes(branch)) return err(c, 409, "branch_exists");
@@ -541,6 +542,7 @@ export function buildApi(sup) {
       } catch (e) {
         if (e.code === "checkout_dirty") return err(c, 409, "checkout_dirty");
         if (e.code === "branch_exists") return err(c, 409, "branch_exists");
+        if (e.code === "main_worktree_forbidden") return err(c, 409, e.code);
         throw e;
       }
       const setup = projectHooks(cfg, project).setup;
@@ -564,7 +566,7 @@ export function buildApi(sup) {
         projectId: project.id, branch, fromRef: remoteSource || "HEAD",
       });
     } catch (e) {
-      if (e.code === "checkout_branch") return err(c, 409, e.code);
+      if (e.code === "checkout_branch" || e.code === "main_worktree_forbidden") return err(c, 409, e.code);
       throw e;
     }
     if (path.resolve(target) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: target, setup: null });
@@ -593,6 +595,15 @@ export function buildApi(sup) {
     const remoteBranches = ws.listRemoteBranches(project.repoPath);
     if (!branch) return err(c, 400, "bad_branch");
     if (remoteSource && !remoteBranches.includes(remoteSource)) return err(c, 400, "invalid_remote_branch");
+    if (branch === ws.MAIN_BRANCH) {
+      if (remoteSource) return err(c, 409, "main_worktree_forbidden");
+      try { return c.json(await returnSessionToMain(sup, hub, id)); }
+      catch (e) {
+        const codes = { session_streaming: 409, no_project_for_session: 404, checkout_dirty: 409, sessions_active: 409, main_worktree_external: 409, return_rehome_failed: 409, git_switch_failed: 409 };
+        if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail, workspacePath: e.workspacePath } : e.workspacePath ? { workspacePath: e.workspacePath } : {});
+        throw e;
+      }
+    }
     if (remoteSource && localBranches.includes(branch)) return err(c, 409, "branch_exists");
     if (!remoteSource && !localBranches.includes(branch)) return err(c, 404, "no_such_branch");
     const current = ws.currentBranch(cwd);
@@ -603,8 +614,11 @@ export function buildApi(sup) {
     const sessions = await sessionsUsingWorkspace(project, cwd, sup);
     if (sessions.some(session => session.streaming)) return err(c, 409, "sessions_active");
     if (ws.isDirty(cwd)) return err(c, 409, "workspace_dirty");
-    try { ws.switchWorkspace({ workspacePath: cwd, branch, fromRef: remoteSource }); }
-    catch (e) { if (e.code === "git_switch_failed") return err(c, 409, e.code, { detail: e.detail }); throw e; }
+    try { ws.switchWorkspace({ repoPath: project.repoPath, workspacePath: cwd, branch, fromRef: remoteSource }); }
+    catch (e) {
+      if (e.code === "git_switch_failed" || e.code === "main_worktree_forbidden") return err(c, 409, e.code, e.detail ? { detail: e.detail } : {});
+      throw e;
+    }
     const bindings = loadBindings();
     for (const session of sessions) bindings[session.id] = { branch, workspacePath: cwd };
     saveBindings(bindings);
@@ -674,19 +688,20 @@ export function buildApi(sup) {
       await closeSession(sup, hub, id);
     } catch (e) {
       if (e.code === "session_streaming") return err(c, 409, "session_streaming");
+      if (e.code === "main_worktree_external") return err(c, 409, e.code, { workspacePath: e.workspacePath });
       throw e;
     }
     return c.json({ ok: true });
   });
 
-  // Merge: land the session's branch into the checkout's branch, clean up,
-  // re-home the session onto the default branch (it stays open).
+  // Merge: land a non-main worktree branch into the repository checkout on
+  // main, clean up, and re-home every source session (they stay open).
   api.post("/sessions/:id/merge", async c => {
     try {
       return c.json(await mergeSession(sup, hub, c.req.param("id")));
     } catch (e) {
-      const codes = { session_streaming: 409, sessions_active: 409, merge_rehome_failed: 409, no_project_for_session: 404, nothing_to_merge: 400, checkout_dirty: 409, merge_conflict: 409 };
-      if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail } : {});
+      const codes = { session_streaming: 409, sessions_active: 409, merge_rehome_failed: 409, merge_cleanup_failed: 409, main_worktree_external: 409, no_project_for_session: 404, nothing_to_merge: 400, checkout_dirty: 409, merge_conflict: 409, git_switch_failed: 409 };
+      if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail, workspacePath: e.workspacePath } : e.workspacePath ? { workspacePath: e.workspacePath } : {});
       throw e;
     }
   });
@@ -700,10 +715,12 @@ export function buildApi(sup) {
     const wsPath = map[branch];
     if (!wsPath) return err(c, 404, "no_workspace");
     if (wsPath === p.repoPath) return err(c, 400, "cannot_remove_checkout");
+    if (branch === ws.MAIN_BRANCH) return err(c, 409, "main_worktree_external", { workspacePath: wsPath });
     try {
       ws.removeWorkspace({ repoPath: p.repoPath, workspacePath: wsPath, force: c.req.query("force") === "1" });
     } catch (e) {
       if (e.code === "workspace_dirty") return err(c, 409, "workspace_dirty");
+      if (e.code === "main_worktree_external") return err(c, 409, e.code, { workspacePath: wsPath });
       throw e;
     }
     return c.json({ ok: true });

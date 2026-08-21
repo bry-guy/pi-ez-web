@@ -17,7 +17,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main", "develop"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [] } }, hooks: { check: true }, updated: "now",
+    branches: ["main", "develop"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [], externalMain: false, protected: false } }, hooks: { check: true }, updated: "now",
     sessions: [
       { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
       { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
@@ -497,7 +497,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
 
   store.set({ workspaceSettingsOpen: true });
-  assert.equal(root.querySelector(".workspace-modal [data-act='merge']")?.textContent.trim(), "Merge");
+  assert.equal(root.querySelector(".workspace-modal [data-act='merge']")?.textContent.trim(), "Merge to main");
   assert.match(root.querySelector(".workspace-modal")?.textContent || "", /feat\/ship/);
   assert.equal(root.querySelector(".fork-btn"), null);
 

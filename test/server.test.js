@@ -736,6 +736,80 @@ test("switch changes the session workspace branch without creating a worktree", 
   assert.deepEqual(ws.listWorktrees(switchRepo), { main: switchRepo });
 });
 
+test("main stays at the checkout when a session returns from a worktree", async () => {
+  const returnRepo = makeRepo("return-main-repo");
+  git(returnRepo, "branch", "checkout-away");
+  const created = await (await post("/api/projects", { repoPath: returnRepo })).json();
+  const checkoutSession = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  const branchSession = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  await post(`/api/sessions/${branchSession.id}/worktree`, { branch: "feat/return" });
+  const worktree = (await (await get("/api/state")).json()).projects.find(item => item.id === created.id).worktrees["feat/return"];
+
+  const movedCheckout = await post(`/api/sessions/${checkoutSession.id}/switch`, { branch: "checkout-away" });
+  assert.equal(movedCheckout.status, 200);
+  assert.equal(ws.currentBranch(returnRepo), "checkout-away");
+
+  const returned = await post(`/api/sessions/${branchSession.id}/switch`, { branch: "main" });
+  assert.equal(returned.status, 200, await returned.clone().text());
+  assert.equal(ws.currentBranch(returnRepo), "main");
+  assert.equal(ws.listWorktrees(returnRepo).main, returnRepo);
+  assert.equal(ws.listWorktrees(returnRepo)["feat/return"], worktree);
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(item => item.id === created.id);
+  const checkoutNode = project.sessions.find(session => session.id === checkoutSession.id);
+  const returnedNode = project.sessions.find(session => session.id === branchSession.id);
+  assert.equal(checkoutNode.branch, "main");
+  assert.equal(returnedNode.branch, "main");
+  assert.equal(project.workspaceStatus["feat/return"].sessions.length, 0);
+
+  const forbidden = await post(`/api/sessions/${branchSession.id}/worktree`, { branch: "main" });
+  assert.equal(forbidden.status, 409);
+  assert.equal((await forbidden.json()).error, "main_worktree_forbidden");
+});
+
+test("merge always targets main even when the checkout is on another branch", async () => {
+  const mergeRepo = makeRepo("merge-main-repo");
+  git(mergeRepo, "branch", "checkout-away");
+  const created = await (await post("/api/projects", { repoPath: mergeRepo })).json();
+  const checkoutSession = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  const sourceSession = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
+  await post(`/api/sessions/${sourceSession.id}/worktree`, { branch: "feat/merge-main" });
+  const sourcePath = (await (await get("/api/state")).json()).projects.find(item => item.id === created.id).worktrees["feat/merge-main"];
+  fs.writeFileSync(path.join(sourcePath, "merged.txt"), "merged\n");
+  git(sourcePath, "add", "-A"); git(sourcePath, "commit", "-m", "merge main");
+  const movedCheckout = await post(`/api/sessions/${checkoutSession.id}/switch`, { branch: "checkout-away" });
+  assert.equal(movedCheckout.status, 200);
+
+  const merged = await post(`/api/sessions/${sourceSession.id}/merge`);
+  assert.equal(merged.status, 200, await merged.clone().text());
+  assert.equal((await merged.json()).into, "main");
+  assert.equal(ws.currentBranch(mergeRepo), "main");
+  assert.equal(fs.readFileSync(path.join(mergeRepo, "merged.txt"), "utf8"), "merged\n");
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(item => item.id === created.id);
+  assert.equal(project.sessions.find(session => session.id === checkoutSession.id).branch, "main");
+  assert.equal(project.sessions.find(session => session.id === sourceSession.id).branch, "main");
+  assert.equal(project.branches.includes("feat/merge-main"), false);
+});
+
+test("external main worktrees block return without being removed", async () => {
+  const externalRepo = makeRepo("external-main-repo");
+  git(externalRepo, "branch", "checkout-away");
+  const created = await (await post("/api/projects", { repoPath: externalRepo })).json();
+  const externalPath = path.join(tmp, "external-main-worktree");
+  git(externalRepo, "switch", "checkout-away");
+  git(externalRepo, "worktree", "add", externalPath, "main");
+  const blocked = await post(`/api/sessions/${created.sessionId}/switch`, { branch: "main" });
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).error, "main_worktree_external");
+  assert.equal(fs.existsSync(externalPath), true);
+  const closed = await post(`/api/sessions/${created.sessionId}/close`);
+  assert.equal(closed.status, 200);
+  assert.equal(fs.existsSync(externalPath), true);
+  git(externalRepo, "worktree", "remove", externalPath);
+  git(externalRepo, "switch", "main");
+});
+
 test("blank Worktree names use the session slug and avoid collisions", async () => {
   const namedRepo = makeRepo("named-worktree-repo");
   const created = await (await post("/api/projects", { repoPath: namedRepo })).json();

@@ -43,10 +43,11 @@ and skill commands. Pi's built-in slash commands are web-adapted too: model sele
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
 OpenAI API-key login, and the default-model selector. The file tree and
 Workspace settings appear only inside a **project** session — connect a repo first
-(the `+` next to PROJECTS). Workspace settings expose explicit Switch branch, Worktree, Pull, and Merge
-actions, show every session sharing the current workspace, and offer Worktree →
-Open as fork. Switch branch changes the current workspace without creating a
-worktree. Plain chats intentionally have none of those affordances.
+(the `+` next to PROJECTS). Workspace settings expose explicit Switch branch,
+Worktree, Pull, and Merge to main actions, show every session sharing the
+current workspace, and offer Worktree → Open as fork. Switch branch changes a
+non-main workspace in place; Return to main moves a session to the repository
+checkout. Plain chats intentionally have none of those affordances.
 
 ## Install and configure
 
@@ -141,7 +142,9 @@ entries do not need a mode setting. Project hooks are inherited from
 example `"hooks": { "setup": "./script/install", "check": "./script/check" }`.
 The setup hook runs after connecting a repository or creating a worktree and can
 be rerun from Workspace settings. Other configured hooks are manual workspace
-actions. Worktree names are explicit, with an automatic name based on the
+actions. `main` belongs to the repository checkout: Worktree and Fork never
+create a linked `main` worktree, while Return to main moves a session back to
+that checkout. Worktree names are explicit, with an automatic name based on the
 session's first message when the name is left blank. Pi-web's config, bindings,
 chats, and UI state remain under `~/.pi-web-ui`; existing worktrees are
 discovered in place and are not moved. Plain chats use private scratch

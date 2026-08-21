@@ -87,25 +87,26 @@ restart prompt.
 - A project is a configured repository; a workspace is its checkout or a
   worktree; a session is a Pi conversation with a workspace cwd. Git enforces
   one worktree per branch, but multiple sessions may share that worktree.
-- The app never changes the user's checkout branch implicitly. Switch branch,
-  Worktree, Pull, and Merge are explicit Workspace settings actions; Switch
-  branch changes the current workspace without creating a worktree. The title bar shows
-  branch, checkout/worktree type, dirty state, and ahead/behind counts.
-- Worktree → Open as fork creates a child conversation and worktree. Tracked
-  and untracked dirty state transfers to the fork and is restored in the
-  parent. A dirty project checkout is refused before stashing. Blank branch
+- `main` is special: it may only be checked out at the project repository path.
+  The checkout may temporarily use another branch; linked worktrees are never
+  created or switched to `main`. The title bar shows branch, `CHECKOUT` or
+  `WORKTREE`, dirty state, and ahead/behind counts.
+- **Switch branch** changes a non-main workspace in place and moves all
+  sessions sharing it. Selecting `main` from a worktree returns only the
+  requesting session to the repository checkout, switching that checkout to
+  `main` when it is clean and idle. An externally-created `main` worktree is
+  reported and protected rather than removed automatically.
+- Worktree → Open as fork creates a child conversation and non-main worktree.
+  Tracked and untracked dirty state transfers to the fork and is restored in
+  the parent. A dirty project checkout is refused before stashing. Blank branch
   names use a session-based automatic name.
-- Lifecycle is explicit and git-only (PRs deferred). **Merge** stops all
-  sessions sharing the source worktree, merges with `git merge --no-ff`, moves
-  them to the checkout, force-removes the source worktree and branch, and warns
-  that uncommitted source changes will be lost. Checkout changes still block
-  the merge; conflicts abort cleanly and preserve the source worktree.
-  **Close ×** (sidebar): a worktree is removed only when its closing session
-  is the last session using it; otherwise the shared workspace remains. A
-  standalone worktree session is destroyed with its branch and changes lost;
-  checkout sessions and chats are archived, nothing in git touched.
-  Transcripts always survive; stale-session cleanup is explicit rather than
-  timer-driven.
+- Lifecycle is explicit and git-only (PRs deferred). **Merge to main** stops
+  source sessions, returns the checkout to `main`, merges with `git merge
+  --no-ff`, moves all source sessions to the checkout, then removes the source
+  worktree and branch. Checkout changes and active checkout sessions block the
+  merge; conflicts preserve the source worktree. **Close ×** archives a
+  checkout session; a non-main worktree is removed only when its closing
+  session is the last session using it. Transcripts always survive.
 
 ## Verification
 

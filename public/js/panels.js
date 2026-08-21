@@ -903,6 +903,9 @@ class PiConfirm extends HTMLElement {
         checkout_dirty: "the project checkout has uncommitted changes",
         session_streaming: "session is mid-turn — stop it first",
         merge_rehome_failed: "the merge landed, but one session could not be moved; the worktree was kept",
+        merge_cleanup_failed: "the merge landed, but cleanup failed; check Workspace settings for the remaining worktree",
+        main_worktree_external: "main is checked out by another worktree; remove that worktree outside the app first",
+        return_rehome_failed: "main is ready, but this session could not be moved to the checkout",
         sessions_active: "stop the active sessions before merging",
       };
       store.set(s => ({ confirm: { ...s.confirm, error: msgs[err.error] || err.error || "failed" } }));
@@ -913,18 +916,21 @@ class PiConfirm extends HTMLElement {
     const c = store.state.confirm;
     if (!c) { this.innerHTML = ""; return; }
     const p = store.project();
-    const target = p?.branch || "main";
+    const target = "main";
     const isMerge = c.type === "merge";
     const active = (c.sessions || []).filter(session => session.streaming || store.transcript(session.id).streaming);
-    const title = isMerge ? "Merge workspace" : c.kind === "chat" ? "Close chat" : "Close session";
+    const checkoutBranch = p?.branch && p.branch !== target ? ` The checkout will switch from ${esc(p.branch)} to ${target} first.` : "";
+    const title = isMerge ? "Merge to main" : c.kind === "chat" ? "Close chat" : "Close session";
     const body = isMerge
-      ? `Merge ${esc(c.branch)} into ${esc(target)}. All sessions using this workspace will move to ${esc(target)}.`
+      ? `Merge ${esc(c.branch)} into ${target}.${checkoutBranch} All sessions using this worktree will move to the repository checkout on ${target}.`
         + (active.length ? `<div class="confirm-sessions"><strong>Active sessions will be interrupted:</strong>${active.map(session => `<button data-act="navigate-session" data-id="${esc(session.id)}">${esc(session.title)}</button>`).join("")}</div>` : "")
       : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
     const warn = isMerge
       ? `The worktree and branch will be removed. Any uncommitted worktree changes will be lost.`
-      : !isMerge && c.branch && c.branch !== target
-        ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
+      : c.externalMain
+        ? "This is an external main worktree. Closing archives this session but leaves the protected worktree in place."
+        : !isMerge && c.branch && c.branch !== target
+          ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
     const cta = isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
     this.innerHTML = `<div class="confirm-scrim">
       <div class="confirm-modal">

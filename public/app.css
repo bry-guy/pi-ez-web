@@ -200,6 +200,7 @@ header.bar {
   display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px;
   background: var(--surface-2); color: var(--faint); font-size: 9px; letter-spacing: .03em; line-height: 1.35; text-transform: uppercase;
 }
+.workspace-badge.kind { border-color: var(--accent); color: var(--text); }
 .workspace-badge.state { color: var(--orange); }
 .hook-result {
   position: absolute; top: calc(100% - 4px); right: 14px; z-index: 32; width: min(520px, calc(100% - 28px));

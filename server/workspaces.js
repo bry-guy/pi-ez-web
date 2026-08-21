@@ -8,6 +8,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { slug } from "./config.js";
 
+export const MAIN_BRANCH = "main";
+
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -36,14 +38,18 @@ export function workspaceStatus({ repoPath, branch, workspacePath }) {
       ahead = Number.isFinite(counts[1]) ? counts[1] : 0;
     }
   } catch { /* a branch without an upstream has no ahead/behind counts */ }
+  const kind = path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree";
+  const externalMain = branch === MAIN_BRANCH && kind === "worktree";
   return {
     branch,
     path: workspacePath,
-    kind: path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree",
+    kind,
     dirty: isDirty(workspacePath),
     upstream,
     ahead,
     behind,
+    externalMain,
+    protected: externalMain,
   };
 }
 
@@ -61,7 +67,10 @@ export function pullWorkspace(workspacePath) {
   }
 }
 
-export function switchWorkspace({ workspacePath, branch, fromRef = null }) {
+export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = null }) {
+  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+    throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+  }
   const args = ["switch"];
   if (fromRef) args.push("-c", branch, fromRef);
   else args.push(branch);
@@ -162,6 +171,9 @@ function worktreePathFor(root, projectId, branch) {
 // Never touches the user's checkout: if the branch is checked out there,
 // that IS the workspace.
 export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef }) {
+  if (branch === MAIN_BRANCH) {
+    throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+  }
   const existing = listWorktrees(repoPath);
   if (existing[branch]) return existing[branch];
   const wt = worktreePathFor(worktreeRoot, projectId, branch);
@@ -176,6 +188,10 @@ export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fro
 }
 
 export function removeWorkspace({ repoPath, workspacePath, force = false }) {
+  const branch = currentBranch(workspacePath);
+  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+    throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external" });
+  }
   if (!force && isDirty(workspacePath)) {
     const err = new Error("workspace_dirty");
     err.code = "workspace_dirty";
@@ -193,6 +209,7 @@ export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspa
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
   let n = 1, branch = String(requestedBranch || "").trim();
   if (branch) {
+    if (branch === MAIN_BRANCH) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
     if (existingBranches.includes(branch)) throw Object.assign(new Error("branch_exists"), { code: "branch_exists" });
   } else if (forkBranchBase) {
     do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));
