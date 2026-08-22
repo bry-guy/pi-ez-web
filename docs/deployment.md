@@ -13,10 +13,16 @@ docker run --rm -p 3141:3141 pi-ez-web:local
 A real deployment must provide Pi credentials and persistent storage. Keep
 these paths stable across container restarts:
 
-The repository also contains `deploy/k8s-preview`, an ephemeral-state preview
-workload. The infra repository creates an Argo CD Application for a selected
-branch and overrides its GHCR image with that branch commit's immutable tag;
-preview resources are name-prefixed so they do not select the production pod.
+The repository also contains `deploy/k8s-preview`, a frontend-only,
+production-backed preview workload. The infra repository creates an Argo CD
+Application for a selected branch and overrides its GHCR image with that branch
+commit's immutable digest; preview resources are name-prefixed so they do not
+select the production pod. The preview runs with `PI_WEB_UI_ONLY=1`, mounts no
+application state or operator Secret, and serves `/ui-health` for Kubernetes
+probes. The preview origin's `/api/*` requests are routed by the infra-owned
+Caddy configuration to the production Service, while all other paths go to the
+preview UI Service. The old preview PVC/NFS export remains retained as rollback
+state and is not mounted by the new workload.
 
 - `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, cached remote Pi profile, and chat scratch space.
 - `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
@@ -102,9 +108,11 @@ second storage tier unless an acceptance test demonstrates a concrete NFS
 failure.
 
 The `/api/health` endpoint reports the REST contract, capabilities, and
-commit-derived build ID for rollout checks. The browser polls health after SSE
-loss and reloads once a new build is healthy, which supports a single-pod
-GitOps rollout. Before treating this as a highly available service, add
+commit-derived build ID for production rollout checks. UI-only previews use
+`/ui-health` for their static process and receive production health through the
+same-origin `/api/health` route. The browser polls health after SSE loss and
+reloads once a new build is healthy, which supports a single-pod GitOps rollout.
+Before treating this as a highly available service, add
 external session/event coordination and graceful shutdown/drain handling. A
 single persistent pod is the supported deployment shape today; OAuth flow
 state, SSE clients, and workspace locks are in memory.

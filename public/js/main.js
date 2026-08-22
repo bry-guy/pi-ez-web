@@ -7,6 +7,17 @@ import { restoreLastSelection, selectChat, selectSession } from "./shell.js";
 
 let updateReloadRequested = false;
 
+async function loadUiConfig() {
+  try {
+    const response = await fetch("/ui-config.json", { cache: "no-store" });
+    if (!response.ok) return;
+    const config = await response.json();
+    if (config && typeof config === "object" && !Array.isArray(config)) store.set({ uiConfig: config });
+  } catch {
+    // The UI remains compatible with deployments that predate this endpoint.
+  }
+}
+
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
@@ -38,6 +49,7 @@ window.addEventListener("offline", () => store.set({ offline: true, reconnecting
 window.addEventListener("online", resumeConnection);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resumeConnection(); });
 window.addEventListener("pageshow", resumeConnection);
+await loadUiConfig();
 void registerServiceWorker();
 connectSSE();
 try {

@@ -997,7 +997,9 @@ class PiConfirm extends HTMLElement {
 class PiApp extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `
-      <div class="frame"><div class="shell">
+      <div class="frame">
+        <div class="preview-banner hidden" data-preview-banner role="status" aria-label="Preview environment"></div>
+        <div class="shell">
         <pi-sidebar></pi-sidebar>
         <main class="col">
           <pi-header></pi-header>
@@ -1092,6 +1094,12 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
+    const previewBanner = this.querySelector("[data-preview-banner]");
+    const preview = store.state.uiConfig?.preview === true;
+    if (previewBanner) {
+      previewBanner.textContent = store.state.uiConfig?.label || "Preview UI · production data";
+      previewBanner.classList.toggle("hidden", !preview);
+    }
     const bar = this.querySelector("pi-header .bar");
     if (bar) this.style.setProperty("--header-height", `${bar.getBoundingClientRect().height}px`);
     for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);

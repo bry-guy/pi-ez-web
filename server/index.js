@@ -12,29 +12,23 @@ import { publicError } from "./pi-configuration.js";
 import { piWebStashes, prune } from "./workspaces.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const UI_ONLY_CONFIG = Object.freeze({
+  preview: true,
+  productionData: true,
+  apiBasePath: "/api",
+  label: "Preview UI · production data",
+});
 
-export function createApp({ syncCoordinator = null } = {}) {
-  ensureHome();
-  const sup = createSupervisor(hub);
-  const app = new Hono();
-  app.use("/api/*", async (c, next) => {
-    const requestId = randomUUID();
-    c.set("requestId", requestId);
-    c.header("x-request-id", requestId);
-    await next();
+function uiOnlyEnabled() {
+  return ["1", "true", "yes", "on"].includes(String(process.env.PI_WEB_UI_ONLY || "").trim().toLowerCase());
+}
+
+function addStaticRoutes(app, { uiOnly }) {
+  app.get("/ui-health", c => c.json({ ok: true, mode: uiOnly ? "ui-only" : "full" }));
+  app.get("/ui-config.json", c => {
+    c.header("cache-control", "no-store");
+    return c.json(uiOnly ? UI_ONLY_CONFIG : { ...UI_ONLY_CONFIG, preview: false, productionData: false, label: null });
   });
-  app.onError((error, c) => {
-    const requestId = c.get("requestId") || randomUUID();
-    console.error("pi-ez-web request failed", {
-      requestId,
-      method: c.req.method,
-      path: c.req.path,
-      stack: publicError(error instanceof Error ? error.stack : String(error)),
-    });
-    c.header("x-request-id", requestId);
-    return c.json({ error: "internal_error", requestId }, 500);
-  });
-  app.route("/api", buildApi(sup, { syncCoordinator }));
   // PWA clients must always revalidate the shell and service worker after a
   // rollout. The service worker supplies offline fallback itself; HTTP caches
   // should never pin an older UI or worker in Safari.
@@ -48,18 +42,50 @@ export function createApp({ syncCoordinator = null } = {}) {
   app.get("/vendor/marked.umd.js", serveStatic({ root, path: "node_modules/marked/lib/marked.umd.js" }));
   app.get("/vendor/dompurify.min.js", serveStatic({ root, path: "node_modules/dompurify/dist/purify.min.js" }));
   app.use("/*", serveStatic({ root: path.join(root, "public") }));
+}
+
+export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } = {}) {
+  const app = new Hono();
+  let sup = null;
+  app.onError((error, c) => {
+    const requestId = c.get("requestId") || randomUUID();
+    console.error("pi-ez-web request failed", {
+      requestId,
+      method: c.req.method,
+      path: c.req.path,
+      stack: publicError(error instanceof Error ? error.stack : String(error)),
+    });
+    c.header("x-request-id", requestId);
+    return c.json({ error: "internal_error", requestId }, 500);
+  });
+  if (!uiOnly) {
+    ensureHome();
+    sup = createSupervisor(hub);
+    app.use("/api/*", async (c, next) => {
+      const requestId = randomUUID();
+      c.set("requestId", requestId);
+      c.header("x-request-id", requestId);
+      await next();
+    });
+    app.route("/api", buildApi(sup, { syncCoordinator }));
+  }
+  addStaticRoutes(app, { uiOnly });
   return { app, sup };
 }
 
 export function startServer(port, options = {}) {
-  const cfg = loadConfig();
-  for (const p of cfg.projects) {
-    prune(p.repoPath); // startup cleanup, no daemon
-    const stranded = piWebStashes(p.repoPath);
-    if (stranded.length) console.warn(`pi-web-ui: stranded fork stash(es) in ${p.repoPath}: ${stranded.join(", ")}`);
+  const uiOnly = options.uiOnly ?? uiOnlyEnabled();
+  let cfg = null;
+  if (!uiOnly) {
+    cfg = loadConfig();
+    for (const p of cfg.projects) {
+      prune(p.repoPath); // startup cleanup, no daemon
+      const stranded = piWebStashes(p.repoPath);
+      if (stranded.length) console.warn(`pi-web-ui: stranded fork stash(es) in ${p.repoPath}: ${stranded.join(", ")}`);
+    }
   }
-  const { app, sup } = createApp(options);
-  const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg.port) });
+  const { app, sup } = createApp({ ...options, uiOnly });
+  const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg?.port || 3141) });
   return { server, app, sup };
 }
 
