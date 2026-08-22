@@ -1,6 +1,6 @@
 # pi-sync integration plan
 
-Status: proposed implementation plan
+Status: active implementation plan; pi-sync has been released and this branch contains the adapter scaffold only.
 
 ## Context
 
@@ -15,6 +15,11 @@ TypeScript client, native JSONL adapter, CLI extension, and synchronized
 workspace skill. This repository owns only the pi-ez-web adapter and user
 experience. The selfhost `infra` repository deploys the service and supplies the
 tailnet route and persistent storage.
+
+The standalone pi-sync service and reusable client are now released. This
+branch deliberately records the remaining pi-ez-web adapter work as a plan; it
+does not claim that the current coordinator is production-capable until the
+released client is pinned and the supervisor lease boundary is implemented.
 
 For the personal deployment, all web conversations will be synchronized. The
 application also supports manual per-conversation enrollment so the upstream
@@ -226,16 +231,24 @@ continues the same session.
 
 ## Delivery sequence
 
-1. Add config schema, fake coordinator, and sync state to the domain model.
-2. Add manual enrollment API and UI against the fake coordinator.
-3. Integrate the pinned pi-sync client and real enrollment.
-4. Add supervisor preparation, invalidation, heartbeat, settlement upload, and
+The first two scaffold steps are present in this branch. The remaining work is
+intentionally ordered behind the released pi-sync client:
+
+1. Pin the released `@earendil-works/pi-sync` package in the production image
+   and implement the network client/coordinator boundary.
+2. Add real enrollment, lease acquisition/renewal, ETag-aware settlement, and
+   release behavior while preserving the fake coordinator for unit tests.
+3. Add supervisor preparation, invalidation, heartbeat, settlement upload, and
    lease enforcement around all durable mutations.
-5. Add all-conversations reconciliation and new-session enrollment.
-6. Add Git upstream pointer and synchronized workspace skill context.
-7. Run the real web-to-CLI-to-web end-to-end test.
-8. Enable the production setting only after the standalone service rollout and
+4. Add all-conversations reconciliation and new-session enrollment.
+5. Add Git upstream pointer and synchronized workspace skill context.
+6. Run the real web-to-CLI-to-web end-to-end test against the released service.
+7. Enable the production setting only after the standalone service rollout and
    selected-session migration pass.
+
+The production deployment must start with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
+Only the later rollout step changes it to `true`; local and third-party installs
+remain unchanged when no sync URL is configured.
 
 Keep the adapter behind the configured server URL until the rollout is proven;
 unenrolled sessions must continue to behave exactly as they do today.
