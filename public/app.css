@@ -641,7 +641,7 @@ aside.files.file-viewer {
 
 /* ---------- branch/session picker ---------- */
 .session-picker-scrim {
-  position: fixed; inset: 0; z-index: 37; display: flex; align-items: flex-start; justify-content: center;
+  position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center;
   padding: 9vh 16px 20px; background: oklch(0.15 0.02 255 / .52);
 }
 .session-picker {
