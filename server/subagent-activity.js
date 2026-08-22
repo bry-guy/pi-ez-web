@@ -127,13 +127,12 @@ export function normalizeSubagentActivity(value, {
     summary,
     ...(redactSubagentText(value.error, "") ? { error: redactSubagentText(value.error, "") } : {}),
     source: redactSubagentText(source, "pi-subagents") || "pi-subagents",
-    items: [],
   };
   return record;
 }
 
 function clone(record) {
-  return { ...record, items: Array.isArray(record.items) ? record.items.map(item => ({ ...item })) : [] };
+  return { ...record };
 }
 
 /**
@@ -146,7 +145,48 @@ export class SubagentActivityStore {
     this.records = new Map();
   }
 
+  applyEvent(eventType, value, options = {}) {
+    if (!object(value)) return null;
+    const type = String(eventType || value.eventType || value.event || "").trim().toLowerCase();
+    const runId = id(value.runId || value.agentId || value.id);
+    if (!runId) return null;
+    const existing = this.records.get(runId);
+    const terminalEvent = type === "completed" || type === "failed";
+    if (existing && isTerminalSubagentStatus(existing.status)
+      && (!terminalEvent || existing.status !== type)) return null;
+
+    const merged = existing
+      ? { ...existing, runId, id: runId, description: existing.title, summary: existing.summary, ...value }
+      : { ...value };
+    merged.runId = runId;
+    merged.eventType = type;
+    const suppliedRevision = Number(value.revision);
+    merged.revision = Number.isSafeInteger(suppliedRevision) && suppliedRevision > 0
+      ? suppliedRevision
+      : (Number(existing?.revision) || 0) + 1;
+    if (!existing && type === "created" && value.activity === undefined) merged.activity = "waiting for a worker";
+    if (type === "started") {
+      if (value.activity === undefined) merged.activity = "working";
+      merged.startedAt ||= value.startedAt || nowIso();
+    }
+    if (type === "steered" && value.activity === undefined) merged.activity = "processing guidance";
+    if (terminalEvent) {
+      if (value.activity === undefined) merged.activity = "";
+      merged.endedAt ||= value.completedAt || nowIso();
+    }
+
+    const record = normalizeSubagentActivity(merged, {
+      ...options,
+      eventType: type,
+      parentMessageId: merged.parentMessageId || options.parentMessageId,
+    });
+    if (!record) return null;
+    if (!record.summary && existing?.summary) record.summary = redactSubagentText(existing.summary, "");
+    return this.apply(record, { revisionProvided: true });
+  }
+
   apply(value, options = {}) {
+    const revisionProvided = options.revisionProvided ?? (Number.isSafeInteger(Number(value?.revision)) && Number(value.revision) > 0);
     const incoming = value?.role === "activity" && value?.kind === "agent"
       ? clone(value)
       : normalizeSubagentActivity(value, options);
@@ -158,9 +198,9 @@ export class SubagentActivityStore {
       // A terminal state can never be regressed by a late progress event, and
       // a started run must not be moved back to queued by the created event
       // that some Pi-subagents versions emit after start.
-      if (existingTerminal && !incomingTerminal) return null;
+      if (existingTerminal && (!incomingTerminal || existing.status !== incoming.status)) return null;
       if (existing.status === "running" && incoming.status === "queued") return null;
-      const revision = Number(incoming.revision) || 1;
+      const revision = revisionProvided ? Number(incoming.revision) || 1 : (Number(existing.revision) || 0) + 1;
       const currentRevision = Number(existing.revision) || 1;
       const richerTerminal = incomingTerminal && (
         incoming.summary && incoming.summary !== existing.summary
@@ -176,32 +216,14 @@ export class SubagentActivityStore {
       if (!incoming.groupId && existing.groupId) incoming.groupId = existing.groupId;
       if (!incoming.parentMessageId || incoming.parentMessageId === "root") incoming.parentMessageId = existing.parentMessageId;
     }
+    if (!revisionProvided && !existing) incoming.revision = 1;
     this.records.set(incoming.runId, incoming);
     this.prune();
     return clone(incoming);
   }
 
-  applyEntry(entry) {
-    if (!entry || typeof entry !== "object") return null;
-    const data = entry.type === "custom" ? entry.data
-      : entry.type === "custom_message" ? entry.details : null;
-    const customType = entry.customType || entry.message?.customType;
-    if (customType === "pi-web:subagent") {
-      return this.apply(data, { entryId: entry.id, parentMessageId: entry.parentId });
-    }
-    if (customType === "subagents:record" || customType === "subagent-notification") {
-      const details = data || entry.details || entry.message?.details || {};
-      const content = typeof entry.content === "string" ? entry.content : typeof entry.message?.content === "string" ? entry.message.content : "";
-      return this.apply({ ...details, result: details.result ?? details.resultPreview, eventType: details.status }, {
-        entryId: entry.id, parentMessageId: entry.parentId, content,
-      });
-    }
-    return null;
-  }
-
-  get(runId) {
-    const record = this.records.get(runId);
-    return record ? clone(record) : null;
+  clear() {
+    this.records.clear();
   }
 
   snapshot() {
@@ -220,4 +242,3 @@ export class SubagentActivityStore {
     }
   }
 }
-

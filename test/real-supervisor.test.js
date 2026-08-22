@@ -71,8 +71,8 @@ test("web subagent entries become revisioned grouped activity", () => {
       },
     },
   });
-  assert.equal(st.liveRecords.get("activity:agent:agent-1").status, "queued");
-  assert.equal(st.liveRecords.get("activity:agent:agent-1").parentMessageId, "assistant-1");
+  assert.equal(st.subagents.snapshot()[0].status, "queued");
+  assert.equal(st.subagents.snapshot()[0].parentMessageId, "assistant-1");
   supervisor._onEvent("session-1", st, {
     type: "entry_appended",
     entry: {
@@ -84,8 +84,8 @@ test("web subagent entries become revisioned grouped activity", () => {
       },
     },
   });
-  assert.equal(st.liveRecords.get("activity:agent:agent-1").status, "completed");
-  assert.equal(st.liveRecords.get("activity:agent:agent-1").summary, "Found it.");
+  assert.equal(st.subagents.snapshot()[0].status, "completed");
+  assert.equal(st.subagents.snapshot()[0].summary, "Found it.");
   assert.deepEqual(events.filter(event => event.type === "activity").map(event => event.data.record.revision), [1, 2]);
 });
 

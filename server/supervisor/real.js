@@ -291,9 +291,8 @@ export class RealSupervisor {
         if (activity) {
           if (activity.kind === "agent" && activity.runId) {
             st.subagents ||= new SubagentActivityStore();
-            const accepted = st.subagents.apply(activity);
+            const accepted = st.subagents.apply(activity, { revisionProvided: entryHasSubagentRevision(entry) });
             if (!accepted) break;
-            st.liveRecords.set(accepted.id, accepted);
             hub.emit(id, "activity", { record: accepted });
           } else {
             st.liveRecords.set(activity.id, activity);
@@ -985,6 +984,10 @@ function modelRefFromEntries(entries) {
 }
 
 function assistantRecordId(parentId) { return `a:${parentId || "root"}`; }
+function entryHasSubagentRevision(entry) {
+  return [entry?.data, entry?.details, entry?.message?.details]
+    .some(value => Number.isSafeInteger(Number(value?.revision)) && Number(value.revision) > 0);
+}
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
 }
@@ -993,8 +996,7 @@ function seedSubagentState(st) {
   const branch = st.session.sessionManager.getBranch?.() || [];
   for (const record of entriesToRecords(branch)) {
     if (record.role !== "activity" || record.kind !== "agent" || !record.runId) continue;
-    const accepted = st.subagents.apply(record);
-    if (accepted) st.liveRecords.set(accepted.id, accepted);
+    st.subagents.apply(record, { revisionProvided: true });
   }
 }
 
@@ -1026,7 +1028,7 @@ export function entriesToRecords(entries) {
     }
     let activity = activityFromEntry(entry);
     if (activity?.kind === "agent" && activity.runId) {
-      activity = subagents.apply(activity);
+      activity = subagents.apply(activity, { revisionProvided: entryHasSubagentRevision(entry) });
     }
     if (activity) {
       const index = records.findIndex(record => record.id === activity.id);

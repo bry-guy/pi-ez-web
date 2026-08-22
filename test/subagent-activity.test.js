@@ -72,6 +72,16 @@ test("activity store replaces progress, rejects regressions, and preserves termi
   assert.deepEqual(store.snapshot().map(record => [record.runId, record.status, record.summary]), [["agent-1", "completed", "Found it."]]);
 });
 
+test("event ingestion owns sparse ordering and terminal state", () => {
+  const store = new SubagentActivityStore();
+  assert.equal(store.applyEvent("created", { id: "agent-ordered", description: "Search" }).status, "queued");
+  assert.equal(store.applyEvent("started", { id: "agent-ordered", activity: "reading" }).status, "running");
+  assert.equal(store.applyEvent("completed", { id: "agent-ordered", result: "Done" }).status, "completed");
+  assert.equal(store.applyEvent("progress", { id: "agent-ordered", activity: "late" }), null);
+  assert.equal(store.applyEvent("failed", { id: "agent-ordered", error: "late failure" }), null);
+  assert.equal(store.snapshot()[0].revision, 3);
+});
+
 test("headless bridge persists lifecycle events without exposing raw output", () => {
   const { events, lifecycle, entries } = bridgeFixture();
   lifecycle.get("tool_execution_start")?.({}, { sessionManager: { getLeafId: () => "assistant-parent" } });
@@ -91,6 +101,9 @@ test("headless bridge persists lifecycle events without exposing raw output", ()
   assert.equal(final.status, "completed");
   assert.match(final.summary, /Bearer \[redacted\]/);
   assert.doesNotMatch(JSON.stringify(entries), /secret/);
+  const beforeLateProgress = entries.length;
+  events.emit("subagents:progress", { id: "agent-2", activity: "late" });
+  assert.equal(entries.length, beforeLateProgress);
   assert.ok(entries.every(entry => entry.customType === "pi-web:subagent"));
 });
 

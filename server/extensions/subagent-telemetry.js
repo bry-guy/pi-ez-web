@@ -5,7 +5,7 @@
 // turns only bounded lifecycle/progress snapshots into durable, non-display
 // custom entries. The web supervisor consumes those entries and owns the live
 // projection; no browser-facing code runs inside this extension.
-import { normalizeSubagentActivity } from "../subagent-activity.js";
+import { SubagentActivityStore } from "../subagent-activity.js";
 
 const CHANNELS = [
   "subagents:created",
@@ -20,10 +20,9 @@ const CHANNELS = [
 const MAX_PROGRESS_MS = 250;
 
 function object(value) { return !!value && typeof value === "object" && !Array.isArray(value); }
-function now() { return new Date().toISOString(); }
 
 export default function subagentTelemetry(pi) {
-  const latest = new Map();
+  const activityStore = new SubagentActivityStore();
   const lastProgress = new Map();
   const unsubscribers = [];
   let parentMessageId = "root";
@@ -41,24 +40,6 @@ export default function subagentTelemetry(pi) {
       ? String(input.runId || input.agentId || input.id)
       : "";
     if (!runId) return;
-    const previous = latest.get(runId) || {};
-    const previousTerminal = ["completed", "failed", "stopped", "aborted", "cancelled", "canceled"].includes(String(previous.status || "").toLowerCase());
-    if (previousTerminal && ["created", "started", "progress", "compacted"].includes(eventType)) return;
-    const merged = { ...previous, ...input, runId, eventType };
-    merged.parentMessageId ||= parentMessageId;
-    const revision = Math.max(Number(previous.revision) || 0, Number(input.revision) || 0) + 1;
-    merged.revision = revision;
-    merged.createdAt ||= input.startedAt || now();
-    if (eventType === "started") merged.startedAt ||= input.startedAt || now();
-    if (eventType === "completed" || eventType === "failed") merged.endedAt ||= input.completedAt || now();
-    if (eventType === "created" && !merged.status) merged.status = "queued";
-    if (eventType === "created" && !merged.activity) merged.activity = "waiting for a worker";
-    if (eventType === "started" || eventType === "progress" || eventType === "steered" || eventType === "compacted") merged.status = "running";
-    if (eventType === "started" && !input.activity) merged.activity = "working";
-    if (eventType === "steered" && !input.activity) merged.activity = "processing guidance";
-    if (eventType === "completed") { merged.status = "completed"; merged.activity = input.activity || ""; }
-    if (eventType === "failed") { merged.status = input.status || "failed"; merged.activity = input.activity || ""; }
-    latest.set(runId, merged);
     if (eventType === "progress") {
       const timestamp = Date.now();
       const last = lastProgress.get(runId) || 0;
@@ -66,25 +47,28 @@ export default function subagentTelemetry(pi) {
       lastProgress.set(runId, timestamp);
     }
 
-    const normalized = normalizeSubagentActivity(merged, { eventType, source: "pi-subagents" });
-    if (!normalized) return;
+    const record = activityStore.applyEvent(eventType, input, {
+      parentMessageId,
+      source: "pi-subagents",
+    });
+    if (!record) return;
     // Include the captured parent because appending an earlier telemetry entry
     // moves Pi's leaf. Relying only on the custom entry parent would split one
     // parallel batch into several groups.
     const data = {
-      parentMessageId: normalized.parentMessageId,
-      runId: normalized.runId,
-      ...(normalized.groupId ? { groupId: normalized.groupId } : {}),
-      revision: normalized.revision,
-      status: normalized.status,
-      description: normalized.title,
-      ...(normalized.activity ? { activity: normalized.activity } : {}),
-      toolCount: normalized.toolCount,
-      createdAt: normalized.createdAt,
-      ...(normalized.startedAt ? { startedAt: normalized.startedAt } : {}),
-      ...(normalized.endedAt ? { endedAt: normalized.endedAt } : {}),
-      ...(normalized.summary ? { summary: normalized.summary } : {}),
-      ...(normalized.error ? { error: normalized.error } : {}),
+      parentMessageId: record.parentMessageId,
+      runId: record.runId,
+      ...(record.groupId ? { groupId: record.groupId } : {}),
+      revision: record.revision,
+      status: record.status,
+      description: record.title,
+      ...(record.activity ? { activity: record.activity } : {}),
+      toolCount: record.toolCount,
+      createdAt: record.createdAt,
+      ...(record.startedAt ? { startedAt: record.startedAt } : {}),
+      ...(record.endedAt ? { endedAt: record.endedAt } : {}),
+      ...(record.summary ? { summary: record.summary } : {}),
+      ...(record.error ? { error: record.error } : {}),
       eventType,
     };
     try {
@@ -111,7 +95,7 @@ export default function subagentTelemetry(pi) {
     for (const unsubscribe of unsubscribers.splice(0)) {
       try { unsubscribe(); } catch { /* stale event bus */ }
     }
-    latest.clear();
+    activityStore.clear();
     lastProgress.clear();
     parentMessageId = "root";
   });
