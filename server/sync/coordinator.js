@@ -597,17 +597,24 @@ export class PiSyncCoordinator extends BaseCoordinator {
       }
       throw converted.code === "sync_unavailable" ? syncError("The synchronized lease is uncertain; wait for the service to recover.", "sync_lease_uncertain") : converted;
     }
-    if (acquired.etag !== active.etag) {
-      await client.release(sessionId, acquired.lease.token).catch(() => undefined);
+    const expectedEtag = active.etag;
+    active.client = client;
+    active.token = acquired.lease.token;
+    active.etag = acquired.etag;
+    active.expiresAt = acquired.lease.expiresAt;
+    if (acquired.session?.sessionId !== sessionId) {
+      active.blocked = { code: "sync_enrollment_failed", message: "The sync server returned a different session identity." };
+      await this._releaseUnlocked(sessionId, active);
+      throw syncError(active.blocked.message, active.blocked.code);
+    }
+    if (acquired.etag !== expectedEtag) {
       this._markBlocked(sessionId, active, "The canonical session changed elsewhere; the local session was preserved.", "sync_conflict");
       throw syncError("The canonical session changed elsewhere; the local session was preserved.", "sync_conflict");
     }
     if (active.pendingEnvelope) {
       try {
-        const response = await client.update(sessionId, active.pendingEnvelope, acquired.lease.token, acquired.etag);
-        active.token = acquired.lease.token;
+        const response = await client.update(sessionId, active.pendingEnvelope, active.token, active.etag);
         active.etag = response.etag;
-        active.expiresAt = acquired.lease.expiresAt;
         active.envelope = response.session;
         active.lastFingerprint = active.pendingFingerprint;
         active.pendingEnvelope = null;
@@ -620,10 +627,19 @@ export class PiSyncCoordinator extends BaseCoordinator {
         this._recordConnection();
         return active;
       } catch (error) {
-        await client.release(sessionId, acquired.lease.token).catch(() => undefined);
         const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
-        if (converted.code === "sync_stale_etag") this._markBlocked(sessionId, active, "The canonical session changed elsewhere; the local session was preserved.", "sync_conflict");
-        throw converted;
+        if (converted.code === "sync_stale_etag") {
+          this._markBlocked(sessionId, active, "The canonical session changed elsewhere; the local session was preserved.", "sync_conflict", converted.details);
+        } else {
+          active.uncertain = true;
+          active.leaseError = clientErrorCode(error);
+          active.blocked = { code: "sync_lease_uncertain", message: "The synchronized lease could not be settled yet." };
+          this._recordConnection(converted);
+          this._emit(sessionId);
+        }
+        throw converted.code === "sync_unavailable"
+          ? syncError("The synchronized lease is uncertain; wait for the service to recover.", "sync_lease_uncertain")
+          : converted;
       }
     }
     try {
@@ -634,13 +650,11 @@ export class PiSyncCoordinator extends BaseCoordinator {
           (this.adapter?.materializeSessionFile || materializeSessionFile)(file, envelope, options));
       }
     } catch (error) {
-      await client.release(sessionId, acquired.lease.token).catch(() => undefined);
+      active.blocked = { code: error.code || "sync_materialization_failed", message: error.message || "The canonical session could not be materialized." };
+      await this._releaseUnlocked(sessionId, active);
       if (error.code === "sync_workspace_setup_required") throw syncError(error.message, error.code);
       throw syncError(error.message || "The canonical session could not be materialized.", "sync_materialization_failed");
     }
-    active.token = acquired.lease.token;
-    active.etag = acquired.etag;
-    active.expiresAt = acquired.lease.expiresAt;
     active.envelope = acquired.session;
     active.lastFingerprint = stableEnvelopeFingerprint(acquired.session);
     active.uncertain = false;
