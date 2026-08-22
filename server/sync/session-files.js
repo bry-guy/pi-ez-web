@@ -25,16 +25,6 @@ export async function materializeSessionFile(file, envelope, options) {
   return module.materializeSessionFile(file, envelope, options);
 }
 
-export async function restoreHead(session, headEntryId) {
-  if (!headEntryId) return;
-  const module = await loadPiSyncModule();
-  if (typeof module.restoreHead === "function") {
-    return module.restoreHead((entryId, options) => session.navigateTree(entryId, options), headEntryId);
-  }
-  const result = await session.navigateTree(headEntryId, { summarize: false });
-  if (result?.cancelled) throw new Error("Pi cancelled head restoration");
-}
-
 export function stableEnvelopeFingerprint(envelope) {
   return JSON.stringify(envelope);
 }

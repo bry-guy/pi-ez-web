@@ -149,19 +149,6 @@ class BaseCoordinator {
   async sessionCreated() {}
   async reconcile() {}
 
-  disabledState() {
-    const config = this.config();
-    return {
-      version: SYNC_CAPABILITY_VERSION,
-      configured: !!config.serverUrl,
-      enabled: !!config.serverUrl,
-      serverUrl: config.serverUrl,
-      allConversations: config.allConversations,
-      connection: config.serverUrl ? "unavailable" : "disabled",
-      implementation: config.serverUrl ? "client" : "unavailable",
-      error: config.serverUrl ? { code: "sync_client_unavailable", message: "The pi-sync client is not installed yet." } : null,
-    };
-  }
 }
 
 /**
@@ -1005,30 +992,6 @@ export class PiSyncCoordinator extends BaseCoordinator {
     const hub = this.supervisor?.hub;
     if (!hub?.emit) return;
     void this.status(sessionId).then(sync => hub.emit(sessionId, "sync_state", { sync })).catch(() => undefined);
-  }
-}
-
-export class UnavailableSyncCoordinator extends BaseCoordinator {
-  state() { return this.disabledState(); }
-
-  status(sessionId) {
-    const config = this.config();
-    if (!config.serverUrl) return statusFor(config, false);
-    return statusFor(config, isSyncEnrolled(sessionId), {
-      syncState: "error",
-      syncError: { code: "sync_client_unavailable", message: "The pi-sync client is not installed yet." },
-    });
-  }
-
-  async enroll() {
-    this.assertConfigured();
-    throw syncError("The pi-sync client is not installed yet.", "sync_client_unavailable");
-  }
-
-  async prepareMutation(id, { optional = false } = {}) {
-    if (!this.config().serverUrl) return { managed: false };
-    if (optional && !isSyncEnrolled(id)) return { managed: false };
-    throw syncError("The pi-sync client is not installed yet.", "sync_client_unavailable");
   }
 }
 

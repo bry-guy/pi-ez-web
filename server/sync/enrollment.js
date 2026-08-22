@@ -69,10 +69,3 @@ export function markSyncPending(sessionId) {
   if (!state.enrolled.includes(id) && !state.pending.includes(id)) state.pending.push(id);
   return saveSyncSessions(state);
 }
-
-export function clearSyncPending(sessionId) {
-  const id = String(sessionId || "").trim();
-  const state = loadSyncSessions();
-  state.pending = state.pending.filter(candidate => candidate !== id);
-  return saveSyncSessions(state);
-}
