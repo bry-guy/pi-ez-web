@@ -86,7 +86,9 @@ class PiSettings extends HTMLElement {
     } catch (err) {
       const message = err.error === "setting_overridden"
         ? "One or more synchronization settings are deployment-controlled."
-        : `Synchronization settings failed: ${err.error || err.message || err}`;
+        : err.error === "sync_active"
+          ? "Finish the active synchronized operation before changing the sync server."
+          : `Synchronization settings failed: ${err.error || err.message || err}`;
       this.setFeedback(message, "error");
     }
   }

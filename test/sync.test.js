@@ -35,6 +35,8 @@ test("sync configuration validates URLs and deployment overrides", () => {
   assert.deepEqual(normalizeSyncConfig(undefined), { serverUrl: null, allConversations: false });
   assert.deepEqual(normalizeSyncConfig({ serverUrl: " https://sync.example/ ", allConversations: true }), { serverUrl: "https://sync.example/", allConversations: true });
   assert.throws(() => normalizeSyncConfig({ serverUrl: "ftp://sync.example" }, { strict: true }), error => error.code === "invalid_sync_configuration");
+  assert.throws(() => normalizeSyncConfig({ serverUrl: "https://token@sync.example" }, { strict: true }), error => error.code === "invalid_sync_configuration");
+  assert.throws(() => normalizeSyncConfig({ serverUrl: "https://sync.example/?token=secret" }, { strict: true }), error => error.code === "invalid_sync_configuration");
 
   saveConfig({ sync: { serverUrl: "https://config.example", allConversations: false } });
   process.env.PI_WEB_SYNC_SERVER_URL = "https://environment.example";

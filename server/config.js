@@ -105,6 +105,7 @@ export function normalizeSyncConfig(value, { strict = false } = {}) {
     try {
       const parsed = new URL(serverUrl);
       if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported protocol");
+      if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("credentials, queries, and fragments are not supported");
     } catch {
       return invalid("Sync server URL must be an HTTP or HTTPS URL.");
     }

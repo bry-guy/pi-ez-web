@@ -449,6 +449,7 @@ class PiHeader extends HTMLElement {
         return_rehome_failed: "main is ready, but this session could not move to the checkout.",
         git_switch_failed: err.detail || "Git could not switch branches.",
         sync_workspace_in_use: "A synchronized conversation is using this workspace.",
+        sync_shared_workspace: "This workspace is shared by another synchronized conversation.",
         sync_workspace_setup_required: err.message || "Prepare the synchronized Git workspace first.",
       };
       store.set({ workspaceError: messages[err.error] || err.error || err.message || "Could not switch branches." });

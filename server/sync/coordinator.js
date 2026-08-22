@@ -31,6 +31,7 @@ const HTTP_STATUS = {
   sync_unavailable: 503,
   sync_session_not_found: 409,
   sync_enrollment_failed: 502,
+  sync_active: 409,
 };
 
 export function syncError(message, code, extra = {}) {
@@ -78,6 +79,7 @@ class BaseCoordinator {
     this.supervisor = supervisor;
     this.initialConfig = config;
     this.configProvider = configProvider;
+    this.mutationQueues = new Map();
   }
 
   config() {
@@ -88,6 +90,12 @@ class BaseCoordinator {
 
   assertConfigured() {
     if (!this.config().serverUrl) throw syncError("Configure a sync server before enrolling conversations.", "sync_not_configured");
+  }
+
+  assertConfigurationChangeAllowed(previous, next) {
+    if (previous?.serverUrl !== next?.serverUrl && this.active?.size) {
+      throw syncError("Finish the active synchronized operation before changing the sync server.", "sync_active");
+    }
   }
 
   async sessionMeta(sessionId) {
@@ -108,19 +116,29 @@ class BaseCoordinator {
   }
 
   async withMutation(sessionId, task, options = {}) {
-    const lease = await this.beginMutation(sessionId, options);
-    let result;
+    const previous = this.mutationQueues.get(sessionId) || Promise.resolve();
+    let releaseQueue;
+    const current = new Promise(resolve => { releaseQueue = resolve; });
+    this.mutationQueues.set(sessionId, current);
+    await previous;
     try {
-      result = await task(lease);
-    } catch (error) {
-      if (lease?.managed) await this.release(sessionId, lease).catch(() => undefined);
-      throw error;
+      const lease = await this.beginMutation(sessionId, options);
+      let result;
+      try {
+        result = await task(lease);
+      } catch (error) {
+        if (lease?.managed) await this.release(sessionId, lease).catch(() => undefined);
+        throw error;
+      }
+      // A failed settlement retains the uncertain lease and pending envelope
+      // so a later heartbeat can retry safely. Do not release it from this
+      // catch path; only task failures are safe to abandon without uploading.
+      if (lease?.managed && !options.streaming) await this.commitAndRelease(sessionId, lease);
+      return result;
+    } finally {
+      releaseQueue();
+      if (this.mutationQueues.get(sessionId) === current) this.mutationQueues.delete(sessionId);
     }
-    // A failed settlement retains the uncertain lease and pending envelope so
-    // a later heartbeat can retry safely. Do not release it from this catch
-    // path; only task failures are safe to abandon without uploading.
-    if (lease?.managed && !options.streaming) await this.commitAndRelease(sessionId, lease);
-    return result;
   }
 
   async prepareMutation() { return { managed: false }; }
@@ -197,6 +215,7 @@ export class FakeSyncCoordinator extends BaseCoordinator {
         etag: `fake-${this.remote.size + 1}`,
       });
     }
+    markSyncEnrolled(sessionId);
     return { ok: true, created: !existing, ...(this.status(sessionId)) };
   }
 
@@ -260,10 +279,15 @@ export class FakeSyncCoordinator extends BaseCoordinator {
 
   async reconcile() {
     if (!this.config().allConversations) return;
-    for (const session of await this.supervisor?.allSessions?.() || []) {
-      if (this.remote.has(session.id)) continue;
-      try { await this.enroll(session.id); }
-      catch { markSyncPending(session.id); }
+    try {
+      for (const session of await this.supervisor?.allSessions?.() || []) {
+        if (this.remote.has(session.id)) continue;
+        try { await this.enroll(session.id); }
+        catch { markSyncPending(session.id); }
+      }
+    } catch {
+      // Mock reconciliation is best effort, matching the real coordinator's
+      // startup behavior when session discovery is temporarily unavailable.
     }
   }
 
@@ -317,9 +341,10 @@ export class PiSyncCoordinator extends BaseCoordinator {
     const url = this.config().serverUrl;
     this.assertConfigured();
     if (!this.clients.has(url)) {
-      this.clients.set(url, Promise.resolve(this.clientFactory(url)).catch(error => {
-        throw this._fromClientError(error, "sync_client_unavailable");
-      }));
+      const pending = Promise.resolve()
+        .then(() => this.clientFactory(url))
+        .catch(error => { throw this._fromClientError(error, "sync_client_unavailable"); });
+      this.clients.set(url, pending);
     }
     try {
       const client = await this.clients.get(url);
@@ -446,7 +471,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
   }
 
-  async _sessionEnvelope(sessionId) {
+  async _sessionEnvelope(sessionId, { fallbackWorkspace = undefined } = {}) {
     const info = await this.supervisor?.syncSessionInfo?.(sessionId);
     if (!info?.file) throw syncError("No such session.", "no_such_session", { status: 404 });
     const parentResolver = async parentPath => {
@@ -456,6 +481,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     let workspace;
     try { workspace = await (this.adapter?.deriveWorkspacePointer || deriveWorkspacePointer)(info.cwd); }
     catch { workspace = undefined; }
+    workspace ||= fallbackWorkspace;
     try {
       const envelope = await (this.adapter?.normalizeSessionFile || normalizeSessionFile)(info.file, {
         requestedSessionId: sessionId,
@@ -629,7 +655,14 @@ export class PiSyncCoordinator extends BaseCoordinator {
   async prepareMutation(sessionId, { optional = false, allowStreaming = false } = {}) {
     this.assertConfigured();
     return this._exclusive(sessionId, async () => {
-      const current = this.active.get(sessionId);
+      let current = this.active.get(sessionId);
+      if (current?.releasePending) {
+        await this._releaseUnlocked(sessionId, current);
+        if (this.active.get(sessionId) === current) {
+          throw syncError("The synchronized lease cleanup is still pending; retry shortly.", "sync_unavailable");
+        }
+        current = null;
+      }
       if (current) {
         if (current.blocked?.code === "sync_lease_uncertain" && !allowStreaming) return { managed: true, ...await this._recoverActive(sessionId, current) };
         if (current.blocked) throw syncError(current.blocked.message, current.blocked.code, { details: current.blocked.details });
@@ -694,7 +727,14 @@ export class PiSyncCoordinator extends BaseCoordinator {
   _startHeartbeat(sessionId, active) {
     if (active.timer) clearInterval(active.timer);
     active.timer = setInterval(() => {
-      void this._heartbeat(sessionId, active);
+      void this._exclusive(sessionId, () => this._heartbeat(sessionId, active)).catch(error => {
+        if (this.active.get(sessionId) !== active) return;
+        active.uncertain = true;
+        active.leaseError = clientErrorCode(error);
+        active.blocked = { code: "sync_lease_uncertain", message: "The synchronized lease could not be renewed." };
+        this._recordConnection(error);
+        this._emit(sessionId);
+      });
     }, this.heartbeatMs);
     active.timer.unref?.();
   }
@@ -703,6 +743,24 @@ export class PiSyncCoordinator extends BaseCoordinator {
     if (this.active.get(sessionId) !== active || active.renewing) return;
     active.renewing = true;
     try {
+      if (active.releasePending) {
+        try {
+          await active.client.release(sessionId, active.token);
+          this._forgetActive(sessionId, active);
+          this._recordConnection();
+          this._emit(sessionId);
+          return;
+        } catch (error) {
+          const code = clientErrorCode(error);
+          if (["lease_invalid", "lease_not_found"].includes(code)) {
+            this._forgetActive(sessionId, active);
+            this._recordConnection();
+            this._emit(sessionId);
+            return;
+          }
+          this._recordConnection(error);
+        }
+      }
       const response = await active.client.renew(sessionId, active.token, { timeoutMs: 5_000 });
       if (response.etag !== active.etag) {
         this._markBlocked(sessionId, active, "The canonical session changed while this lease was uncertain.", "sync_conflict");
@@ -711,7 +769,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       active.expiresAt = response.lease.expiresAt;
       active.uncertain = false;
       if (active.blocked?.code === "sync_lease_uncertain") active.blocked = null;
-      if (active.pendingEnvelope) void this._exclusive(sessionId, () => this._flushPending(sessionId, active));
+      if (active.pendingEnvelope) await this._flushPending(sessionId, active);
       this._emit(sessionId);
     } catch (error) {
       const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
@@ -743,7 +801,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
   }
 
   async _normalizeForCommit(sessionId, active) {
-    const envelope = await this._sessionEnvelope(sessionId);
+    const envelope = await this._sessionEnvelope(sessionId, { fallbackWorkspace: active.envelope?.workspace });
     active.pendingEnvelope = envelope;
     active.pendingFingerprint = stableEnvelopeFingerprint(envelope);
     return envelope;
@@ -776,7 +834,16 @@ export class PiSyncCoordinator extends BaseCoordinator {
 
   async _commitUnlocked(sessionId, active) {
     if (this.active.get(sessionId) !== active) return { managed: false };
-    const envelope = await this._normalizeForCommit(sessionId, active);
+    let envelope;
+    try {
+      envelope = await this._normalizeForCommit(sessionId, active);
+    } catch (error) {
+      const converted = error?.code?.startsWith?.("sync_")
+        ? error
+        : syncError(error?.message || "The settled session could not be normalized.", "sync_materialization_failed");
+      this._markBlocked(sessionId, active, converted.message, converted.code, converted.details);
+      throw converted;
+    }
     if (active.uncertain || active.blocked) throw syncError(active.blocked?.message || "The synchronized lease is uncertain.", active.blocked?.code || "sync_lease_uncertain", { details: active.blocked?.details });
     if (active.lastFingerprint === active.pendingFingerprint) {
       await this._releaseUnlocked(sessionId, active);
@@ -823,19 +890,40 @@ export class PiSyncCoordinator extends BaseCoordinator {
     return this.commitSettled(sessionId);
   }
 
-  async _releaseUnlocked(sessionId, active) {
-    if (this.active.get(sessionId) !== active) return;
+  _forgetActive(sessionId, active) {
     if (active.timer) clearInterval(active.timer);
     active.timer = null;
-    this.active.delete(sessionId);
+    active.releasePending = false;
+    if (this.active.get(sessionId) === active) this.active.delete(sessionId);
     this.listCache = null;
-    try { await active.client.release(sessionId, active.token); }
-    catch (error) {
-      // Losing release is safe: the token is never persisted, and the server
-      // will expire the lease. Do not turn a successful upload into a failed
-      // browser action because of a best-effort cleanup request.
-      this._recordConnection(error);
-    }
+  }
+
+  async _releaseUnlocked(sessionId, active) {
+    if (this.active.get(sessionId) !== active) return;
+    if (active.releasing) return active.releasing;
+    if (active.timer) clearInterval(active.timer);
+    active.timer = null;
+    active.releasing = (async () => {
+      try {
+        await active.client.release(sessionId, active.token);
+        this._forgetActive(sessionId, active);
+      } catch (error) {
+        const code = clientErrorCode(error);
+        if (["lease_invalid", "lease_not_found"].includes(code)) {
+          this._forgetActive(sessionId, active);
+          return;
+        }
+        // Keep the in-memory lease when cleanup is interrupted. The heartbeat
+        // retries release so this web process does not strand itself behind
+        // its own server-side lease for the full expiry window.
+        active.releasePending = true;
+        this._recordConnection(error);
+        this._startHeartbeat(sessionId, active);
+      } finally {
+        active.releasing = null;
+      }
+    })();
+    return active.releasing;
   }
 
   async release(sessionId) {
@@ -872,12 +960,11 @@ export class PiSyncCoordinator extends BaseCoordinator {
     if (!this.config().allConversations) return;
     try {
       await this._exclusive(sessionId, async () => {
-        if (isSyncEnrolled(sessionId)) return;
         await this._enroll(sessionId, { automatic: true });
       });
       this._emit(sessionId);
     } catch (error) {
-      if (["session_streaming", "session_compacting", "sync_unavailable", "sync_client_unavailable", "sync_session_not_found"].includes(error.code)) markSyncPending(sessionId);
+      if (["session_streaming", "session_compacting", "sync_unavailable", "sync_client_unavailable", "sync_session_not_found", "sync_enrollment_failed"].includes(error.code)) markSyncPending(sessionId);
       this._emit(sessionId);
     }
   }

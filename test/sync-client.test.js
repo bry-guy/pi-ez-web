@@ -115,6 +115,43 @@ test("an expired lease reacquires and uploads a pending settled snapshot when th
   assert.equal(lease.managed, true);
 });
 
+test("same-process mutations are serialized behind one coordinator lease", async () => {
+  const h = harness("session-queue");
+  await h.coordinator.enroll("session-queue");
+  let running = 0;
+  let maximum = 0;
+  const task = label => h.coordinator.withMutation("session-queue", async () => {
+    running++;
+    maximum = Math.max(maximum, running);
+    await new Promise(resolve => setTimeout(resolve, label === "first" ? 10 : 1));
+    running--;
+  });
+  await Promise.all([task("first"), task("second")]);
+  assert.equal(maximum, 1);
+  assert.equal(h.coordinator.active.has("session-queue"), false);
+});
+
+test("a failed release is retried without stranding the web holder", async () => {
+  const h = harness("session-release");
+  await h.coordinator.enroll("session-release");
+  let failed = true;
+  const release = h.client.release;
+  h.client.release = async (...args) => {
+    if (failed) {
+      failed = false;
+      const error = new Error("temporary network failure");
+      error.code = "network_error";
+      throw error;
+    }
+    return release(...args);
+  };
+  await h.coordinator.beginMutation("session-release");
+  await h.coordinator.release("session-release");
+  assert.equal(h.coordinator.active.has("session-release"), true);
+  await h.coordinator._heartbeat("session-release", h.coordinator.active.get("session-release"));
+  assert.equal(h.coordinator.active.has("session-release"), false);
+});
+
 test("an external lease is surfaced without exposing a token or ETag", async () => {
   const h = harness("session-2");
   await h.coordinator.enroll("session-2");

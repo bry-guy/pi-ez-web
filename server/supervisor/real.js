@@ -9,6 +9,7 @@ import { commandInfo, parseSlashCommand } from "../commands.js";
 import { activityFromEntry, activityFromToolResult, normalizeActivity } from "../activity.js";
 import { PiConfiguration, publicError } from "../pi-configuration.js";
 import { GitHubClient } from "../github.js";
+import { settleSync } from "../sync/settlement.js";
 
 function errorDetails(error) {
   const parts = [];
@@ -407,7 +408,7 @@ export class RealSupervisor {
           break;
         }
         if (st.turnEnded) {
-          if (!st.session?.isStreaming) void this.syncCoordinator?.agentSettled?.(id);
+          if (!st.session?.isStreaming) settleSync(this.syncCoordinator, id);
           break;
         }
         const reason = st.aborted ? "stopped" : "done";
@@ -416,7 +417,7 @@ export class RealSupervisor {
         hub.emit(id, "turn_end", { turnId: st.turnId, reason });
         // AgentEvent delivery is synchronous, but synchronization deliberately
         // runs after the settled event so the complete JSONL file is flushed.
-        if (!st.session?.isStreaming) void this.syncCoordinator?.agentSettled?.(id);
+        if (!st.session?.isStreaming) settleSync(this.syncCoordinator, id);
         break;
       }
       case "session_info_changed":

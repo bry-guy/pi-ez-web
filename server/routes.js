@@ -79,6 +79,14 @@ async function suggestedWorktreeBranch(repoPath, sessionId, sup) {
   }
 }
 
+async function hasSynchronizedSibling(sessions, currentId, sync) {
+  for (const session of sessions || []) {
+    if (session.id === currentId) continue;
+    if ((await sync.status(session.id)).synchronized) return true;
+  }
+  return false;
+}
+
 export function buildApi(sup, { syncCoordinator = null } = {}) {
   const api = new Hono();
   const sync = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
@@ -679,6 +687,11 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (remoteSource && !remoteBranches.includes(remoteSource)) return err(c, 400, "invalid_remote_branch");
     if (branch === ws.MAIN_BRANCH) {
       if (remoteSource) return err(c, 409, "main_worktree_forbidden");
+      const affected = [];
+      if (ws.currentBranch(project.repoPath) !== ws.MAIN_BRANCH) {
+        affected.push(...await sessionsUsingWorkspace(project, project.repoPath, sup));
+      }
+      if (await hasSynchronizedSibling(affected, id, sync)) return err(c, 409, "sync_shared_workspace");
       try { return c.json(await returnSessionToMain(sup, hub, id)); }
       catch (e) {
         const codes = { session_streaming: 409, no_project_for_session: 404, checkout_dirty: 409, sessions_active: 409, main_worktree_external: 409, return_rehome_failed: 409, git_switch_failed: 409 };
@@ -694,6 +707,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const target = worktrees[branch];
     if (target && path.resolve(target) !== path.resolve(cwd)) return err(c, 409, "branch_in_use", { workspacePath: target });
     const sessions = await sessionsUsingWorkspace(project, cwd, sup);
+    if (await hasSynchronizedSibling(sessions, id, sync)) return err(c, 409, "sync_shared_workspace");
     if (sessions.some(session => session.streaming)) return err(c, 409, "sessions_active");
     if (ws.isDirty(cwd)) return err(c, 409, "workspace_dirty");
     try { ws.switchWorkspace({ repoPath: project.repoPath, workspacePath: cwd, branch, fromRef: remoteSource }); }
@@ -791,6 +805,13 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
   api.post("/sessions/:id/merge", async c => {
     const id = c.req.param("id");
     return mutate(id, async () => {
+    const cwd = await sessionWorkspace(id, sup);
+    const found = cwd && findProjectByWorkspace(cwd);
+    if (found) {
+      const checkoutSessions = await sessionsUsingWorkspace(found.project, found.project.repoPath, sup);
+      const affected = await sessionsUsingWorkspace(found.project, cwd, sup);
+      if (await hasSynchronizedSibling([...checkoutSessions, ...affected], id, sync)) return err(c, 409, "sync_shared_workspace");
+    }
     try {
       return c.json(await mergeSession(sup, hub, id));
     } catch (e) {
@@ -849,7 +870,11 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       if (body.sync.allConversations !== undefined && process.env.PI_WEB_SYNC_ALL_CONVERSATIONS !== undefined) {
         return err(c, 409, "setting_overridden", { field: "sync.allConversations", source: "PI_WEB_SYNC_ALL_CONVERSATIONS" });
       }
-      try { cfg.sync = normalizeSyncConfig({ ...cfg.sync, ...body.sync }, { strict: true }); }
+      try {
+        const nextSync = normalizeSyncConfig({ ...cfg.sync, ...body.sync }, { strict: true });
+        sync.assertConfigurationChangeAllowed?.(syncConfig(cfg), nextSync);
+        cfg.sync = nextSync;
+      }
       catch (e) {
         if (e.code === "invalid_sync_configuration") return err(c, 400, e.code, { message: e.message });
         throw e;

@@ -57,4 +57,3 @@ function sanitizeGitRemote(value) {
     return /\s/.test(remote) ? undefined : remote;
   }
 }
-
