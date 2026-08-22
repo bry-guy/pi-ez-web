@@ -1,22 +1,8 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
-const API_CONTRACT_VERSION = 5;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-contexts", "workspace-branches", "pi-resources", "extension-activity", "file-explorer"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
-}
-
-function validateStateContract(state) {
-  const advertised = new Set(Array.isArray(state?.capabilities) ? state.capabilities : []);
-  const missing = REQUIRED_CAPABILITIES.filter(capability => !advertised.has(capability));
-  if (state?.apiContractVersion === API_CONTRACT_VERSION && missing.length === 0) return state;
-  const error = Object.assign(new Error("incompatible_server"), {
-    error: "incompatible_server",
-    message: "The server is running an older pi-ez-web build. Restart pi-ez-web and reload this page.",
-  });
-  store.set({ fatalError: error.message });
-  throw error;
 }
 
 async function responseBody(r) {
@@ -110,7 +96,7 @@ export const api = {
 };
 
 export async function refreshState() {
-  const s = validateStateContract(await api.state());
+  const s = await api.state();
   const active = findSessionInState(s, store.activeKey());
   store.set({
     projects: s.projects,
