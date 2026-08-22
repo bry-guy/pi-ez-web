@@ -396,6 +396,13 @@ class PiHeader extends HTMLElement {
       const messages = {
         sync_not_configured: "Configure a sync server in Settings first.",
         sync_client_unavailable: "The pi-sync client is not installed on this server yet.",
+        sync_unavailable: "The synchronization service is temporarily unavailable.",
+        sync_duplicate: "This conversation already has a canonical synchronized copy.",
+        active_lease: err.details?.holder ? `This conversation is in use by ${err.details.holder}.` : "This conversation is in use by another client.",
+        sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
+        sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
+        sync_session_not_found: "The sync server no longer has this conversation.",
+        sync_workspace_setup_required: err.message || "Prepare the recorded Git workspace before continuing.",
         session_streaming: "Stop the current response before synchronizing this conversation.",
         session_compacting: "Wait for compaction to finish before synchronizing this conversation.",
       };
@@ -441,6 +448,8 @@ class PiHeader extends HTMLElement {
         main_worktree_external: `main is checked out by another worktree${err.workspacePath ? ` at ${err.workspacePath}` : ""}. Remove it outside the app first.`,
         return_rehome_failed: "main is ready, but this session could not move to the checkout.",
         git_switch_failed: err.detail || "Git could not switch branches.",
+        sync_workspace_in_use: "A synchronized conversation is using this workspace.",
+        sync_workspace_setup_required: err.message || "Prepare the synchronized Git workspace first.",
       };
       store.set({ workspaceError: messages[err.error] || err.error || err.message || "Could not switch branches." });
     } finally {
@@ -475,6 +484,9 @@ class PiHeader extends HTMLElement {
         main_worktree_forbidden: "main belongs at the repository checkout; use Return to main.",
         fork_requires_transcript: "Start a conversation before opening it as a fork.",
         session_streaming: "Stop the current response before moving this session.",
+        active_lease: "This conversation is in use by another client.",
+        sync_conflict: "The canonical conversation changed elsewhere.",
+        sync_workspace_setup_required: err.message || "Prepare the synchronized Git workspace first.",
       };
       store.set({ workspaceError: messages[err.error] || err.error || err.message || "Could not create worktree." });
     } finally {
@@ -515,9 +527,11 @@ class PiHeader extends HTMLElement {
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const activeSession = node || chat;
     const activeStreaming = !!activeSession && (activeSession.streaming || store.transcript(activeSession.id).streaming);
-    const syncControl = activeSession?.synchronized && activeSession.syncState !== "error"
-      ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
-      : s.sync?.configured && s.sync.connection === "available" && activeSession && !activeStreaming
+    const syncControl = activeSession?.synchronized && activeSession.syncState === "in_use"
+      ? `<span class="sync-badge" title="In use by ${esc(activeSession.leaseHolder || "another client")}">IN USE</span>`
+      : activeSession?.synchronized && activeSession.syncState !== "error"
+        ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
+        : s.sync?.configured && s.sync.connection === "available" && activeSession && !activeStreaming
         ? `<button class="settings-action sync-header-action" data-act="sync-session" ${this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "Synchronizing…" : "Synchronize this conversation"}</button>`
         : "";
     const branch = inProject ? this.sessionBranch() : null;

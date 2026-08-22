@@ -66,6 +66,8 @@ export class RealSupervisor {
     this.runtime = null;         // shared ModelRuntime for all attached sessions
     this.runtimePromise = null;   // prevents concurrent runtime initialization
     this.attachPromises = new Map(); // sessionId -> in-flight attach
+    this.pendingSyncHeads = new Map(); // sessionId -> canonical head to restore on attach
+    this.syncCoordinator = null;
     this.sessionCreateTail = Promise.resolve(); // serialize SDK resource setup
     this.models = null;
     this.modelError = null;
@@ -169,7 +171,7 @@ export class RealSupervisor {
     return model;
   }
 
-  async _createConfiguredSession({ cwd, sessionManager, modelRuntime, model }) {
+  async _createConfiguredSession({ cwd, sessionManager, modelRuntime, model, syncSessionId = null }) {
     const SDKModule = await SDK();
     const runtime = modelRuntime || await this._modelRuntime();
     try {
@@ -178,10 +180,14 @@ export class RealSupervisor {
         SDKModule.getAgentDir(),
         SDKModule.SettingsManager,
       );
+      const syncSkillPaths = await this.syncCoordinator?.skillPaths?.() || [];
+      const syncContext = syncSessionId ? await this.syncCoordinator?.contextForSession?.(syncSessionId) : null;
       const resourceLoader = new SDKModule.DefaultResourceLoader({
         cwd,
         agentDir: SDKModule.getAgentDir(),
         settingsManager,
+        ...(syncSkillPaths.length ? { additionalSkillPaths: syncSkillPaths } : {}),
+        ...(syncContext ? { appendSystemPrompt: [syncContext] } : {}),
       });
       await resourceLoader.reload();
       const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
@@ -232,6 +238,7 @@ export class RealSupervisor {
       sessionManager,
       modelRuntime: runtime,
       model,
+      syncSessionId: id,
     }));
     this.paths.set(session.sessionId, session.sessionFile);
     const st = {
@@ -252,6 +259,11 @@ export class RealSupervisor {
       path: session.sessionFile,
       cwd: resolvedCwd,
     });
+    const pendingHead = this.pendingSyncHeads.get(session.sessionId);
+    if (pendingHead) {
+      this.pendingSyncHeads.delete(session.sessionId);
+      await session.navigateTree(pendingHead, { summarize: false });
+    }
     return st;
   }
 
@@ -394,11 +406,17 @@ export class RealSupervisor {
           this._endTurnWithError(id, st, error);
           break;
         }
-        if (st.turnEnded) break;
+        if (st.turnEnded) {
+          if (!st.session?.isStreaming) void this.syncCoordinator?.agentSettled?.(id);
+          break;
+        }
         const reason = st.aborted ? "stopped" : "done";
         st.aborted = false;
         st.turnEnded = true;
         hub.emit(id, "turn_end", { turnId: st.turnId, reason });
+        // AgentEvent delivery is synchronous, but synchronization deliberately
+        // runs after the settled event so the complete JSONL file is flushed.
+        if (!st.session?.isStreaming) void this.syncCoordinator?.agentSettled?.(id);
         break;
       }
       case "session_info_changed":
@@ -414,6 +432,74 @@ export class RealSupervisor {
     }
   }
 
+  setSyncCoordinator(coordinator) {
+    this.syncCoordinator = coordinator || null;
+  }
+
+  async allSessions() {
+    const { SessionManager } = await SDK();
+    const infos = await SessionManager.listAll();
+    for (const info of infos) this.paths.set(info.id, info.path);
+    return infos.map(info => ({
+      id: info.id,
+      cwd: info.cwd || null,
+      name: info.name || null,
+      parentSessionId: info.parentSessionPath ? this._idFromPath(info.parentSessionPath) : null,
+      created: info.created,
+      modified: info.modified,
+      firstMessage: info.firstMessage || "",
+    }));
+  }
+
+  async syncSessionInfo(id) {
+    if (!await this._discover(id)) return null;
+    const live = this.live.get(id);
+    const file = live?.session?.sessionFile || this.paths.get(id) || this.info.get(id)?.path;
+    if (!file) return null;
+    const manager = live?.session?.sessionManager || this._managerFor(id);
+    const info = this.info.get(id) || {};
+    return {
+      id,
+      file,
+      cwd: this._boundCwd(id, live?.cwd || manager.getCwd?.()),
+      headEntryId: manager.getLeafId?.() || "",
+      title: live?.session?.sessionName || manager.getSessionName?.() || info.name || "",
+      parentSessionId: info.parentSessionId || null,
+    };
+  }
+
+  async sessionFile(id) {
+    const info = await this.syncSessionInfo(id);
+    return info?.file || null;
+  }
+
+  sessionIdFromFile(file) { return this._idFromPath(file); }
+
+  async prepareSyncSnapshot(id, envelope, materialize) {
+    if (this.isStreaming(id)) throw Object.assign(new Error("Stop the current response before synchronizing this conversation."), { code: "session_streaming" });
+    if (this.isCompacting(id)) throw Object.assign(new Error("Wait for compaction to finish before synchronizing this conversation."), { code: "session_compacting" });
+    const info = await this.syncSessionInfo(id);
+    if (!info) throw Object.assign(new Error("No such session."), { code: "no_such_session" });
+    const live = this.live.get(id);
+    if (live) {
+      await this._disposeLiveState(live, "sync-materialize");
+      this.live.delete(id);
+    }
+    const parentSessionPath = envelope.parentSessionId ? await this.sessionFile(envelope.parentSessionId) : undefined;
+    await materialize(info.file, envelope, { cwd: info.cwd || process.cwd(), ...(parentSessionPath ? { parentSessionPath } : {}) });
+    this.paths.set(id, info.file);
+    this.info.set(id, {
+      ...(this.info.get(id) || {}),
+      id,
+      path: info.file,
+      cwd: info.cwd,
+      name: envelope.title || null,
+      parentSessionId: envelope.parentSessionId || null,
+    });
+    this.pendingSyncHeads.set(id, envelope.headEntryId);
+    return { ...info, title: envelope.title || null, parentSessionId: envelope.parentSessionId || null };
+  }
+
   async createSession({ cwd, name }) {
     const { SessionManager } = await SDK();
     const manager = SessionManager.create(cwd);
@@ -424,6 +510,7 @@ export class RealSupervisor {
     this.info.set(id, {
       id, path: file, cwd, name: name || null, parentSessionId: null,
     });
+    void this.syncCoordinator?.sessionCreated?.(id);
     return { id };
   }
 
@@ -629,6 +716,7 @@ export class RealSupervisor {
     if (!st) return;
     st.aborted = true;
     await st.session.abort();
+    if (!st.session?.isStreaming) await this.syncCoordinator?.agentSettled?.(id);
   }
 
   async _disposeLiveState(st, reason = "quit") {
@@ -914,7 +1002,7 @@ export class RealSupervisor {
     if (entry && !entry.parentId) sm.resetLeaf();
     const runtime = await this._modelRuntime();
     const { session } = await this._withSessionCreateLock(() =>
-      this._createConfiguredSession({ cwd, sessionManager: sm, modelRuntime: runtime }),
+      this._createConfiguredSession({ cwd, sessionManager: sm, modelRuntime: runtime, syncSessionId: null }),
     );
     if (entry?.parentId) await session.navigateTree(entry.parentId);
     if (name) session.setSessionName(name);
@@ -927,6 +1015,7 @@ export class RealSupervisor {
     };
     st.unsubscribe = session.subscribe(evt => this._onEvent(id, st, evt));
     this.live.set(id, st);
+    void this.syncCoordinator?.sessionCreated?.(id);
     return { id };
   }
 

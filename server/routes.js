@@ -82,6 +82,16 @@ async function suggestedWorktreeBranch(repoPath, sessionId, sup) {
 export function buildApi(sup, { syncCoordinator = null } = {}) {
   const api = new Hono();
   const sync = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
+  sup.setSyncCoordinator?.(sync);
+  const mutate = (id, task, options = {}) => typeof sync.withMutation === "function"
+    ? sync.withMutation(id, task, options)
+    : task();
+  const beginStreamingMutation = id => typeof sync.beginMutation === "function"
+    ? sync.beginMutation(id, { allowStreaming: true })
+    : { managed: false };
+  const finishStreamingMutation = async (id, lease) => {
+    if (lease?.managed) await sync.commitSettled?.(id, lease);
+  };
   const authFlows = new AuthFlowManager(sup);
   const github = new GitHubClient();
   const githubFlows = new GitHubDeviceFlowManager(github);
@@ -97,6 +107,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
 
   api.get("/state", async c => {
     const cfg = loadConfig();
+    void sync.reconcile?.();
     reconcileBindings(cfg, loadBindings());
     const modelState = await safe(() => sup.modelState(), {
       models: [],
@@ -405,7 +416,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       hub.emit(id, "sync_state", { sync: status });
       return c.json({ ok: true, sessionId: id, ...status, created: result.created !== false });
     } catch (e) {
-      if (syncConfig(loadConfig()).allConversations && ["sync_client_unavailable", "sync_unavailable", "sync_enrollment_failed"].includes(e.code)) {
+      if (syncConfig(loadConfig()).allConversations && ["sync_client_unavailable", "sync_unavailable", "sync_enrollment_failed", "sync_session_not_found"].includes(e.code)) {
         markSyncPending(id);
       }
       const statuses = {
@@ -449,7 +460,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const mode = body?.mode || "prompt";
     if (!text.trim().startsWith("/")) return err(c, 400, "invalid_slash_command");
     try {
-      const result = await sup.command(id, text.trim(), mode);
+      const result = await mutate(id, () => sup.command(id, text.trim(), mode));
       if (result.action === "settings") return c.json({ ok: true, action: "settings" });
       return c.json({ ok: true, ...result });
     } catch (e) {
@@ -492,10 +503,17 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       image?.type !== "image" || typeof image.data !== "string" || !/^image\/(png|jpeg|webp|gif)$/.test(image.mimeType || "") ||
       image.data.length > 8_000_000
     )) return err(c, 400, "invalid_images");
+    let lease;
     try {
+      lease = await beginStreamingMutation(id);
       await sup.message(id, messageText, mode, images, clientMessageId);
+      // Real and mock supervisors call agentSettled after the asynchronous run
+      // reaches idle. A synchronous/no-model failure has no active stream, so
+      // finish the short mutation here instead.
+      if (lease?.managed && !sup.isStreaming(id)) await finishStreamingMutation(id, lease);
       return c.json({ ok: true });
     } catch (e) {
+      if (lease?.managed) await sync.release?.(id, lease).catch(() => undefined);
       if (e.code === "model_required") {
         return err(c, 409, "model_required", {
           message: "Connect a provider or choose an available model.",
@@ -506,8 +524,16 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
   });
 
   api.post("/sessions/:id/stop", async c => {
-    await sup.stop(c.req.param("id"));
-    return c.json({ ok: true });
+    const id = c.req.param("id");
+    const lease = await beginStreamingMutation(id);
+    try {
+      await sup.stop(id);
+      if (lease?.managed) await finishStreamingMutation(id, lease);
+      return c.json({ ok: true });
+    } catch (error) {
+      if (lease?.managed) await sync.release?.(id, lease).catch(() => undefined);
+      throw error;
+    }
   });
 
   api.get("/sessions/:id/transcript", async c => {
@@ -530,9 +556,10 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
   });
 
   api.post("/sessions/:id/model", async c => {
+    const id = c.req.param("id");
     const { model } = await c.req.json();
     try {
-      await sup.setModel(c.req.param("id"), model);
+      await mutate(id, () => sup.setModel(id, model));
       return c.json({ ok: true, model });
     } catch (e) {
       if (e.code === "model_unavailable") return err(c, 400, "model_unavailable");
@@ -544,18 +571,21 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
 
   api.get("/sessions/:id/thinking", async c => c.json(await sup.thinking(c.req.param("id"))));
   api.post("/sessions/:id/thinking", async c => {
+    const id = c.req.param("id");
     const { level } = await c.req.json();
-    return c.json(await sup.setThinking(c.req.param("id"), level));
+    return c.json(await mutate(id, () => sup.setThinking(id, level)));
   });
 
   api.post("/sessions/:id/name", async c => {
+    const id = c.req.param("id");
     const { name } = await c.req.json();
-    await sup.setName(c.req.param("id"), name);
+    await mutate(id, () => sup.setName(id, name));
     return c.json({ ok: true, name: String(name || "").trim() || null });
   });
 
   api.post("/sessions/:id/worktree", async c => {
     const id = c.req.param("id");
+    return mutate(id, async () => {
     const body = await c.req.json().catch(() => ({}));
     const fork = body.fork === true;
     const cwd = await sessionWorkspace(id, sup);
@@ -630,10 +660,12 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const setup = !existingTarget && projectHooks(cfg, project).setup;
     const setupResult = setup ? hookResult(await runHook(setup, { cwd: target }), "setup") : null;
     return c.json({ ok: true, branch, workspacePath: target, setup: setupResult });
+    });
   });
 
   api.post("/sessions/:id/switch", async c => {
     const id = c.req.param("id");
+    return mutate(id, async () => {
     const body = await c.req.json().catch(() => ({}));
     const cwd = await sessionWorkspace(id, sup);
     const found = cwd && findProjectByWorkspace(cwd);
@@ -677,26 +709,31 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       hub.emit(session.id, "workspace_switched", { branch, workspacePath: cwd });
     }
     return c.json({ ok: true, branch, workspacePath: cwd, switched: true });
+    });
   });
 
   api.post("/sessions/:id/pull", async c => {
-    const cwd = await sessionWorkspace(c.req.param("id"), sup);
+    const id = c.req.param("id");
+    return mutate(id, async () => {
+    const cwd = await sessionWorkspace(id, sup);
     const found = cwd && findProjectByWorkspace(cwd);
     if (!found) return err(c, 404, "no_project_for_session");
     try {
       const result = ws.pullWorkspace(cwd);
-      hub.emit(c.req.param("id"), "session_meta", { branch: ws.currentBranch(cwd) });
+      hub.emit(id, "session_meta", { branch: ws.currentBranch(cwd) });
       return c.json({ ok: true, branch: ws.currentBranch(cwd), workspacePath: cwd, ...result });
     } catch (e) {
       if (e.code === "git_pull_failed") return err(c, 409, e.code, { detail: e.detail });
       throw e;
     }
+    });
   });
 
   // Configured project hooks run in the current session workspace. Hook names
   // are deployment-defined; this endpoint does not invent a fixed vocabulary.
   api.post("/sessions/:id/hooks/:name", async c => {
     const id = c.req.param("id");
+    return mutate(id, async () => {
     const name = c.req.param("name");
     const cwd = await sessionWorkspace(id, sup);
     if (!cwd) return err(c, 404, "no_workspace");
@@ -706,12 +743,14 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (!command) return err(c, 404, "no_such_hook");
     const result = hookResult(await runHook(command, { cwd }), name);
     return c.json(result);
+    });
   });
 
   // Bang: user-initiated local shell in the session's workspace. Distinct from
   // agent tool calls end-to-end (orange ! rendering keyed on bang_* events).
   api.post("/sessions/:id/bang", async c => {
     const id = c.req.param("id");
+    return mutate(id, async () => {
     const { cmd } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
@@ -728,12 +767,14 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     hub.emit(id, "bang_end", { bangId, exit, durationMs, stdout: out });
     await sup.bangRecord(id, { id: bangId, role: "bang", cmd, meta, out });
     return c.json({ exit, durationMs });
+    });
   });
 
   // Close: checkout sessions are archival; the last session in a worktree
   // removes that worktree and branch. Confirmation lives in the UI.
   api.post("/sessions/:id/close", async c => {
     const id = c.req.param("id");
+    return mutate(id, async () => {
     try {
       await closeSession(sup, hub, id);
     } catch (e) {
@@ -742,18 +783,22 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       throw e;
     }
     return c.json({ ok: true });
+    });
   });
 
   // Merge: land a non-main worktree branch into the repository checkout on
   // main, clean up, and re-home every source session (they stay open).
   api.post("/sessions/:id/merge", async c => {
+    const id = c.req.param("id");
+    return mutate(id, async () => {
     try {
-      return c.json(await mergeSession(sup, hub, c.req.param("id")));
+      return c.json(await mergeSession(sup, hub, id));
     } catch (e) {
       const codes = { session_streaming: 409, sessions_active: 409, merge_rehome_failed: 409, merge_cleanup_failed: 409, main_worktree_external: 409, no_project_for_session: 404, nothing_to_merge: 400, checkout_dirty: 409, merge_conflict: 409, git_switch_failed: 409 };
       if (codes[e.code]) return err(c, codes[e.code], e.code, e.detail ? { detail: e.detail, workspacePath: e.workspacePath } : e.workspacePath ? { workspacePath: e.workspacePath } : {});
       throw e;
     }
+    });
   });
 
   // ---------- workspace cleanup (no daemon: in-server job + endpoint) ----------
@@ -766,6 +811,10 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (!wsPath) return err(c, 404, "no_workspace");
     if (wsPath === p.repoPath) return err(c, 400, "cannot_remove_checkout");
     if (branch === ws.MAIN_BRANCH) return err(c, 409, "main_worktree_external", { workspacePath: wsPath });
+    const sessions = await sessionsUsingWorkspace(p, wsPath, sup);
+    for (const session of sessions) {
+      if ((await sync.status(session.id)).synchronized) return err(c, 409, "sync_workspace_in_use");
+    }
     try {
       ws.removeWorkspace({ repoPath: p.repoPath, workspacePath: wsPath, force: c.req.query("force") === "1" });
     } catch (e) {

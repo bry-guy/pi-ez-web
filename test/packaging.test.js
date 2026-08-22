@@ -23,6 +23,9 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
+  assert.match(dockerfile, /ARG PI_SYNC_REPOSITORY=https:\/\/github\.com\/bry-guy\/pi-sync\.git/);
+  assert.match(dockerfile, /ARG PI_SYNC_COMMIT=25933a7d1124faadce3a5580aa9ab91853b4d2be/);
+  assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
   assert.match(dockerfile, /FNOX_VERSION=v1\.25\.1/);
   assert.match(dockerfile, /OP_VERSION=v2\.34\.0/);
   assert.match(dockerfile, /OPENTOFU_VERSION=1\.11\.5/);

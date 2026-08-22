@@ -8,6 +8,7 @@ import { ensureHome, loadConfig } from "./config.js";
 import { hub } from "./events.js";
 import { buildApi } from "./routes.js";
 import { createSupervisor } from "./supervisor/index.js";
+import { createSyncCoordinator } from "./sync/coordinator.js";
 import { publicError } from "./pi-configuration.js";
 import { piWebStashes, prune } from "./workspaces.js";
 
@@ -56,18 +57,28 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
       stack: publicError(error instanceof Error ? error.stack : String(error)),
     });
     c.header("x-request-id", requestId);
+    const code = typeof error?.code === "string" ? error.code : "";
+    const status = Number(error?.status);
+    if (status >= 400 && status < 500 && (code.startsWith("sync_") || ["active_lease", "session_streaming", "session_compacting"].includes(code))) {
+      return c.json({ error: code, ...(error.message ? { message: error.message } : {}), ...(error.details ? { details: error.details } : {}) }, status);
+    }
+    if (status >= 500 && status < 600 && code.startsWith("sync_")) {
+      return c.json({ error: code, ...(error.message ? { message: error.message } : {}), ...(error.details ? { details: error.details } : {}) }, status);
+    }
     return c.json({ error: "internal_error", requestId }, 500);
   });
   if (!uiOnly) {
     ensureHome();
     sup = createSupervisor(hub);
+    const coordinator = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
+    sup.setSyncCoordinator?.(coordinator);
     app.use("/api/*", async (c, next) => {
       const requestId = randomUUID();
       c.set("requestId", requestId);
       c.header("x-request-id", requestId);
       await next();
     });
-    app.route("/api", buildApi(sup, { syncCoordinator }));
+    app.route("/api", buildApi(sup, { syncCoordinator: coordinator }));
   }
   addStaticRoutes(app, { uiOnly });
   return { app, sup };

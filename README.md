@@ -127,6 +127,21 @@ registered OAuth App ID, a deployment must provide that public ID through this
 advanced override.
 Environment values take precedence over config and are read-only in Settings.
 
+The production image builds the pinned `pi-sync` client from the commit in the
+Dockerfile. For a local checkout, build the sibling package and point the
+adapter at it without adding package state to `PI_WEB_HOME`:
+
+```sh
+npm install --package-lock=false --prefix /path/to/pi-sync/packages/pi-sync
+npm run build --prefix /path/to/pi-sync/packages/pi-sync
+PI_WEB_SYNC_CLIENT_MODULE=/path/to/pi-sync/packages/pi-sync mise start
+```
+
+The web adapter keeps lease tokens and ETags in memory only. It materializes a
+canonical snapshot before a synchronized mutation, renews the lease while Pi
+runs, uploads the settled native JSONL through the shared adapter, and releases
+it. Unenrolled sessions remain local-only unless `allConversations` is enabled.
+
 For a local real-server test, `mise start` is the normal command but does not
 inherit a deployment's environment. Supply the public OAuth App client ID to
 make GitHub Device Flow available locally:
