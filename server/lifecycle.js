@@ -1,7 +1,6 @@
-// Session/workspace lifecycle: explicit close and merge.
-//
-// Closing hides the session and preserves its transcript. A worktree is removed
-// only when the closed session is the last session using it.
+// Session lifecycle is deliberately independent of Git lifecycle.
+// Closing archives the conversation only; worktrees and branches remain
+// available to agents, terminals, and other sessions.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { loadBindings, loadClosed, loadConfig, saveBindings, saveClosed } from "./config.js";
@@ -10,41 +9,24 @@ import * as ws from "./workspaces.js";
 
 
 export function findProjectByWorkspace(wsPath) {
+  const bindings = loadBindings();
   for (const p of loadConfig().projects) {
-    const map = ws.listWorktrees(p.repoPath);
-    if (Object.values(map).some(workspacePath => path.resolve(workspacePath) === path.resolve(wsPath))) return { project: p, worktrees: map };
+    const contexts = ws.listContexts(p.repoPath);
+    const discovered = contexts.some(context => path.resolve(context.path) === path.resolve(wsPath));
+    const retained = Object.values(bindings).some(binding => binding?.projectId === p.id && binding.workspacePath && path.resolve(binding.workspacePath) === path.resolve(wsPath));
+    if (discovered || retained) {
+      return { project: p, contexts, worktrees: Object.fromEntries(contexts.filter(context => context.branch).map(context => [context.branch, context.path])) };
+    }
   }
   return null;
 }
 
-// Close one session. Throws { code: "session_streaming" }.
-// Semantics follow workspace type, not lineage:
-//  - checkout session (or plain chat): archival only — nothing in git is
-//    touched; the session's branch is the checkout's branch and survives.
-//  - last worktree session: DESTRUCTIVE — worktree removed (force) and the
-//    branch force-deleted. Shared workspaces stay available to their siblings.
-//    Transcript always survives (closed is a marker).
-export async function closeSession(sup, hub, sessionId) {
-  if (sup.isStreaming(sessionId)) {
-    throw Object.assign(new Error("session_streaming"), { code: "session_streaming" });
-  }
-  const cwd = await sessionWorkspace(sessionId, sup);
-  const found = cwd && findProjectByWorkspace(cwd);
-  if (found && path.resolve(cwd) !== path.resolve(found.project.repoPath)) {
-    const branch = Object.entries(found.worktrees).find(([, workspacePath]) => path.resolve(workspacePath) === path.resolve(cwd))?.[0];
-    const shared = await sessionsUsingWorkspace(found.project, cwd, sup);
-    if (shared.length <= 1 && branch !== ws.MAIN_BRANCH) {
-      ws.removeWorkspace({ repoPath: found.project.repoPath, workspacePath: cwd, force: true });
-      if (branch) {
-        try { execFileSync("git", ["branch", "-D", branch], { cwd: found.project.repoPath }); } catch { /* already gone */ }
-      }
-    }
-  }
+// Close one session. This is archival only and is allowed during a turn;
+// stopping a turn remains an explicit user action.
+export async function closeSession(_sup, hub, sessionId) {
   const closed = loadClosed();
   closed.add(sessionId);
   saveClosed(closed);
-  const bindings = loadBindings();
-  if (bindings[sessionId]) { delete bindings[sessionId]; saveBindings(bindings); }
   hub.emit(sessionId, "session_closed", { sessionId });
   return { closed: true };
 }
@@ -53,6 +35,8 @@ function failure(code, extra = {}) {
   return Object.assign(new Error(code), { code, ...extra });
 }
 
+// Compatibility helpers retained for older API clients; branch workflows now
+// use the explicit branch-context and merge-local routes.
 export async function switchCheckoutToMain(sup, hub, project) {
   const worktrees = ws.listWorktrees(project.repoPath);
   const mainPath = worktrees[ws.MAIN_BRANCH];
@@ -93,6 +77,8 @@ export async function returnSessionToMain(sup, hub, sessionId) {
   return { ok: true, branch: ws.MAIN_BRANCH, workspacePath: project.repoPath, switched: result.switched, returned: true };
 }
 
+// Legacy Git mutation retained for old API clients; the current UI delegates
+// merging to agents or the operator.
 export async function mergeSession(sup, hub, sessionId) {
   const cwd = await sessionWorkspace(sessionId, sup);
   const found = cwd && findProjectByWorkspace(cwd);

@@ -62,18 +62,13 @@ export const store = {
     openActivity: {},
     openDirs: {},
     workspaceSettingsOpen: false,
-    branchSwitchFormOpen: false,
-    branchSwitchBranch: "",
-    branchSwitchRemote: "",
-    worktreeFormOpen: false,
-    worktreeBranch: "",
-    worktreeRemote: "",
-    worktreeFork: false,
-    workspaceError: null,
-    confirm: null,          // { type: "merge"|"close", id, branch, sessions, error? }
+    confirm: null,          // close | merge | deleteBranch confirmation payload
     filesOpen: false,
     repoPickerOpen: false,
     repoPickerSource: null,
+    sessionPicker: null,       // { projectId, mode: "new"|"switch"|"fork", sourceSessionId, branch, name }
+    sessionPickerContextId: null,
+    sessionPickerError: null,
     query: "",
     repoQuery: "",
     drafts: {},              // sessionId -> unsent composer text

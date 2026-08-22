@@ -108,12 +108,26 @@ function statusKind(code) {
   return code === "A" ? "new" : code === "D" ? "removed" : "modified";
 }
 
+function workingTreeStatuses(workspace) {
+  const statuses = new Map();
+  const output = git(workspace, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--"], { fallback: "" });
+  for (const record of output.split("\0")) {
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    const relative = record.slice(3);
+    if (!visiblePath(relative)) continue;
+    const status = code.includes("D") ? "removed" : code.includes("A") || code.includes("?") ? "new" : "modified";
+    statuses.set(relative, status);
+  }
+  return statuses;
+}
+
 function diffStatuses({ workspace, repoPath, target }) {
   const targets = targetsFor(repoPath);
   if (!targets.includes(target)) throw coded("invalid_diff_target", `Diff target ${target} is unavailable.`);
-  const statuses = new Map();
-  if (target === NO_DIFF_TARGET) return { targets, statuses };
+  if (target === NO_DIFF_TARGET) return { targets, statuses: workingTreeStatuses(workspace) };
 
+  const statuses = new Map();
   const diff = git(workspace, ["diff", "--no-ext-diff", "--no-color", "--name-status", "--no-renames", "-z", target, "--"], { fallback: "" });
   const fields = diff.split("\0");
   for (let i = 0; i + 1 < fields.length; i += 2) {
@@ -122,12 +136,9 @@ function diffStatuses({ workspace, repoPath, target }) {
     if (code && visiblePath(relative)) statuses.set(relative, statusKind(code[0]));
   }
 
-  const worktree = git(workspace, ["status", "--porcelain=v1", "--untracked-files=all", "-z", "--"], { fallback: "" });
-  for (const record of worktree.split("\0")) {
-    if (record.startsWith("?? ")) {
-      const relative = record.slice(3);
-      if (visiblePath(relative)) statuses.set(relative, "new");
-    }
+  // `git diff <target>` includes tracked changes, but not untracked files.
+  for (const [relative, status] of workingTreeStatuses(workspace)) {
+    if (status === "new" && !statuses.has(relative)) statuses.set(relative, status);
   }
   return { targets, statuses };
 }
@@ -166,8 +177,7 @@ function statusTree(statuses, tree = []) {
 
 export function readFileTree({ workspace, repoPath, target = NO_DIFF_TARGET }) {
   const { targets, statuses } = diffStatuses({ workspace, repoPath, target });
-  const tree = target === NO_DIFF_TARGET ? fileTree(workspace) : statusTree(statuses, fileTree(workspace));
-  return { tree, target, targets };
+  return { tree: statusTree(statuses, fileTree(workspace)), target, targets, statusTarget: target === NO_DIFF_TARGET ? "working-tree" : target };
 }
 
 function contentLines(content) {

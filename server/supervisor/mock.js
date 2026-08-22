@@ -152,6 +152,7 @@ export class MockSupervisor {
     if (["tree", "resume"].includes(parsed.name)) return { action: "sidebar" };
     if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Mock sessions use the configured web trust policy." };
     if (parsed.name === "new") return { action: "new" };
+    if (parsed.name === "fork") return { action: "fork" };
     if (parsed.name === "compact") return { action: "refresh", message: "Session context compacted.", notice: false };
     if (parsed.name === "reload") return { action: "refresh", message: "Pi resources reloaded." };
     if (parsed.name === "quit") return { action: "quit" };

@@ -34,7 +34,7 @@
    sidebar collapses to content height, its footer floats mid-screen, and
    .rail-scroll / .files-scroll never scroll. */
 pi-app, pi-sidebar, pi-header, pi-thread, pi-composer, pi-files,
-pi-projects, pi-settings, pi-repo-picker, pi-confirm { display: contents; }
+pi-projects, pi-settings, pi-repo-picker, pi-session-picker, pi-confirm { display: contents; }
 html, body { height: 100%; }
 html { overflow-x: hidden; }
 body {
@@ -570,11 +570,12 @@ pi-context-meter { display: block; padding: 0 13px; }
 .repos-root-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .settings-save { border-radius: 8px; padding: 6px 10px; font-size: 12px; }
 .settings-save:hover, .settings-save:focus-visible { border-color: var(--accent); color: var(--accent); }
-.settings-save:disabled, .settings-action:disabled { opacity: .55; cursor: not-allowed; }
+.settings-save:disabled, .settings-action:disabled, .confirm-cta:disabled { opacity: .55; cursor: not-allowed; }
 .sync-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 11.5px var(--mono); }
 .sync-toggle input { accent-color: var(--accent); }
 .sync-header-action { white-space: nowrap; }
 .sync-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--green); border-radius: 6px; color: var(--green); font: 10px var(--mono); letter-spacing: .04em; }
+.danger-outline { border-color: var(--red) !important; color: var(--red) !important; }
 .settings-chip {
   border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; padding: 6px 12px;
   font-family: var(--mono); font-size: 11.5px; cursor: pointer;
@@ -634,8 +635,54 @@ aside.files.file-viewer {
 .file-code .hljs-name, .file-code .hljs-tag { color: #ff8f8f; }
 .file-code .hljs-meta { color: #b2ceee; }
 .file-diff-meta { padding: 0 11px 8px; color: var(--faint); font: 10px var(--mono); }
-.file-diff-body { max-height: 55vh; overflow: auto; }
+.file-diff-body { max-height: 55vh; overflow: auto; min-width: 100%; }
+.file-diff-body .diff-line { min-width: 100%; width: max-content; padding-right: 24px; }
 .file-empty { padding: 22px 12px; color: var(--muted); font: 12px/1.5 var(--mono); text-align: center; }
+
+/* ---------- branch/session picker ---------- */
+.session-picker-scrim {
+  position: fixed; inset: 0; z-index: 37; display: flex; align-items: flex-start; justify-content: center;
+  padding: 9vh 16px 20px; background: oklch(0.15 0.02 255 / .52);
+}
+.session-picker {
+  width: min(620px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden;
+  border-radius: 14px; background: var(--surface-2); box-shadow: var(--elevation-2);
+}
+.session-picker-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; background: var(--surface); }
+.session-picker-head > div { flex: 1; min-width: 0; }
+.session-picker-subtitle { margin-top: 4px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.session-picker-body { overflow-y: auto; max-height: calc(min(82vh, 720px) - 124px); padding: 14px 16px 4px; }
+.session-picker-modes { display: flex; gap: 6px; }
+.session-mode { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer; font: 11.5px var(--mono); }
+.session-mode:hover, .session-mode:focus-visible, .session-mode.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); outline: 0; }
+.session-mode:disabled { opacity: .45; cursor: default; }
+.session-picker-source { display: grid; gap: 5px; margin-top: 13px; color: var(--muted); font-size: 11.5px; }
+.session-picker-source select, .session-picker-source input { width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 11.5px var(--mono); outline: 0; }
+.session-picker-source input:focus, .session-picker-source select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.session-picker-help { margin-top: 7px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.branch-user-list { display: grid; gap: 5px; margin-top: 8px; }
+.session-branch-actions { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.session-context-heading { display: flex; align-items: center; justify-content: space-between; margin: 17px 2px 7px; color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.session-context-heading .settings-action { padding: 3px 6px; font-size: 10px; text-transform: none; letter-spacing: normal; }
+.session-context-list { display: grid; gap: 6px; }
+.session-context-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 10px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); text-align: left; cursor: pointer; }
+.session-context-row:hover, .session-context-row:focus-visible { border-color: var(--accent); background: var(--surface-2); outline: 0; }
+.session-context-row.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.session-context-row.unavailable { opacity: .65; cursor: not-allowed; }
+.session-context-row:disabled { color: var(--muted); }
+.session-context-main { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.session-context-main strong { overflow: hidden; color: var(--text); font: 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.session-context-main small { color: var(--faint); font: 10px var(--mono); text-transform: uppercase; }
+.session-context-count { flex: 0 0 auto; padding-top: 1px; color: var(--faint); font: 10px var(--mono); }
+.session-context-check { width: 13px; flex: 0 0 13px; color: var(--accent); font: 14px var(--mono); text-align: center; }
+.session-context-users { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 3px; }
+.session-context-user { display: inline-flex; align-items: center; gap: 4px; max-width: 23ch; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.session-context-user i { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); }
+.session-context-user.working i { background: var(--pi-orange); animation: piBlink 2.4s steps(1) infinite; }
+.session-picker-empty { padding: 18px 8px; color: var(--muted); font-size: 12px; text-align: center; }
+.session-picker-error { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font: 11px var(--mono); line-height: 1.45; }
+.session-picker .hook-result { position: static; width: auto; max-height: 260px; margin-top: 10px; }
+.session-picker-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 16px 16px; background: var(--surface-2); }
 
 /* ---------- modal ---------- */
 .scrim {
@@ -718,6 +765,10 @@ aside.files.file-viewer {
   .subagent-title strong { display: block; }
   .subagent-title span { display: block; margin-top: 2px; }
   .modal { width: 100%; height: 80%; max-height: none; }
+  .session-picker-scrim { align-items: stretch; padding: max(10px, env(safe-area-inset-top)) 0 0; }
+  .session-picker { width: 100%; max-height: none; border-radius: 12px 12px 0 0; }
+  .session-picker-body { max-height: none; flex: 1; }
+  .session-picker-actions { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }
   aside.files {
     position: absolute; inset: var(--header-height, 54px) 0 0 auto; width: 302px; max-width: 86%; z-index: 12;
@@ -751,6 +802,9 @@ aside.files.file-viewer {
 .workspace-modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; background: var(--surface); }
 .workspace-modal-head > div { flex: 1; min-width: 0; }
 .workspace-subtitle { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-details { margin-top: 5px; color: var(--faint); font: 10px var(--mono); }
+.workspace-details summary { cursor: pointer; color: var(--accent); }
+.workspace-details span { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--muted); }
 .workspace-scroll { overflow-y: auto; max-height: calc(min(82vh, 720px) - 62px); padding: 0 10px 10px; }
 .workspace-section { margin-top: 10px; padding: 14px; border-radius: 11px; background: var(--surface); }
 .workspace-section-title, .workspace-sessions-title { color: var(--faint); font: 600 10.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; }
@@ -803,6 +857,8 @@ aside.files.file-viewer {
 .confirm-sessions strong { color: var(--orange); font: 11px var(--mono); }
 .confirm-sessions button { padding: 5px 7px; border-radius: 6px; background: var(--surface-2); color: var(--accent); text-align: left; font: 11px var(--mono); cursor: pointer; }
 .confirm-sessions button:hover, .confirm-sessions button:focus-visible { color: var(--text); outline: 0; }
+.confirm-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; color: var(--text); font-size: 12px; line-height: 1.4; }
+.confirm-check input { margin-top: 2px; accent-color: var(--accent); }
 .confirm-warn {
   margin: 13px 20px 0; padding: 10px 12px; border-radius: 9px; background: var(--orange-soft);
   color: var(--orange); font-family: var(--mono); font-size: 11.5px; line-height: 1.55;

@@ -10,7 +10,6 @@ import { buildApi } from "./routes.js";
 import { createSupervisor } from "./supervisor/index.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { publicError } from "./pi-configuration.js";
-import { piWebStashes, prune } from "./workspaces.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ONLY_CONFIG = Object.freeze({
@@ -86,15 +85,9 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
 
 export function startServer(port, options = {}) {
   const uiOnly = options.uiOnly ?? uiOnlyEnabled();
-  let cfg = null;
-  if (!uiOnly) {
-    cfg = loadConfig();
-    for (const p of cfg.projects) {
-      prune(p.repoPath); // startup cleanup, no daemon
-      const stranded = piWebStashes(p.repoPath);
-      if (stranded.length) console.warn(`pi-web-ui: stranded fork stash(es) in ${p.repoPath}: ${stranded.join(", ")}`);
-    }
-  }
+  const cfg = uiOnly ? null : loadConfig();
+  // Git is observed live; startup must not prune worktrees or inspect/mutate
+  // application-owned transfer stashes.
   const { app, sup } = createApp({ ...options, uiOnly });
   const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg?.port || 3141) });
   return { server, app, sup };

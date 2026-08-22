@@ -22,13 +22,13 @@ npm run dev            # PI_WEB_MODE=mock
 
 ```
 server/
-  index.js            entry: Hono app, static UI, startup worktree prune
+  index.js            entry: Hono app and static UI
   routes.js           REST + SSE + slash commands + bang execution
   commands.js         Pi-native slash-command discovery and parsing
-  workspaces.js       git: worktree-per-branch, status/pull, remote branches, safe fork transfer
-  domain.js           /api/state assembly (projects, session trees, shared workspaces)
+  workspaces.js       live checkout/worktree discovery and Git status
+  domain.js           /api/state assembly (projects, contexts, session trees)
   events.js           SSE hub (event contract v1 + sequence snapshots)
-  lifecycle.js        explicit close and merge lifecycle
+  lifecycle.js        archival close plus legacy lifecycle compatibility
   supervisor/         real.js (pi SDK) · mock.js (scripted) — same interface
   auth-flows.js       server-side Pi OAuth/API-key interaction bridge
   github.js           GitHub device login, public/private API listing, and token store
@@ -44,8 +44,9 @@ docs/archive/CHECKLIST.md  archived real-browser click-through gate
 ```
 
 Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
-`closed.json`, `github-auth.json`, and `chats/`); project worktrees default to
-the Pi-adjacent `~/.pi/worktrees` (and can be overridden with `worktreeRoot`).
+`closed.json`, `github-auth.json`, and `chats/`). Existing project worktrees
+are discovered wherever Git records them; `worktreeRoot` is used for
+app-created non-main worktrees.
 Pi owns transcripts, settings, models, and AI auth under
 `PI_CODING_AGENT_DIR` (normally `~/.pi/agent`). The optional `config.json` `pi`
 block can layer a local or HTTPS `settings.json` profile over SDK sessions and
@@ -56,12 +57,13 @@ storage. The web supervisor binds extensions in headless JSON mode so tools,
 commands, hooks, `session_start`, and dynamic resources work, while TUI/RPC
 extension dialogs remain unavailable. Pi's built-in slash commands are
 translated into web actions (model selection, compaction, export/download,
-copy, session stats, reload, and navigation) instead of being sent
-to the model; terminal-only actions get a safe browser equivalent. Durable todo
-and background-agent lifecycle/progress activity is projected into bounded,
-grouped `activity` transcript/SSE records; the headless subagent bridge keeps
-live state in the supervisor and arbitrary extension widgets and renderer
-functions are not exposed to the browser. New plain chats use private
+copy, session stats, reload, navigation, and conversation start/fork) instead of being sent
+to the model; terminal-only actions get a safe browser equivalent. Durable todo and background-agent lifecycle/progress activity is projected into
+bounded, grouped `activity` transcript/SSE records; the headless subagent
+bridge keeps live state in the supervisor and arbitrary extension widgets and
+renderer functions are not exposed to the browser. New project sessions are
+created in a selected discovered Git context, and forks copy conversation
+history without copying or mutating Git state. New plain chats use private
 scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
@@ -77,37 +79,34 @@ GitHub OAuth client ID is an advanced server deployment setting, not a normal
 user-facing setting. AI login flows use a short-polling REST API because Pi's
 provider OAuth implementations are server-side Node flows. Assistant replies
 use locally served `marked` GFM parsing followed by DOMPurify sanitization;
-raw model HTML is not rendered. The composer discovers Pi slash commands and
-passes them to the SDK, with `/settings` and `/name` handled as first-class web
+raw model HTML is not rendered. The composer discovers Pi slash commands and passes them to the web adapter,
+with `/settings`, `/name`, and same-branch `/fork` handled as first-class web
 actions. Transcript SSE remains contract version 1; REST state is contract
-version 3 and includes a capability marker so stale server processes produce a
+version 5 and includes a capability marker so stale server processes produce a
 restart prompt.
 
 ## Invariants
 
-- A project is a configured repository; a workspace is its checkout or a
-  worktree; a session is a Pi conversation with a workspace cwd. Git enforces
-  one worktree per branch, but multiple sessions may share that worktree.
-- `main` is special: it may only be checked out at the project repository path.
-  The checkout may temporarily use another branch; linked worktrees are never
-  created or switched to `main`. The title bar shows branch, `CHECKOUT` or
-  `WORKTREE`, dirty state, and ahead/behind counts.
-- **Switch branch** changes a non-main workspace in place and moves all
-  sessions sharing it. Selecting `main` from a worktree returns only the
-  requesting session to the repository checkout, switching that checkout to
-  `main` when it is clean and idle. An externally-created `main` worktree is
-  reported and protected rather than removed automatically.
-- Worktree → Open as fork creates a child conversation and non-main worktree.
-  Tracked and untracked dirty state transfers to the fork and is restored in
-  the parent. A dirty project checkout is refused before stashing. Blank branch
-  names use a session-based automatic name.
-- Lifecycle is explicit and git-only (PRs deferred). **Merge to main** stops
-  source sessions, returns the checkout to `main`, merges with `git merge
-  --no-ff`, moves all source sessions to the checkout, then removes the source
-  worktree and branch. Checkout changes and active checkout sessions block the
-  merge; conflicts preserve the source worktree. **Close ×** archives a
-  checkout session; a non-main worktree is removed only when its closing
-  session is the last session using it. Transcripts always survive.
+- A project is a configured repository. `main` normally uses the repository
+  checkout; app-created non-main branches use linked worktrees. Existing
+  externally-created contexts are discovered and remain usable.
+- A session has one execution directory at a time. Switching moves only that
+  session; the session-picker Fork action creates a child conversation in the
+  selected branch. Pi's `/fork` command creates a child on the current branch.
+  Multiple sessions may share a context and the UI shows them without occupancy
+  locks.
+- New branches are created from a selected committed local base, defaulting to
+  `main`. Creating from main fetches and fast-forwards local main when possible.
+- Merge to main is local, confirmed, and requires a clean source plus a clean,
+  up-to-date main checkout. It never pushes or deletes automatically. Push is a
+  separate explicit, non-force operation.
+- Delete is a separate confirmed local branch/worktree operation. Affected
+  sessions move to main, or active/affected sessions may be closed from the
+  confirmation dialog. Ordinary session close archives one conversation only.
+- Branch, checkout/worktree kind, clean/dirty state, ahead/behind, and sharing
+  sessions are observed live. The file tree always displays working-tree impact
+  relative to `HEAD`; an explicit diff target controls file comparison separately.
+  Added subtrees are green, deleted subtrees red, and mixed/modified paths orange.
 
 ## Verification
 
@@ -124,9 +123,11 @@ sandbox and must remain inside a trusted LAN/tailnet/VPN.
 `GET /api/sessions/:id/commands` and `POST /api/sessions/:id/command` expose
 Pi's command surface to the web composer. `/settings` changes the web view and
 `/name <name>` updates Pi session metadata; other discovered commands pass
-through Pi's SDK command handling. Workspace settings include local branches,
-worktrees, and fetched remote refs; selecting a remote ref creates a local
-worktree branch from that ref. The branch cleanup endpoint remains API-only.
+through Pi's SDK command handling. Project state includes discovered Git
+contexts, their live branch/status metadata, and every session using each
+context. The context picker exposes branch names while keeping paths in
+technical details only. The picker owns explicit branch creation, switching,
+local merge, push, and deletion actions.
 
 Unnamed sessions display a compact whitespace-normalized truncation of their
 first message; pi-ez-web does not append a session name entry. The server sorts

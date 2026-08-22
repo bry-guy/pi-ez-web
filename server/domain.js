@@ -1,9 +1,9 @@
-// Assembles /api/state: projects with branch-backed workspace status and
-// session trees. Session->project/branch is derived from cwd
-// (bindings.json overrides for re-homed sessions).
+// Assembles /api/state: projects with live Git contexts and session trees.
+// A context is a concrete checkout/worktree path. Branch and dirty state are
+// observations of that path, never authoritative session metadata.
 import fs from "node:fs";
 import path from "node:path";
-import { chatsDir, loadBindings, loadClosed, loadConfig, saveBindings, worktreeRoot } from "./config.js";
+import { chatsDir, loadBindings, loadClosed, loadConfig } from "./config.js";
 import * as ws from "./workspaces.js";
 import { publicHooks } from "./hooks.js";
 
@@ -27,25 +27,43 @@ export async function sessionSyncState(sessionId, sync) {
   }
 }
 
-export function reconcileBindings(cfg, bindings) {
-  const valid = new Set();
-  for (const project of cfg.projects) {
-    valid.add(pathKey(project.repoPath));
-    try {
-      for (const p of Object.values(ws.listWorktrees(project.repoPath))) valid.add(pathKey(p));
-    } catch { /* malformed or removed project repo */ }
-  }
-  let changed = false;
-  for (const [sessionId, binding] of Object.entries(bindings)) {
-    if (!binding?.workspacePath || !valid.has(pathKey(binding.workspacePath))) {
-      delete bindings[sessionId];
-      changed = true;
-    }
-  }
-  if (changed) saveBindings(bindings);
+export function reconcileBindings(_cfg, _bindings) {
+  // A missing worktree is useful information: keep the binding so the session
+  // can be shown under an unavailable Git context instead of disappearing.
 }
 
-async function discoverProjectSessions(worktrees, bindings, closed, sup) {
+function unavailableContext(project, binding) {
+  const workspacePath = binding.workspacePath;
+  return {
+    id: ws.contextId(project.repoPath, workspacePath),
+    branch: null,
+    path: workspacePath,
+    kind: "unavailable",
+    dirty: null,
+    status: "unavailable",
+    statusError: "The checkout/worktree is no longer discoverable.",
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    externalMain: false,
+    protected: false,
+    head: null,
+    detached: false,
+    sessions: [],
+  };
+}
+
+function projectContexts(project, bindings) {
+  const live = ws.listContexts(project.repoPath);
+  const paths = new Set(live.map(context => pathKey(context.path)));
+  const unavailable = Object.values(bindings)
+    .filter(binding => binding?.projectId === project.id && binding.workspacePath && !paths.has(pathKey(binding.workspacePath)))
+    .map(binding => unavailableContext(project, binding));
+  return [...live, ...unavailable.filter((context, index, list) => list.findIndex(item => item.id === context.id) === index)];
+}
+
+async function discoverProjectSessions(contexts, bindings, closed, sup, projectId = null) {
+  const workspacePaths = contexts.map(context => context.path);
   const discovered = new Map();
   const add = session => {
     if (!session?.id || discovered.has(session.id)) return;
@@ -55,11 +73,16 @@ async function discoverProjectSessions(worktrees, bindings, closed, sup) {
       closed: closed.has(session.id),
     });
   };
-  for (const workspacePath of Object.values(worktrees)) {
-    for (const session of await sup.listSessions(workspacePath)) add(session);
+  for (const context of contexts) {
+    if (context.kind === "unavailable") continue;
+    try {
+      for (const session of await sup.listSessions(context.path)) add(session);
+    } catch { /* a context may disappear between Git discovery and session listing */ }
   }
   for (const [id, binding] of Object.entries(bindings)) {
-    if (!binding?.workspacePath || !Object.values(worktrees).some(workspacePath => pathKey(workspacePath) === pathKey(binding.workspacePath))) continue;
+    const liveContext = binding?.workspacePath && workspacePaths.some(workspacePath => pathKey(workspacePath) === pathKey(binding.workspacePath));
+    const unavailableContextBinding = binding?.projectId === projectId && binding?.workspacePath && !liveContext;
+    if (!liveContext && !unavailableContextBinding) continue;
     if (discovered.has(id)) continue;
     try { add(await sup.meta(id)); } catch { /* bindings can outlive a removed transcript */ }
   }
@@ -69,8 +92,8 @@ async function discoverProjectSessions(worktrees, bindings, closed, sup) {
 export async function sessionsUsingWorkspace(project, workspacePath, sup) {
   const bindings = loadBindings();
   const closed = loadClosed();
-  const worktrees = ws.listWorktrees(project.repoPath);
-  const discovered = await discoverProjectSessions(worktrees, bindings, closed, sup);
+  const contexts = projectContexts(project, bindings);
+  const discovered = await discoverProjectSessions(contexts, bindings, closed, sup, project.id);
   return discovered
     .filter(session => !session.closed && pathKey(session.cwd) === pathKey(workspacePath))
     .map(session => ({
@@ -86,11 +109,12 @@ export async function sessionsUsingWorkspace(project, workspacePath, sup) {
 export async function projectState(project, sup, sync = null) {
   const cfg = loadConfig();
   const bindings = loadBindings();
-  const worktrees = ws.listWorktrees(project.repoPath); // branch -> path
-  const pathToBranch = Object.fromEntries(Object.entries(worktrees).map(([b, p]) => [pathKey(p), b]));
+  const contexts = projectContexts(project, bindings);
+  const pathToContext = Object.fromEntries(contexts.map(context => [pathKey(context.path), context]));
+  const worktrees = Object.fromEntries(contexts.filter(context => context.branch).map(context => [context.branch, context.path]));
 
   const closed = loadClosed();
-  const discovered = await discoverProjectSessions(worktrees, bindings, closed, sup);
+  const discovered = await discoverProjectSessions(contexts, bindings, closed, sup, project.id);
   const all = discovered.filter(s => !s.closed);
   const syncStates = new Map(await Promise.all(all.map(async session => [session.id, await sessionSyncState(session.id, sync)])));
 
@@ -111,7 +135,9 @@ export async function projectState(project, sup, sync = null) {
     return {
       id: n.id,
       title: titleOf(n),
-      branch: pathToBranch[pathKey(n.cwd)] || null,
+      name: n.name || null,
+      contextId: pathToContext[pathKey(n.cwd)]?.id || null,
+      branch: pathToContext[pathKey(n.cwd)]?.branch || null,
       ...syncStates.get(n.id),
       workspacePath: n.cwd || null,
       streaming: sup.isStreaming(n.id),
@@ -126,21 +152,20 @@ export async function projectState(project, sup, sync = null) {
   const sessions = roots.sort((a, b) => compareTimestamp(treeActivity(b), treeActivity(a))).map(toNode);
   const updatedAt = all.reduce((latest, session) => newerTimestamp(latest, isoTime(session.modified)), null);
 
-  const workspaceStatus = Object.fromEntries(Object.entries(worktrees).map(([branch, workspacePath]) => [
-    branch,
-    {
-      ...ws.workspaceStatus({ repoPath: project.repoPath, branch, workspacePath }),
-      sessions: all
-        .filter(session => pathKey(session.cwd) === pathKey(workspacePath))
-        .map(session => ({
-          id: session.id,
-          title: titleOf(session),
-          streaming: sup.isStreaming(session.id),
-          ...syncStates.get(session.id),
-          updatedAt: isoTime(session.modified),
-          when: rel(session.modified),
-        })),
-    },
+  const contextSessions = context => all
+    .filter(session => pathKey(session.cwd) === pathKey(context.path))
+    .map(session => ({
+      id: session.id,
+      title: titleOf(session),
+      streaming: sup.isStreaming(session.id),
+      ...syncStates.get(session.id),
+      updatedAt: isoTime(session.modified),
+      when: rel(session.modified),
+    }));
+  const publicContexts = contexts.map(context => ({ ...context, sessions: contextSessions(context) }));
+  const workspaceStatus = Object.fromEntries(publicContexts.map(context => [
+    context.branch || context.id,
+    { ...context, sessions: context.sessions },
   ]));
 
   return {
@@ -151,12 +176,12 @@ export async function projectState(project, sup, sync = null) {
     branch: ws.currentBranch(project.repoPath),
     branches: ws.listBranches(project.repoPath),
     remoteBranches: ws.listRemoteBranches(project.repoPath),
+    contexts: publicContexts,
     worktrees,
     workspaceStatus,
     sessions,
     updated: updatedAt ? rel(updatedAt) : "—",
     updatedAt,
-    worktreeRoot: worktreeRoot(cfg),
     hooks: publicHooks(cfg, project),
   };
 }

@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
-const API_CONTRACT_VERSION = 3;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"];
+const API_CONTRACT_VERSION = 5;
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-contexts", "workspace-branches", "pi-resources", "extension-activity", "file-explorer"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -56,7 +56,12 @@ export const api = {
     const body = typeof value === "string" ? { repoPath: value } : (value || {});
     return fetch("/api/projects", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
   },
-  newProjectSession: (projectId) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  newProjectSession: (projectId, options = {}) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: JH, body: JSON.stringify(options || {}) }).then(j),
+  forkSession: (id, name = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ name }) }).then(j),
+  branchSession: (id, options = {}) => fetch(`/api/sessions/${encodeURIComponent(id)}/branch-context`, { method: "POST", headers: JH, body: JSON.stringify(options || {}) }).then(j),
+  mergeBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/merge-local`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  pushBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  deleteBranch: (projectId, branch, options = {}) => fetch(`/api/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: JH, body: JSON.stringify(options || {}) }).then(j),
   repos: () => fetch("/api/repos").then(j),
   repositorySources: () => fetch("/api/repository-sources").then(j),
   githubRepos: (query = "", page = 1) => fetch(`/api/github/repos?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),
@@ -69,14 +74,14 @@ export const api = {
   githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
-  files: (projectId, branch, target = "none") => {
+  files: (projectId, contextId, target = "none") => {
     const params = new URLSearchParams({ target });
-    if (branch) params.set("branch", branch);
+    if (contextId) params.set("contextId", contextId);
     return fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params}`).then(j);
   },
-  file: (projectId, branch, filePath, target = "none") => {
+  file: (projectId, contextId, filePath, target = "none") => {
     const params = new URLSearchParams({ path: filePath, target });
-    if (branch) params.set("branch", branch);
+    if (contextId) params.set("contextId", contextId);
     return fetch(`/api/projects/${encodeURIComponent(projectId)}/file?${params}`).then(j);
   },
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
@@ -86,13 +91,6 @@ export const api = {
   }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
   bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
-  worktree: (id, { branch = "", fromRef = undefined, fork = false, atRecordId = undefined } = {}) => fetch(`/api/sessions/${id}/worktree`, {
-    method: "POST", headers: JH, body: JSON.stringify({ branch, fork, ...(fromRef ? { fromRef } : {}), ...(atRecordId ? { atRecordId } : {}) }),
-  }).then(j),
-  switchBranch: (id, branch, fromRef = undefined) => fetch(`/api/sessions/${id}/switch`, {
-    method: "POST", headers: JH, body: JSON.stringify({ branch, ...(fromRef ? { fromRef } : {}) }),
-  }).then(j),
-  pull: id => fetch(`/api/sessions/${id}/pull`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
   context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),
   thinking: id => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`).then(j),
@@ -109,7 +107,6 @@ export const api = {
   },
   settingsPatch: patch => fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(patch || {}) }).then(j),
   close: (id) => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
-  merge: (id) => fetch(`/api/sessions/${id}/merge`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
 };
 
 export async function refreshState() {
@@ -133,6 +130,7 @@ export async function refreshState() {
     settings: s.settings || null,
     reposRoot: s.reposRoot || null,
     reposRootSource: s.reposRootSource || "default",
+    filesLoadedKey: null,
     model: active?.model || s.effectiveDefaultModel || null,
   });
   for (const project of s.projects || []) seedStreaming(project.sessions);
@@ -442,6 +440,8 @@ export function applyEvent(evt, replay = false) {
     case "session_meta":
     case "session_merged":
     case "sync_state":
+    case "git_merge":
+    case "git_branch_deleted":
       refreshState().catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;
     case "session_closed": {

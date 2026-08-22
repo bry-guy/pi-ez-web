@@ -27,7 +27,7 @@ state and is not mounted by the new workload.
 - `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, cached remote Pi profile, and chat scratch space.
 - `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
 - `reposRoot` — the checked-out repositories.
-- `worktreeRoot` — Git worktrees created by the app.
+- `worktreeRoot` — the configured root for app-created linked worktrees; existing worktrees are also discovered from Git.
 
 The image includes `git` and CA certificates. GitHub private clones use HTTPS
 and a temporary askpass helper; public GitHub clones use HTTPS without a token.

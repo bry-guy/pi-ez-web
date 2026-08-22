@@ -59,6 +59,18 @@ test("ensureWorkspace creates a worktree for a new branch without touching the c
   assert.equal(ws.ensureWorkspace({ repoPath: repo, worktreeRoot: wtRoot, projectId: "p1", branch: "feat/x" }), wt);
 });
 
+test("Git contexts identify checkout and linked worktree by stable path IDs", () => {
+  const contexts = ws.listContexts(repo);
+  const checkout = contexts.find(context => context.path === repo);
+  const worktree = contexts.find(context => context.branch === "feat/x");
+  assert.equal(checkout?.kind, "checkout");
+  assert.equal(checkout?.branch, "main");
+  assert.equal(checkout?.status, "clean");
+  assert.equal(worktree?.kind, "worktree");
+  assert.equal(ws.contextId(repo, worktree.path), worktree.id);
+  assert.deepEqual(ws.listContexts(repo).map(context => context.id), contexts.map(context => context.id));
+});
+
 test("main is checkout-only and external main worktrees are protected", () => {
   assert.throws(() => ws.ensureWorkspace({ repoPath: repo, worktreeRoot: wtRoot, projectId: "p1", branch: "main" }), err => err?.code === "main_worktree_forbidden");
   assert.throws(() => ws.forkWorkspace({

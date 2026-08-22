@@ -1,5 +1,5 @@
 // Config + app-home paths. App state discipline: config.json (declarative,
-// user- and UI-editable) + bindings.json (session -> { branch, workspacePath } overrides).
+// user- and UI-editable) + bindings.json (session -> { projectId, workspacePath } context overrides).
 // Everything else is discovered live or owned by pi.
 import fs from "node:fs";
 import os from "node:os";
@@ -17,7 +17,7 @@ const DEFAULTS = {
   projects: [], // { id, name, repoPath, hooks? }
   projectHooks: {}, // deployment-wide hook defaults, overridden per project
   projectHookSets: {}, // deployment hook defaults keyed by project name
-  worktreeRoot: null, // null -> worktreeRootDefault()
+  worktreeRoot: null, // optional root for app-created non-main worktrees
   reposRoot: null, // null -> ~/src; env PI_WEB_REPOS_ROOT still overrides
   port: 3141,
   defaultModel: null,
@@ -259,7 +259,7 @@ export function loadBindings() {
   let migrated = false;
   for (const [sessionId, value] of Object.entries(bindings)) {
     if (typeof value === "string") {
-      bindings[sessionId] = { branch: null, workspacePath: value };
+      bindings[sessionId] = { projectId: null, workspacePath: value };
       migrated = true;
     }
   }

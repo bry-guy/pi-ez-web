@@ -94,8 +94,8 @@ test("bindings v1 strings migrate to v2 objects and round-trip", () => {
   fs.mkdirSync(appHome(), { recursive: true });
   const file = path.join(appHome(), "bindings.json");
   fs.writeFileSync(file, JSON.stringify({ s1: "/tmp/old-worktree" }));
-  assert.deepEqual(loadBindings(), { s1: { branch: null, workspacePath: "/tmp/old-worktree" } });
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { s1: { branch: null, workspacePath: "/tmp/old-worktree" } });
+  assert.deepEqual(loadBindings(), { s1: { projectId: null, workspacePath: "/tmp/old-worktree" } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { s1: { projectId: null, workspacePath: "/tmp/old-worktree" } });
 
   saveBindings({ s2: { branch: "feat/new", workspacePath: "/tmp/new-worktree" } });
   assert.deepEqual(loadBindings(), { s2: { branch: "feat/new", workspacePath: "/tmp/new-worktree" } });
