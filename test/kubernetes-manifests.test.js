@@ -44,6 +44,12 @@ test('preview rollback storage remains retained but is not mounted by the worklo
   assert.match(storage, /name: pi-ez-web-state-parent/);
 });
 
+test('production deployment configures the staged pi-sync endpoint', () => {
+  const deployment = manifest('deploy/k8s/deployment.yaml');
+  assert.match(deployment, /name: PI_WEB_SYNC_SERVER_URL\n\s+value: http:\/\/pi-syncd\.pi-sync\.svc:8080/);
+  assert.match(deployment, /name: PI_WEB_SYNC_ALL_CONVERSATIONS\n\s+value: "false"/);
+});
+
 test('production pod labels do not change its immutable Deployment selector', () => {
   const deployment = manifest('deploy/k8s/deployment.yaml');
 
