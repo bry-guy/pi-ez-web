@@ -22,6 +22,10 @@ const DEFAULTS = {
   port: 3141,
   defaultModel: null,
   defaultThinkingLevel: "medium",
+  sync: {
+    serverUrl: null,
+    allConversations: false,
+  },
   pi: {
     profile: null, // local profile dir/settings.json or HTTPS settings URL
     packages: [], // additional Pi package sources
@@ -83,6 +87,74 @@ export function normalizePiConfig(value, { strict = false } = {}) {
   };
 }
 
+export function normalizeSyncConfig(value, { strict = false } = {}) {
+  const invalid = message => {
+    if (strict) throw Object.assign(new Error(message), { code: "invalid_sync_configuration" });
+    return { ...DEFAULTS.sync };
+  };
+  if (value == null) return { ...DEFAULTS.sync };
+  if (typeof value !== "object" || Array.isArray(value)) return invalid("Sync configuration must be an object.");
+  if (value.serverUrl !== undefined && value.serverUrl !== null && typeof value.serverUrl !== "string") {
+    return invalid("Sync server URL must be a string or null.");
+  }
+  if (value.allConversations !== undefined && typeof value.allConversations !== "boolean") {
+    return invalid("Sync allConversations must be a boolean.");
+  }
+  const serverUrl = typeof value.serverUrl === "string" ? value.serverUrl.trim() : null;
+  if (serverUrl) {
+    try {
+      const parsed = new URL(serverUrl);
+      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported protocol");
+    } catch {
+      return invalid("Sync server URL must be an HTTP or HTTPS URL.");
+    }
+  }
+  return {
+    serverUrl: serverUrl || null,
+    allConversations: value.allConversations === true,
+  };
+}
+
+function envBoolean(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", ""].includes(normalized)) return false;
+  return fallback;
+}
+
+export function syncConfig(cfg = loadConfig()) {
+  const configured = normalizeSyncConfig(cfg?.sync);
+  const rawServerUrl = process.env.PI_WEB_SYNC_SERVER_URL !== undefined
+    ? String(process.env.PI_WEB_SYNC_SERVER_URL).trim()
+    : configured.serverUrl;
+  const serverUrl = rawServerUrl
+    ? normalizeSyncConfig({ serverUrl: rawServerUrl }).serverUrl
+    : null;
+  return {
+    serverUrl,
+    allConversations: envBoolean("PI_WEB_SYNC_ALL_CONVERSATIONS", configured.allConversations),
+  };
+}
+
+export function syncSettingsState(cfg = loadConfig()) {
+  const effective = syncConfig(cfg);
+  return {
+    serverUrl: {
+      value: effective.serverUrl,
+      source: process.env.PI_WEB_SYNC_SERVER_URL !== undefined ? "PI_WEB_SYNC_SERVER_URL" : cfg.sync?.serverUrl ? "config" : "default",
+      editable: process.env.PI_WEB_SYNC_SERVER_URL === undefined,
+    },
+    allConversations: {
+      value: effective.allConversations,
+      source: process.env.PI_WEB_SYNC_ALL_CONVERSATIONS !== undefined ? "PI_WEB_SYNC_ALL_CONVERSATIONS" : cfg.sync?.allConversations ? "config" : "default",
+      editable: process.env.PI_WEB_SYNC_ALL_CONVERSATIONS === undefined,
+    },
+  };
+}
+
 function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); }
   catch (error) {
@@ -123,6 +195,7 @@ export function loadConfig() {
     projectHooks: normalizeHooks(raw.projectHooks),
     projectHookSets: normalizeHookSets(raw.projectHookSets),
     defaultThinkingLevel: normalizeThinkingLevel(raw.defaultThinkingLevel),
+    sync: normalizeSyncConfig(raw.sync),
     pi: normalizePiConfig(raw.pi),
     repositorySources: {
       ...DEFAULTS.repositorySources,

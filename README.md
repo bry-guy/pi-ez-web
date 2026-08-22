@@ -65,6 +65,10 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
   "reposRoot": "~/src",
   "worktreeRoot": null,
   "defaultModel": null,
+  "sync": {
+    "serverUrl": null,
+    "allConversations": false
+  },
   "pi": {
     "profile": "https://github.com/bry-guy/dotfiles",
     "packages": [],
@@ -115,9 +119,12 @@ GitHub device login adds private repositories and stores its token in
 
 Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
 `PI_WEB_GITHUB_CLIENT_ID` (advanced server OAuth-app override),
-`PI_WEB_GITHUB_OWNER`, and `PI_WEB_GITHUB_TOKEN`. The client ID is not a normal
-user setting: until the project ships its own registered OAuth App ID, a
-deployment must provide that public ID through this advanced override.
+`PI_WEB_GITHUB_OWNER`, `PI_WEB_GITHUB_TOKEN`, `PI_WEB_SYNC_SERVER_URL`, and
+`PI_WEB_SYNC_ALL_CONVERSATIONS`. Sync environment values are read-only in
+Settings; without a sync server URL, conversations remain local-only. The
+client ID is not a normal user setting: until the project ships its own
+registered OAuth App ID, a deployment must provide that public ID through this
+advanced override.
 Environment values take precedence over config and are read-only in Settings.
 
 For a local real-server test, `mise start` is the normal command but does not

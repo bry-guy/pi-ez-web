@@ -13,7 +13,7 @@ import { piWebStashes, prune } from "./workspaces.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp() {
+export function createApp({ syncCoordinator = null } = {}) {
   ensureHome();
   const sup = createSupervisor(hub);
   const app = new Hono();
@@ -34,7 +34,7 @@ export function createApp() {
     c.header("x-request-id", requestId);
     return c.json({ error: "internal_error", requestId }, 500);
   });
-  app.route("/api", buildApi(sup));
+  app.route("/api", buildApi(sup, { syncCoordinator }));
   // PWA clients must always revalidate the shell and service worker after a
   // rollout. The service worker supplies offline fallback itself; HTTP caches
   // should never pin an older UI or worker in Safari.
@@ -51,14 +51,14 @@ export function createApp() {
   return { app, sup };
 }
 
-export function startServer(port) {
+export function startServer(port, options = {}) {
   const cfg = loadConfig();
   for (const p of cfg.projects) {
     prune(p.repoPath); // startup cleanup, no daemon
     const stranded = piWebStashes(p.repoPath);
     if (stranded.length) console.warn(`pi-web-ui: stranded fork stash(es) in ${p.repoPath}: ${stranded.join(", ")}`);
   }
-  const { app, sup } = createApp();
+  const { app, sup } = createApp(options);
   const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg.port) });
   return { server, app, sup };
 }

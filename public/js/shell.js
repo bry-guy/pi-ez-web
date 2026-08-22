@@ -342,6 +342,8 @@ class PiHeader extends HTMLElement {
         : { railOpen: !store.state.railOpen });
     } else if (act === "settings") {
       store.set({ view: "settings", workspaceSettingsOpen: false, worktreeFormOpen: false });
+    } else if (act === "sync-session") {
+      await this.syncSession();
     } else if (act === "workspace-settings") {
       store.set(s => ({ workspaceSettingsOpen: !s.workspaceSettingsOpen, branchSwitchFormOpen: false, worktreeFormOpen: false, workspaceError: null }));
     } else if (act === "close-workspace-settings") {
@@ -378,6 +380,29 @@ class PiHeader extends HTMLElement {
       await this.runHook(t.dataset.hook);
     } else if (act === "close-hook-result") {
       store.set({ hookResult: null });
+    }
+  }
+
+  async syncSession() {
+    const id = store.state.chatId || store.state.sessionId;
+    if (!id || this.syncBusy) return;
+    this.syncBusy = true;
+    this.render();
+    try {
+      await api.syncSession(id);
+      await refreshState();
+      store.setError("Conversation synchronized.", 2200);
+    } catch (err) {
+      const messages = {
+        sync_not_configured: "Configure a sync server in Settings first.",
+        sync_client_unavailable: "The pi-sync client is not installed on this server yet.",
+        session_streaming: "Stop the current response before synchronizing this conversation.",
+        session_compacting: "Wait for compaction to finish before synchronizing this conversation.",
+      };
+      store.setError(messages[err.error] || err.message || err.error || "Could not synchronize this conversation.");
+    } finally {
+      this.syncBusy = false;
+      this.render();
     }
   }
 
@@ -488,6 +513,13 @@ class PiHeader extends HTMLElement {
     const node = inProject ? store.findSession(s.sessionId) : null;
     const title = s.view === "settings" ? "Settings"
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
+    const activeSession = node || chat;
+    const activeStreaming = !!activeSession && (activeSession.streaming || store.transcript(activeSession.id).streaming);
+    const syncControl = activeSession?.synchronized && activeSession.syncState !== "error"
+      ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
+      : s.sync?.configured && s.sync.connection === "available" && activeSession && !activeStreaming
+        ? `<button class="settings-action sync-header-action" data-act="sync-session" ${this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "Synchronizing…" : "Synchronize this conversation"}</button>`
+        : "";
     const branch = inProject ? this.sessionBranch() : null;
     const workspace = branch && p ? (p.workspaceStatus?.[branch] || {
       kind: branch === p.branch ? "checkout" : "worktree", path: node?.workspacePath || p.repoPath, dirty: false, ahead: 0, behind: 0, sessions: [], externalMain: false, protected: false,
@@ -510,7 +542,7 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}</div>
-      ${filesBtn}${modal}
+      ${syncControl}${filesBtn}${modal}
     </header>`;
     if (preserveBranchInput) {
       const input = this.querySelector(".new-branch-input");

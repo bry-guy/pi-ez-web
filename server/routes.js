@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, worktreeRoot,
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeSyncConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, syncConfig, syncSettingsState, worktreeRoot,
 } from "./config.js";
 import { chatsState, projectState, reconcileBindings, sessionWorkspace, sessionsUsingWorkspace } from "./domain.js";
 import { closeSession, findProjectByWorkspace, mergeSession, returnSessionToMain } from "./lifecycle.js";
@@ -16,6 +16,8 @@ import { cloneRepository } from "./repositories.js";
 import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
+import { createSyncCoordinator } from "./sync/coordinator.js";
+import { markSyncEnrolled, markSyncPending } from "./sync/enrollment.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
@@ -46,6 +48,7 @@ function repositorySourceState(cfg, github) {
 function settingsState(cfg, github) {
   const githubCfg = githubConfig(cfg);
   return {
+    sync: syncSettingsState(cfg),
     reposRoot: {
       value: reposRoot(cfg),
       source: process.env.PI_WEB_REPOS_ROOT ? "PI_WEB_REPOS_ROOT" : cfg.reposRoot ? "config" : "default",
@@ -76,8 +79,9 @@ async function suggestedWorktreeBranch(repoPath, sessionId, sup) {
   }
 }
 
-export function buildApi(sup) {
+export function buildApi(sup, { syncCoordinator = null } = {}) {
   const api = new Hono();
+  const sync = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
   const authFlows = new AuthFlowManager(sup);
   const github = new GitHubClient();
   const githubFlows = new GitHubDeviceFlowManager(github);
@@ -88,6 +92,7 @@ export function buildApi(sup) {
     apiContractVersion: API_CONTRACT_VERSION,
     buildId: BUILD_ID,
     capabilities: API_CAPABILITIES,
+    sync: sync.state(),
   }));
 
   api.get("/state", async c => {
@@ -110,7 +115,7 @@ export function buildApi(sup) {
     });
     const projects = [];
     for (const p of cfg.projects) {
-      try { projects.push(await projectState(p, sup)); }
+      try { projects.push(await projectState(p, sup, sync)); }
       catch (e) { projects.push({ id: p.id, name: p.name, repoPath: p.repoPath, error: String(e.message || e), branches: [], sessions: [], worktrees: {}, workspaceStatus: {} }); }
     }
     return c.json({
@@ -128,10 +133,11 @@ export function buildApi(sup) {
       piConfiguration,
       repositorySources: repositorySourceState(cfg, github),
       settings: settingsState(cfg, github),
+      sync: sync.state(),
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
       projects,
-      chats: await chatsState(sup),
+      chats: await chatsState(sup, sync),
     });
   });
 
@@ -383,6 +389,50 @@ export function buildApi(sup) {
   });
 
   // ---------- session ops ----------
+
+  const syncSession = async c => {
+    const id = c.req.param("id");
+    const meta = await sup.meta(id);
+    if (!meta) return err(c, 404, "no_such_session");
+    if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
+    if (sup.isCompacting(id)) return err(c, 409, "session_compacting");
+    try {
+      const result = await sync.enroll(id);
+      // The local marker is written only after the coordinator confirms the
+      // remote creation. It contains no lease material or credentials.
+      markSyncEnrolled(id);
+      const status = await sync.status(id);
+      hub.emit(id, "sync_state", { sync: status });
+      return c.json({ ok: true, sessionId: id, ...status, created: result.created !== false });
+    } catch (e) {
+      if (syncConfig(loadConfig()).allConversations && ["sync_client_unavailable", "sync_unavailable", "sync_enrollment_failed"].includes(e.code)) {
+        markSyncPending(id);
+      }
+      const statuses = {
+        sync_not_configured: 409,
+        sync_not_enrolled: 409,
+        session_streaming: 409,
+        session_compacting: 409,
+        sync_stale_etag: 409,
+        sync_client_unavailable: 503,
+        sync_unavailable: 503,
+        sync_enrollment_failed: 502,
+      };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.message ? { message: e.message } : {});
+      if (String(e?.message || "").startsWith("unknown session")) return err(c, 404, "no_such_session");
+      throw e;
+    }
+  };
+
+  api.get("/sessions/:id/sync", async c => {
+    const id = c.req.param("id");
+    if (!await sup.meta(id)) return err(c, 404, "no_such_session");
+    return c.json({ sessionId: id, ...(await sync.status(id)) });
+  });
+  api.post("/sessions/:id/sync", syncSession);
+  // Keep the action name easy for non-browser clients while the UI uses the
+  // noun “Synchronize”. Both routes share the same coordinator boundary.
+  api.post("/sessions/:id/enroll", syncSession);
 
   api.get("/sessions/:id/commands", async c => {
     try { return c.json({ commands: await sup.commands(c.req.param("id")) }); }
@@ -742,6 +792,20 @@ export function buildApi(sup) {
       }
       cfg.pi = nextPiConfiguration;
     }
+    if (body.sync !== undefined) {
+      if (!body.sync || typeof body.sync !== "object" || Array.isArray(body.sync)) return err(c, 400, "invalid_sync_configuration", { message: "Sync configuration must be an object." });
+      if (body.sync.serverUrl !== undefined && process.env.PI_WEB_SYNC_SERVER_URL !== undefined) {
+        return err(c, 409, "setting_overridden", { field: "sync.serverUrl", source: "PI_WEB_SYNC_SERVER_URL" });
+      }
+      if (body.sync.allConversations !== undefined && process.env.PI_WEB_SYNC_ALL_CONVERSATIONS !== undefined) {
+        return err(c, 409, "setting_overridden", { field: "sync.allConversations", source: "PI_WEB_SYNC_ALL_CONVERSATIONS" });
+      }
+      try { cfg.sync = normalizeSyncConfig({ ...cfg.sync, ...body.sync }, { strict: true }); }
+      catch (e) {
+        if (e.code === "invalid_sync_configuration") return err(c, 400, e.code, { message: e.message });
+        throw e;
+      }
+    }
     if (body.defaultModel === null) cfg.defaultModel = null;
     else if (body.defaultModel !== undefined) {
       const models = await sup.listModels();
@@ -798,6 +862,7 @@ export function buildApi(sup) {
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
       repositorySources: repositorySourceState(cfg, github),
       settings: settingsState(cfg, github),
+      sync: sync.state(),
     });
   });
 

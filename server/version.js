@@ -10,5 +10,6 @@ export const API_CAPABILITIES = Object.freeze([
   "pi-resources",
   "extension-activity",
   "file-explorer",
+  "pi-sync",
 ]);
 export const BUILD_ID = process.env.PI_WEB_BUILD_ID || "development";
