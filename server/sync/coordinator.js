@@ -685,23 +685,6 @@ export class PiSyncCoordinator extends BaseCoordinator {
         const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
         throw converted;
       }
-      if (acquired.session?.sessionId !== sessionId) {
-        await client.release(sessionId, acquired.lease.token).catch(() => undefined);
-        throw syncError("The sync server returned a different session identity.", "sync_enrollment_failed");
-      }
-      try {
-        const info = await this.supervisor?.syncSessionInfo?.(sessionId);
-        if (acquired.session.workspace) verifyWorkspacePointer(acquired.session.workspace, info?.cwd);
-        if (this.supervisor?.prepareSyncSnapshot) {
-          await this.supervisor.prepareSyncSnapshot(sessionId, acquired.session, (file, envelope, options) =>
-            (this.adapter?.materializeSessionFile || materializeSessionFile)(file, envelope, options));
-        }
-      } catch (error) {
-        await client.release(sessionId, acquired.lease.token).catch(() => undefined);
-        if (error.code === "session_streaming" || error.code === "session_compacting") throw error;
-        if (error.code === "sync_workspace_setup_required") throw syncError(error.message, error.code);
-        throw syncError(error.message || "The canonical session could not be materialized.", "sync_materialization_failed");
-      }
       const active = {
         managed: true,
         token: acquired.lease.token,
@@ -710,6 +693,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
         expiresAt: acquired.lease.expiresAt,
         client,
         envelope: acquired.session,
+        preparing: true,
         uncertain: false,
         blocked: null,
         pendingEnvelope: null,
@@ -717,6 +701,24 @@ export class PiSyncCoordinator extends BaseCoordinator {
         renewing: false,
       };
       this.active.set(sessionId, active);
+      try {
+        if (acquired.session?.sessionId !== sessionId) {
+          throw syncError("The sync server returned a different session identity.", "sync_enrollment_failed");
+        }
+        const info = await this.supervisor?.syncSessionInfo?.(sessionId);
+        if (acquired.session.workspace) verifyWorkspacePointer(acquired.session.workspace, info?.cwd);
+        if (this.supervisor?.prepareSyncSnapshot) {
+          await this.supervisor.prepareSyncSnapshot(sessionId, acquired.session, (file, envelope, options) =>
+            (this.adapter?.materializeSessionFile || materializeSessionFile)(file, envelope, options));
+        }
+      } catch (error) {
+        active.blocked = { code: error.code || "sync_materialization_failed", message: error.message || "The canonical session could not be materialized." };
+        await this._releaseUnlocked(sessionId, active);
+        if (error.code === "session_streaming" || error.code === "session_compacting") throw error;
+        if (error.code === "sync_workspace_setup_required") throw syncError(error.message, error.code);
+        throw syncError(error.message || "The canonical session could not be materialized.", error.code === "sync_enrollment_failed" ? error.code : "sync_materialization_failed");
+      }
+      active.preparing = false;
       this.blocked.delete(sessionId);
       this._startHeartbeat(sessionId, active);
       this._emit(sessionId);
