@@ -6,9 +6,31 @@ import { esc, newChat, newProjectSession } from "./shell.js";
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["pending", "in_progress", "running", "queued"]);
+const AGENT_FAILURE_STATUSES = new Set(["failed", "cancelled", "stopped", "aborted", "error"]);
 const HISTORY_PAGE_SIZE = 500;
-const liveAgent = record => record?.role === "activity"
-  && record.kind === "agent" && LIVE_AGENT_STATUSES.has(record.status);
+const agentRecord = record => record?.role === "activity" && record.kind === "agent";
+const liveAgent = record => agentRecord(record) && LIVE_AGENT_STATUSES.has(record.status);
+const agentRunId = record => record?.runId || String(record?.id || record?.key || "agent").replace(/^activity:agent:/, "");
+const agentGroupId = record => record?.groupId || record?.parentMessageId || "ungrouped";
+function elapsedAgent(record) {
+  const start = Date.parse(String(record?.startedAt || record?.createdAt || ""));
+  if (!Number.isFinite(start)) return "";
+  const end = Date.parse(String(record?.endedAt || ""));
+  const duration = Math.max(0, (Number.isFinite(end) ? end : Date.now()) - start);
+  if (duration < 1000) return `${Math.round(duration)}ms`;
+  return `${(duration / 1000).toFixed(1)}s`;
+}
+function agentStatusLabel(status) {
+  if (status === "queued") return "queued";
+  if (status === "running" || status === "in_progress" || status === "pending") return "running";
+  if (status === "cancelled" || status === "stopped") return "cancelled";
+  if (status === "failed" || status === "aborted" || status === "error") return "failed";
+  return "completed";
+}
+function agentStatusGlyph(status) {
+  const label = agentStatusLabel(status);
+  return label === "completed" ? "✓" : label === "failed" || label === "cancelled" ? "!" : label === "queued" ? "○" : "◐";
+}
 
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
@@ -21,7 +43,7 @@ class PiThread extends HTMLElement {
     };
     this.bindScroller();
     this.unsub = store.subscribe(w => {
-      if (w === "state" || w === "transcript") this.render();
+      if (w === "state" || w === "transcript" || w === "anim") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
     });
     this.addEventListener("click", e => this.onClick(e));
@@ -113,9 +135,12 @@ class PiThread extends HTMLElement {
   }
 
   visibleRecords(records) {
+    // Agent records are rendered once in the grouped activity surface below;
+    // keeping terminal cards out of the ordinary transcript avoids a second,
+    // completion-only representation of the same run.
     return records.filter(record => record.role !== "activity"
       || record.key === "compaction"
-      || (record.kind === "agent" && !liveAgent(record)));
+      || record.kind !== "agent");
   }
 
   hasEarlier() {
@@ -175,10 +200,14 @@ class PiThread extends HTMLElement {
   renderActivity(records) {
     const latest = new Map();
     for (const record of records) {
-      if (record.role === "activity" && record.key) latest.set(record.key, record);
+      if (record.role === "activity" && record.key) {
+        const identity = record.kind === "agent" ? agentRunId(record) : record.key;
+        const existing = latest.get(identity);
+        if (!existing || (Number(record.revision) || 0) >= (Number(existing.revision) || 0)) latest.set(identity, record);
+      }
     }
     const todo = latest.get("todo");
-    const agents = [...latest.values()].filter(liveAgent);
+    const agents = [...latest.values()].filter(agentRecord);
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
@@ -186,9 +215,9 @@ class PiThread extends HTMLElement {
       const label = item.status === "in_progress" ? item.activeForm || item.subject : item.subject;
       return `<div class="activity-task ${status}"><span class="activity-glyph">${status === "done" ? "✓" : status === "active" ? "◐" : "○"}</span><span>${esc(label)}</span></div>`;
     }).join("");
-    const panel = (key, title, meta, body, defaultOpen) => {
+    const panel = (key, title, meta, body, defaultOpen, extraClass = "") => {
       const open = store.state.openActivity[key] ?? defaultOpen;
-      return `<section class="activity-panel ${key === "todo" ? "todo-panel" : "agent-panel"}" aria-label="${esc(title)}">
+      return `<section class="activity-panel ${extraClass || (key === "todo" ? "todo-panel" : "agent-panel")}" aria-label="${esc(title)}">
         <button class="activity-head" type="button" data-activity-toggle="${esc(key)}" aria-expanded="${open}">
           <strong>${esc(title)}</strong><span>${esc(meta)} <b class="activity-caret">${open ? "▾" : "▸"}</b></span>
         </button>${open ? `<div class="activity-body">${body}</div>` : ""}
@@ -197,13 +226,43 @@ class PiThread extends HTMLElement {
     const todoPanel = todoItems.length
       ? panel("todo", "Todos", `${todoDone}/${todoItems.length}`, todoRows, false)
       : "";
-    const agentPanels = agents.map(agent => panel(
-      agent.key,
-      agent.title || "Background agent",
-      agent.status === "queued" ? "queued" : "in progress",
-      `<div class="agent-progress"><span class="activity-glyph">◐</span><div class="agent-progress-summary markdown-content">${renderMarkdown(agent.summary || "Background agent is working…")}</div></div>`,
-      true,
-    )).join("");
+
+    const groups = new Map();
+    for (const agent of agents) {
+      const key = agentGroupId(agent);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(agent);
+    }
+    const agentPanels = [...groups.entries()].map(([groupId, group]) => {
+      const key = `subagents:${groupId}`;
+      const counts = group.reduce((result, agent) => {
+        const status = agentStatusLabel(agent.status);
+        result[status] = (result[status] || 0) + 1;
+        return result;
+      }, {});
+      const meta = [
+        counts.running ? `${counts.running} running` : "",
+        counts.queued ? `${counts.queued} queued` : "",
+        counts.completed ? `${counts.completed} completed` : "",
+        counts.failed ? `${counts.failed} failed` : "",
+        counts.cancelled ? `${counts.cancelled} cancelled` : "",
+      ].filter(Boolean).join(" · ");
+      const hasLive = group.some(agent => liveAgent(agent));
+      const hasFailure = group.some(agent => AGENT_FAILURE_STATUSES.has(agent.status));
+      const rows = [...group]
+        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")))
+        .map(agent => {
+          const status = agentStatusLabel(agent.status);
+          const duration = elapsedAgent(agent);
+          const details = [status, agent.activity || "", agent.toolCount ? `${agent.toolCount} tool${agent.toolCount === 1 ? "" : "s"}` : "", duration].filter(Boolean).join(" · ");
+          const summary = agent.summary ? `<div class="subagent-summary markdown-content">${renderMarkdown(agent.summary)}</div>` : "";
+          return `<div class="subagent-row ${esc(status)}" data-subagent-id="${esc(agentRunId(agent))}">
+            <span class="subagent-glyph" aria-hidden="true">${agentStatusGlyph(agent.status)}</span>
+            <div class="subagent-main"><div class="subagent-title"><strong>${esc(agent.title || "Background agent")}</strong><span>${esc(details)}</span></div>${summary}</div>
+          </div>`;
+        }).join("");
+      return panel(key, "Parallel work", meta || "working", `<div class="subagent-list">${rows}</div>`, hasLive || hasFailure, "subagent-panel agent-panel");
+    }).join("");
     if (!todoPanel && !agentPanels) return "";
     return `<div class="activity-stack">${todoPanel}${agentPanels}</div>`;
   }

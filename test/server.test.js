@@ -141,6 +141,7 @@ test("state exposes the API contract and health marker", async () => {
   assert.ok(state.capabilities.includes("project-hooks"));
   assert.ok(state.capabilities.includes("pi-resources"));
   assert.ok(state.capabilities.includes("extension-activity"));
+  assert.ok(state.capabilities.includes("subagent-activity"));
   assert.equal(state.piConfiguration.profile.status, "none");
   assert.equal(state.settings.githubClientId, undefined);
   const health = await (await get("/api/health")).json();
@@ -268,10 +269,18 @@ test("activity records stream and persist across transcript snapshots", async ()
   const todo = await sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.kind === "todo");
   const agent = await sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.kind === "agent");
   assert.equal(todo.record.key, "todo");
-  assert.equal(agent.record.key, "agent:mock");
+  assert.match(agent.record.key, /^agent:mock-/);
+  assert.equal(agent.record.groupId, "mock:parallel");
+  const running = await sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.kind === "agent" && e.record?.status === "running" && e.record?.revision > 1);
+  assert.equal(running.record.groupId, "mock:parallel");
   await sse.wait(e => e.sessionId === id && e.type === "turn_end");
+  await Promise.all(["mock-explore", "mock-tests", "mock-package"].map(runId =>
+    sse.wait(e => e.sessionId === id && e.type === "activity" && e.record?.runId === runId && e.record?.status === "completed")
+  ));
   const snap = await (await get(`/api/sessions/${id}/transcript`)).json();
-  assert.deepEqual(snap.records.filter(r => r.role === "activity").map(r => r.kind), ["todo", "agent"]);
+  const agents = snap.records.filter(r => r.role === "activity" && r.kind === "agent");
+  assert.equal(agents.length, 3);
+  assert.ok(agents.every(record => record.status === "completed"));
 });
 
 test("Pi built-in commands are discoverable and web-adapted", async () => {

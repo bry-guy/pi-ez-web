@@ -367,6 +367,23 @@ header.bar {
 .activity-status-glyph { color: var(--accent); }
 .activity-status.completed .activity-status-glyph { color: var(--green); }
 .activity-status.failed .activity-status-glyph, .activity-status.aborted .activity-status-glyph { color: var(--red); }
+.subagent-panel .activity-head { background: color-mix(in srgb, var(--surface) 78%, var(--accent-soft)); }
+.subagent-list { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--border); }
+.subagent-row { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 9px 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.subagent-row.running { color: var(--text); }
+.subagent-row.completed { color: var(--muted); }
+.subagent-row.failed, .subagent-row.cancelled { color: var(--red); }
+.subagent-glyph { flex: 0 0 13px; color: var(--accent); font-family: var(--mono); text-align: center; }
+.subagent-row.completed .subagent-glyph { color: var(--green); }
+.subagent-row.failed .subagent-glyph, .subagent-row.cancelled .subagent-glyph { color: var(--red); }
+.subagent-row.queued .subagent-glyph { color: var(--faint); }
+.subagent-main { min-width: 0; flex: 1; }
+.subagent-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.subagent-title strong { min-width: 0; overflow: hidden; color: inherit; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-title span { flex: 0 0 auto; overflow: hidden; color: var(--faint); font: 10.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.subagent-summary { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+.subagent-summary > :first-child { margin-top: 0; }
+.subagent-summary > :last-child { margin-bottom: 0; }
 .delivery-status { margin-top: 4px; color: var(--red); font: 10px var(--mono); text-align: right; }
 .turn-error { width: 100%; color: var(--red); font: 12px var(--mono); line-height: 1.5; white-space: pre-wrap; }
 .delivery-failed .bubble { opacity: .72; }
@@ -689,6 +706,9 @@ aside.files.file-viewer {
   .composer textarea { font-size: 16px; }
   .msg-user-row { min-width: 0; }
   .bubble { max-width: calc(100% - 42px); }
+  .subagent-title { display: block; }
+  .subagent-title strong { display: block; }
+  .subagent-title span { display: block; margin-top: 2px; }
   .modal { width: 100%; height: 80%; max-height: none; }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }
   aside.files {

@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 3,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "file-explorer"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"],
   mode: "mock",
   defaultModel: "mock/fast",
   defaultThinkingLevel: "xhigh",
@@ -431,14 +431,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".activity-stack .agent-panel")?.textContent || "", /Checking files/);
   assert.equal(root.querySelector(".activity-inline .bh-name"), null);
   applyEvent({ v: 1, seq: 107, sessionId: "s1", type: "activity", record: {
-    id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", status: "completed",
-    title: "Explore", summary: "Found the files.", items: [], source: "test",
+    id: "activity:agent:a1", role: "activity", kind: "agent", key: "agent:a1", runId: "a1",
+    groupId: "group-1", parentMessageId: "assistant-1", revision: 2, status: "completed",
+    title: "Explore", activity: "", summary: "Found the files.", toolCount: 2,
+    createdAt: "2026-08-22T00:00:00.000Z", startedAt: "2026-08-22T00:00:00.000Z",
+    endedAt: "2026-08-22T00:00:01.000Z", items: [], source: "test",
   } });
-  assert.equal(root.querySelector(".activity-stack .agent-panel"), null);
-  assert.equal(root.querySelector(".activity-inline .activity-inline-body"), null);
-  root.querySelector(".activity-inline [data-activity-toggle]").click();
-  assert.match(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
-  assert.ok(root.querySelector(".activity-stack"));
+  assert.ok(root.querySelector(".subagent-panel"));
+  assert.doesNotMatch(root.querySelector(".subagent-panel")?.textContent || "", /Found the files/);
+  root.querySelector(".subagent-panel [data-activity-toggle]").click();
+  assert.match(root.querySelector(".subagent-panel")?.textContent || "", /Found the files/);
+  assert.match(root.querySelector(".subagent-panel")?.textContent || "", /completed/);
 
   store.state.transcripts.s1.records.unshift({ id: "pending-1", pendingId: "client-1", role: "user", text: "optimistic", pending: true });
   store.notify("transcript");

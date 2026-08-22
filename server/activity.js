@@ -1,12 +1,13 @@
 // Safe, extension-agnostic projections for durable Pi activity.
 // Extension renderers and UI objects never cross the web boundary.
+import { normalizeSubagentActivity } from "./subagent-activity.js";
 const MAX_SUMMARY = 600;
 const MAX_ITEMS = 100;
 const MAX_PAYLOAD = 128_000;
 const ACTIVITY_KINDS = new Set(["todo", "agent", "status"]);
 const ACTIVITY_STATUSES = new Set([
   "pending", "in_progress", "completed", "deleted", "running", "queued",
-  "failed", "stopped", "aborted", "error",
+  "failed", "stopped", "aborted", "cancelled", "error",
 ]);
 
 function object(value) { return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -83,23 +84,25 @@ export function activityFromTodoDetails(details, id, source = "pi") {
   }, { source });
 }
 
-export function activityFromAgentDetails(details, { id, content = "", source = "extension" } = {}) {
-  if (!object(details) || (!details.id && !details.description && !details.status)) return null;
-  const agentId = text(details.id || id);
+export function activityFromAgentDetails(details, { id, content = "", source = "extension", parentMessageId = null } = {}) {
+  if (!object(details) || (!details.id && !details.runId && !details.description && !details.status)) return null;
+  const agentId = text(details.runId || details.id || id);
   if (!agentId) return null;
-  const terminalStatus = new Set(["completed", "failed", "stopped", "aborted", "error"]);
-  const terminal = terminalStatus.has(details.status)
+  const terminalStatus = new Set(["completed", "failed", "stopped", "aborted", "error", "cancelled", "canceled"]);
+  const terminal = terminalStatus.has(String(details.status || "").toLowerCase())
     || details.completed === true || details.done === true || details.finished === true
     || details.result !== undefined || details.resultPreview !== undefined || details.error !== undefined;
-  const summary = terminal ? details.resultPreview || details.result || details.error || content : content;
-  return normalizeActivity({
-    id: `activity:agent:${agentId}`,
-    kind: "agent",
-    key: `agent:${agentId}`,
-    status: statusOf(details.status, terminal ? "completed" : "running"),
-    title: details.description || "Background agent",
-    summary: summary || (terminal ? "Background agent finished." : "Background agent is working…"),
-  }, { source });
+  const record = normalizeSubagentActivity({
+    ...details,
+    id: agentId,
+    status: details.status || (terminal ? "completed" : "running"),
+    result: details.resultPreview || details.result,
+    description: details.description || "Background agent",
+  }, { source: source === "extension" ? "pi-subagents" : source, entryId: id, parentMessageId, content });
+  if (!record) return null;
+  if (!record.summary && !terminal) record.summary = redact(content || "Background agent is working…");
+  if (!record.summary && terminal) record.summary = "Background agent finished.";
+  return record;
 }
 
 export function activityFromToolResult(result, id) {
@@ -124,23 +127,26 @@ export function activityFromEntry(entry) {
       return activityFromToolResult(message, message.toolCallId || message.id || entry.id);
     }
     if (message.role === "custom") {
-      return activityFromCustom(entry.id, message.customType, message.details, message.content);
+      return activityFromCustom(entry.id, message.customType, message.details, message.content, entry.parentId);
     }
     return null;
   }
   if (entry.type === "custom_message") {
-    return activityFromCustom(entry.id, entry.customType, entry.details, entry.content);
+    return activityFromCustom(entry.id, entry.customType, entry.details, entry.content, entry.parentId);
   }
   if (entry.type === "custom") {
-    return activityFromCustom(entry.id, entry.customType, entry.data);
+    return activityFromCustom(entry.id, entry.customType, entry.data, "", entry.parentId);
   }
   return null;
 }
 
-function activityFromCustom(id, customType, details, content = "") {
+function activityFromCustom(id, customType, details, content = "", parentMessageId = null) {
   if (customType === "pi-web:activity") return normalizeActivity(details, { id, source: "extension" });
+  if (customType === "pi-web:subagent") {
+    return normalizeSubagentActivity(details, { entryId: id, parentMessageId, source: "pi-subagents", content });
+  }
   if (customType === "subagents:record" || customType === "subagent-notification") {
-    return activityFromAgentDetails(details, { id, content: typeof content === "string" ? content : "", source: "pi-subagents" });
+    return activityFromAgentDetails(details, { id, content: typeof content === "string" ? content : "", source: "pi-subagents", parentMessageId });
   }
   return null;
 }

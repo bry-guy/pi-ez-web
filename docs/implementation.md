@@ -58,9 +58,10 @@ extension dialogs remain unavailable. Pi's built-in slash commands are
 translated into web actions (model selection, compaction, export/download,
 copy, session stats, reload, and navigation) instead of being sent
 to the model; terminal-only actions get a safe browser equivalent. Durable todo
-and background-agent activity is projected into a bounded `activity` transcript/SSE
-record; arbitrary extension widgets and renderer functions are not exposed to
-the browser. New plain chats use private
+and background-agent lifecycle/progress activity is projected into bounded,
+grouped `activity` transcript/SSE records; the headless subagent bridge keeps
+live state in the supervisor and arbitrary extension widgets and renderer
+functions are not exposed to the browser. New plain chats use private
 scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
