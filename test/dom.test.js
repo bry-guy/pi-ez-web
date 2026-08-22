@@ -437,11 +437,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     createdAt: "2026-08-22T00:00:00.000Z", startedAt: "2026-08-22T00:00:00.000Z",
     endedAt: "2026-08-22T00:00:01.000Z", items: [], source: "test",
   } });
-  assert.ok(root.querySelector(".subagent-panel"));
-  assert.doesNotMatch(root.querySelector(".subagent-panel")?.textContent || "", /Found the files/);
-  root.querySelector(".subagent-panel [data-activity-toggle]").click();
-  assert.match(root.querySelector(".subagent-panel")?.textContent || "", /Found the files/);
-  assert.match(root.querySelector(".subagent-panel")?.textContent || "", /completed/);
+  assert.equal(root.querySelector(".subagent-panel"), null, "completed agents leave the live activity surface");
+  assert.match(root.querySelector(".activity-inline .bh-name")?.textContent || "", /Explore/);
+  assert.doesNotMatch(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
+  root.querySelector(".activity-inline [data-activity-toggle]").click();
+  assert.match(root.querySelector(".activity-inline")?.textContent || "", /Found the files/);
+  assert.match(root.querySelector(".activity-inline")?.textContent || "", /completed/);
 
   store.state.transcripts.s1.records.unshift({ id: "pending-1", pendingId: "client-1", role: "user", text: "optimistic", pending: true });
   store.notify("transcript");

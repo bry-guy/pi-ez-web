@@ -135,12 +135,14 @@ class PiThread extends HTMLElement {
   }
 
   visibleRecords(records) {
-    // Agent records are rendered once in the grouped activity surface below;
-    // keeping terminal cards out of the ordinary transcript avoids a second,
-    // completion-only representation of the same run.
+    // Running agents stay in the live activity surface. Once a run reaches a
+    // terminal state, its compact record returns to the transcript at the
+    // point where the work was recorded, so the live surface does not grow
+    // forever.
     return records.filter(record => record.role !== "activity"
       || record.key === "compaction"
-      || record.kind !== "agent");
+      || record.kind !== "agent"
+      || !liveAgent(record));
   }
 
   hasEarlier() {
@@ -207,7 +209,7 @@ class PiThread extends HTMLElement {
       }
     }
     const todo = latest.get("todo");
-    const agents = [...latest.values()].filter(agentRecord);
+    const agents = [...latest.values()].filter(record => agentRecord(record) && liveAgent(record));
     const todoItems = (todo?.items || []).filter(item => item.status !== "deleted");
     const todoDone = todoItems.filter(item => item.status === "completed").length;
     const todoRows = todoItems.map(item => {
