@@ -330,24 +330,80 @@ export class MockSupervisor {
   }
 
   _emitActivity(id, kind) {
+    if (kind === "agent") return this._startMockAgents(id);
     const s = this._load(id);
     const ai = s.records.findIndex(r => r.role === "assistant" && r.streaming);
-    const activity = kind === "todo"
-      ? {
-        id: newId("activity"), role: "activity", kind: "todo", key: "todo", status: "in_progress",
-        title: "Todos", summary: "1/2 complete · 1 active", source: "mock",
-        items: [
-          { id: "1", subject: "Inspect activity", description: "", status: "completed", activeForm: "", blockedBy: [] },
-          { id: "2", subject: "Render activity", description: "", status: "in_progress", activeForm: "rendering activity", blockedBy: [] },
-        ],
-      }
-      : {
-        id: newId("activity"), role: "activity", kind: "agent", key: "agent:mock", status: "completed",
-        title: "Explore", summary: "Checked the activity bridge and returned a concise result.", items: [], source: "mock",
-      };
+    const activity = {
+      id: newId("activity"), role: "activity", kind: "todo", key: "todo", status: "in_progress",
+      title: "Todos", summary: "1/2 complete · 1 active", source: "mock",
+      items: [
+        { id: "1", subject: "Inspect activity", description: "", status: "completed", activeForm: "", blockedBy: [] },
+        { id: "2", subject: "Render activity", description: "", status: "in_progress", activeForm: "rendering activity", blockedBy: [] },
+      ],
+    };
     s.records.splice(ai < 0 ? s.records.length : ai, 0, activity);
     this._save(s);
     this.hub.emit(id, "activity", { record: activity });
+  }
+
+  _startMockAgents(id) {
+    const st = this.live.get(id);
+    const s = this._load(id);
+    if (!st || !s) return;
+    st.agentTimers ||= [];
+    const parentMessageId = st.msgId || "mock-parent";
+    const groupId = "mock:parallel";
+    const createdAt = new Date().toISOString();
+    const runs = [
+      { runId: "mock-explore", title: "Explore routes", status: "running", activity: "searching files" },
+      { runId: "mock-tests", title: "Review tests", status: "running", activity: "reading tests" },
+      { runId: "mock-package", title: "Inspect package setup", status: "queued", activity: "waiting for a worker" },
+    ];
+    for (const run of runs) this._upsertMockAgent(id, {
+      ...run, groupId, parentMessageId, createdAt, revision: 1, toolCount: 0, summary: "",
+    });
+    const updates = [
+      [60, "mock-explore", { activity: "checking routes", toolCount: 1 }],
+      [95, "mock-tests", { activity: "comparing test coverage", toolCount: 1 }],
+      [140, "mock-package", { status: "running", activity: "reading package files", startedAt: new Date(Date.now() + 140).toISOString() }],
+      [210, "mock-tests", { status: "completed", activity: "", summary: "Found the relevant activity and DOM tests.", endedAt: new Date(Date.now() + 210).toISOString(), toolCount: 2 }],
+      [320, "mock-explore", { status: "completed", activity: "", summary: "Located the supervisor and transcript bridge.", endedAt: new Date(Date.now() + 320).toISOString(), toolCount: 3 }],
+      [430, "mock-package", { status: "completed", activity: "", summary: "Confirmed the extension package is loaded by the preview profile.", endedAt: new Date(Date.now() + 430).toISOString(), toolCount: 2 }],
+    ];
+    for (const [delay, runId, patch] of updates) {
+      st.agentTimers.push(setTimeout(() => this._upsertMockAgent(id, { runId, ...patch }), delay));
+    }
+  }
+
+  _upsertMockAgent(id, patch) {
+    const s = this._load(id);
+    if (!s || !patch.runId) return;
+    let existing = s.records.find(record => record.role === "activity" && record.kind === "agent" && record.runId === patch.runId);
+    if (!existing) {
+      const at = s.records.findIndex(record => record.role === "assistant" && record.streaming);
+      existing = {
+        id: `activity:agent:${patch.runId}`,
+        role: "activity", kind: "agent", key: `agent:${patch.runId}`,
+        runId: patch.runId, groupId: patch.groupId || "mock:parallel",
+        parentMessageId: patch.parentMessageId || "mock-parent", revision: 0,
+        status: patch.status || "running", title: patch.title || "Background agent",
+        activity: patch.activity || "", toolCount: patch.toolCount || 0,
+        createdAt: patch.createdAt || new Date().toISOString(), summary: "", items: [], source: "mock",
+      };
+      s.records.splice(at < 0 ? s.records.length : at, 0, existing);
+    }
+    const next = {
+      ...existing,
+      ...patch,
+      revision: (Number(existing.revision) || 0) + 1,
+      status: patch.status || existing.status,
+      activity: patch.activity ?? existing.activity ?? "",
+      summary: patch.summary ?? existing.summary ?? "",
+      items: [],
+    };
+    Object.assign(existing, next);
+    this._save(s);
+    this.hub.emit(id, "activity", { record: { ...existing } });
   }
 
   _emitTool(id, cwd, withDiff) {

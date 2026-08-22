@@ -57,6 +57,38 @@ test("compaction events become visible status activities", () => {
   assert.equal(events.at(-1).data.clientMessageId, "client-1");
 });
 
+test("web subagent entries become revisioned grouped activity", () => {
+  const events = [];
+  const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
+  const st = { liveRecords: new Map(), pendingMessages: [], subagents: undefined };
+  supervisor._onEvent("session-1", st, {
+    type: "entry_appended",
+    entry: {
+      id: "entry-agent-1", parentId: "assistant-1", type: "custom", customType: "pi-web:subagent",
+      data: {
+        runId: "agent-1", groupId: "group-1", revision: 1, status: "queued",
+        description: "Explore", createdAt: "2026-01-01T00:00:00Z",
+      },
+    },
+  });
+  assert.equal(st.subagents.snapshot()[0].status, "queued");
+  assert.equal(st.subagents.snapshot()[0].parentMessageId, "assistant-1");
+  supervisor._onEvent("session-1", st, {
+    type: "entry_appended",
+    entry: {
+      id: "entry-agent-2", parentId: "assistant-1", type: "custom", customType: "pi-web:subagent",
+      data: {
+        runId: "agent-1", groupId: "group-1", revision: 2, status: "completed",
+        description: "Explore", summary: "Found it.", createdAt: "2026-01-01T00:00:00Z",
+        endedAt: "2026-01-01T00:00:01Z",
+      },
+    },
+  });
+  assert.equal(st.subagents.snapshot()[0].status, "completed");
+  assert.equal(st.subagents.snapshot()[0].summary, "Found it.");
+  assert.deepEqual(events.filter(event => event.type === "activity").map(event => event.data.record.revision), [1, 2]);
+});
+
 test("provider error events end the turn with a public error", () => {
   const events = [];
   const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
@@ -140,7 +172,8 @@ test("configured extensions load commands and session_start tools", () => {
     const result = JSON.parse(output.trim().split("\n").at(-1));
     assert.ok(result.commands.includes("configured-command"));
     assert.ok(result.tools.includes("startup_tool"));
-    assert.equal(result.pi.runtime.extensions.length, 1);
+    assert.ok(result.pi.runtime.extensions.some(item => item.path === extension));
+    assert.ok(result.pi.runtime.extensions.some(item => item.path.endsWith("server/extensions/subagent-telemetry.js")));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

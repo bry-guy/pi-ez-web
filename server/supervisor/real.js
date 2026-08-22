@@ -7,7 +7,8 @@ import path from "node:path";
 import { loadBindings, loadConfig } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
 import { activityFromEntry, activityFromToolResult, normalizeActivity } from "../activity.js";
-import { PiConfiguration, publicError } from "../pi-configuration.js";
+import { SubagentActivityStore } from "../subagent-activity.js";
+import { PiConfiguration, WEB_SUBAGENT_EXTENSION, publicError } from "../pi-configuration.js";
 import { GitHubClient } from "../github.js";
 
 function errorDetails(error) {
@@ -178,10 +179,14 @@ export class RealSupervisor {
         SDKModule.getAgentDir(),
         SDKModule.SettingsManager,
       );
+      // The bridge is a no-op without pi-subagents, but loading it for every
+      // headless session lets deployments opt into the package without having
+      // to edit a profile or expose extension internals to the web server.
       const resourceLoader = new SDKModule.DefaultResourceLoader({
         cwd,
         agentDir: SDKModule.getAgentDir(),
         settingsManager,
+        additionalExtensionPaths: [WEB_SUBAGENT_EXTENSION],
       });
       await resourceLoader.reload();
       const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
@@ -243,7 +248,9 @@ export class RealSupervisor {
       liveRecords: new Map(),
       pendingMessages: [],
       toolMeta: new Map(),
+      subagents: new SubagentActivityStore(),
     };
+    seedSubagentState(st);
     st.unsubscribe = session.subscribe(evt => this._onEvent(session.sessionId, st, evt));
     this.live.set(session.sessionId, st);
     this.info.set(session.sessionId, {
@@ -282,8 +289,15 @@ export class RealSupervisor {
         }
         const activity = activityFromEntry(entry);
         if (activity) {
-          st.liveRecords.set(activity.id, activity);
-          hub.emit(id, "activity", { record: activity });
+          if (activity.kind === "agent" && activity.runId) {
+            st.subagents ||= new SubagentActivityStore();
+            const accepted = st.subagents.apply(activity, { revisionProvided: entryHasSubagentRevision(entry) });
+            if (!accepted) break;
+            hub.emit(id, "activity", { record: accepted });
+          } else {
+            st.liveRecords.set(activity.id, activity);
+            hub.emit(id, "activity", { record: activity });
+          }
         }
         break;
       }
@@ -924,7 +938,9 @@ export class RealSupervisor {
     const st = {
       session, cwd, msgId: null, turnId: null, assistantParent: null,
       liveRecords: new Map(), toolMeta: new Map(), parentSessionId: parentId,
+      subagents: new SubagentActivityStore(),
     };
+    seedSubagentState(st);
     st.unsubscribe = session.subscribe(evt => this._onEvent(id, st, evt));
     this.live.set(id, st);
     return { id };
@@ -968,12 +984,29 @@ function modelRefFromEntries(entries) {
 }
 
 function assistantRecordId(parentId) { return `a:${parentId || "root"}`; }
+function entryHasSubagentRevision(entry) {
+  return [entry?.data, entry?.details, entry?.message?.details]
+    .some(value => Number.isSafeInteger(Number(value?.revision)) && Number(value.revision) > 0);
+}
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+function seedSubagentState(st) {
+  const branch = st.session.sessionManager.getBranch?.() || [];
+  for (const record of entriesToRecords(branch)) {
+    if (record.role !== "activity" || record.kind !== "agent" || !record.runId) continue;
+    st.subagents.apply(record, { revisionProvided: true });
+  }
+}
+
 function snapshotRecords(st) {
   const records = entriesToRecords(st.session.sessionManager.getBranch?.() || []);
+  for (const record of st.subagents?.snapshot?.() || []) {
+    const existing = records.find(item => item.id === record.id);
+    if (!existing) records.push(cloneRecord(record));
+    else Object.assign(existing, cloneRecord(record));
+  }
   for (const record of st.liveRecords.values()) {
     const existing = records.find(r => r.id === record.id);
     if (!existing) records.push(cloneRecord(record));
@@ -986,13 +1019,17 @@ function snapshotRecords(st) {
 export function entriesToRecords(entries) {
   const records = [];
   const tools = new Map();
+  const subagents = new SubagentActivityStore();
   for (const entry of entries || []) {
     if (entry.type === "custom" && entry.customType === "pi-web:bang") {
       const d = entry.data || {};
       records.push({ id: d.id || entry.id, role: "bang", cmd: d.cmd || "", meta: d.meta || "", out: d.out || "" });
       continue;
     }
-    const activity = activityFromEntry(entry);
+    let activity = activityFromEntry(entry);
+    if (activity?.kind === "agent" && activity.runId) {
+      activity = subagents.apply(activity, { revisionProvided: entryHasSubagentRevision(entry) });
+    }
     if (activity) {
       const index = records.findIndex(record => record.id === activity.id);
       if (index >= 0 && activity.key === "compaction") {

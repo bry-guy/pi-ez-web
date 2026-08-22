@@ -1,7 +1,7 @@
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const API_CONTRACT_VERSION = 3;
-const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "file-explorer"];
+const REQUIRED_CAPABILITIES = ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"];
 const JH = { "content-type": "application/json" };
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
@@ -367,7 +367,15 @@ export function applyEvent(evt, replay = false) {
     case "activity":
       if (evt.record?.role === "activity") {
         const existing = byId(recs, evt.record.id);
-        if (existing) Object.assign(existing, evt.record);
+        if (existing && evt.record.kind === "agent") {
+          const incomingRevision = Number(evt.record.revision) || 1;
+          const currentRevision = Number(existing.revision) || 1;
+          const terminal = new Set(["completed", "failed", "cancelled", "stopped", "aborted", "error"]);
+          if (incomingRevision < currentRevision
+            || (terminal.has(existing.status) && !terminal.has(evt.record.status))) break;
+          if (incomingRevision === currentRevision && existing.status === evt.record.status && existing.summary === evt.record.summary) break;
+          Object.assign(existing, evt.record);
+        } else if (existing) Object.assign(existing, evt.record);
         else {
           const at = evt.record.kind === "agent" ? lastStreamingIndex(recs) : recs.length;
           recs.splice(at, 0, evt.record);

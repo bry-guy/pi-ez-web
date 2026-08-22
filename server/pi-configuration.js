@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { appHome, loadConfig, resolvePath } from "./config.js";
 
 const MAX_PROFILE_BYTES = 512 * 1024;
@@ -17,6 +18,11 @@ const MAX_PROFILE_SKILLS = 128;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
 const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"];
+export const WEB_SUBAGENT_EXTENSION = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "extensions",
+  "subagent-telemetry.js",
+);
 
 function isObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
