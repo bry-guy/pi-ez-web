@@ -129,9 +129,11 @@ registered OAuth App ID, a deployment must provide that public ID through this
 advanced override.
 Environment values take precedence over config and are read-only in Settings.
 
-The production image builds the pinned `pi-sync` client from the commit in the
-Dockerfile. For a local checkout, build the sibling package and point the
-adapter at it without adding package state to `PI_WEB_HOME`:
+The production image builds the pinned `pi-sync` client from the stamped
+source snapshot under `vendor/pi-sync`; `vendor/pi-sync/UPSTREAM_COMMIT` must
+match the `PI_SYNC_COMMIT` Docker build argument. For a local checkout, build
+the sibling package and point the adapter at it without adding package state to
+`PI_WEB_HOME`:
 
 ```sh
 npm install --package-lock=false --prefix /path/to/pi-sync/packages/pi-sync

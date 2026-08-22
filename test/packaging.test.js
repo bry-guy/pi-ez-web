@@ -11,6 +11,7 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   const pkg = readJson("package.json");
   const lock = readJson("package-lock.json");
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const piSyncCommit = fs.readFileSync(path.join(root, "vendor/pi-sync/UPSTREAM_COMMIT"), "utf8").trim();
   const runtimeDependencies = ["@earendil-works/pi-coding-agent", "dompurify", "highlight.js", "marked"];
 
   for (const dependency of runtimeDependencies) {
@@ -23,9 +24,11 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
-  assert.match(dockerfile, /ARG PI_SYNC_REPOSITORY=https:\/\/github\.com\/bry-guy\/pi-sync\.git/);
-  assert.match(dockerfile, /ARG PI_SYNC_COMMIT=25933a7d1124faadce3a5580aa9ab91853b4d2be/);
+  assert.match(dockerfile, /ARG PI_SYNC_COMMIT=605c10ecc3467b2247d6e3bad4fe60bc8a97d2ff/);
+  assert.equal(piSyncCommit, "605c10ecc3467b2247d6e3bad4fe60bc8a97d2ff");
+  assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
   assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
+  assert.doesNotMatch(dockerfile, /git clone/);
   assert.match(dockerfile, /FNOX_VERSION=v1\.25\.1/);
   assert.match(dockerfile, /OP_VERSION=v2\.34\.0/);
   assert.match(dockerfile, /OPENTOFU_VERSION=1\.11\.5/);

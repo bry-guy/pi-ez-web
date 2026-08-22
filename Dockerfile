@@ -11,8 +11,7 @@ ARG OP_SHA256=198b05dcf9a0972778ce5a4e262c459979b0c837257b5da65e2fba6187734226
 ARG OPENTOFU_VERSION=1.11.5
 ARG OPENTOFU_SHA256=901121681e751574d739de5208cad059eddf9bd739b575745cf9e3c961b28a13
 ARG PI_WEB_BUILD_ID=development
-ARG PI_SYNC_REPOSITORY=https://github.com/bry-guy/pi-sync.git
-ARG PI_SYNC_COMMIT=25933a7d1124faadce3a5580aa9ab91853b4d2be
+ARG PI_SYNC_COMMIT=605c10ecc3467b2247d6e3bad4fe60bc8a97d2ff
 
 ENV NODE_ENV=production \
     PORT=3141 \
@@ -85,22 +84,22 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
-# pi-sync is a separate repository and ships its reusable client from a
-# nested package. Build the pinned commit into the image rather than
-# relying on a machine-local workspace or an unpinned runtime download.
+# pi-sync is a private sibling repository and ships its reusable client from
+# a nested package. The app repository carries a source snapshot stamped with
+# PI_SYNC_COMMIT so CI never needs a cross-repository credential during a
+# Docker build. Build that exact snapshot into the image.
+COPY vendor/pi-sync /tmp/pi-sync
 RUN set -eux; \
-    tmpdir="$(mktemp -d)"; \
-    trap 'rm -rf "$tmpdir"' EXIT; \
-    git clone --filter=blob:none "$PI_SYNC_REPOSITORY" "$tmpdir/pi-sync"; \
-    git -C "$tmpdir/pi-sync" checkout --detach "$PI_SYNC_COMMIT"; \
-    npm install --include=dev --ignore-scripts --no-audit --no-fund --package-lock=false --prefix "$tmpdir/pi-sync/packages/pi-sync"; \
-    npm run build --prefix "$tmpdir/pi-sync/packages/pi-sync"; \
+    test "$(cat /tmp/pi-sync/UPSTREAM_COMMIT)" = "$PI_SYNC_COMMIT"; \
+    npm install --include=dev --ignore-scripts --no-audit --no-fund --package-lock=false --prefix /tmp/pi-sync; \
+    npm run build --prefix /tmp/pi-sync; \
     mkdir -p node_modules/@bry-guy/pi-sync; \
-    cp "$tmpdir/pi-sync/packages/pi-sync/package.json" node_modules/@bry-guy/pi-sync/; \
-    cp -a "$tmpdir/pi-sync/packages/pi-sync/dist" node_modules/@bry-guy/pi-sync/; \
-    cp -a "$tmpdir/pi-sync/packages/pi-sync/skills" node_modules/@bry-guy/pi-sync/; \
-    cp -a "$tmpdir/pi-sync/packages/pi-sync/extensions" node_modules/@bry-guy/pi-sync/; \
-    cp "$tmpdir/pi-sync/packages/pi-sync/README.md" node_modules/@bry-guy/pi-sync/
+    cp /tmp/pi-sync/package.json node_modules/@bry-guy/pi-sync/; \
+    cp -a /tmp/pi-sync/dist node_modules/@bry-guy/pi-sync/; \
+    cp -a /tmp/pi-sync/skills node_modules/@bry-guy/pi-sync/; \
+    cp -a /tmp/pi-sync/extensions node_modules/@bry-guy/pi-sync/; \
+    cp /tmp/pi-sync/README.md node_modules/@bry-guy/pi-sync/; \
+    rm -rf /tmp/pi-sync
 
 COPY server ./server
 COPY public ./public

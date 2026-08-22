@@ -1,6 +1,6 @@
 # pi-sync integration plan
 
-Status: adapter implementation complete against pi-sync commit `25933a7d1124faadce3a5580aa9ab91853b4d2be`; production rollout remains declarative and starts with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
+Status: adapter implementation complete against pi-sync release commit `605c10ecc3467b2247d6e3bad4fe60bc8a97d2ff`; production rollout remains declarative and starts with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
 
 ## Context
 
