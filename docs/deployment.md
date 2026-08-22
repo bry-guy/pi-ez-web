@@ -26,8 +26,8 @@ state and is not mounted by the new workload.
 
 For an isolated full-stack branch preview, the preview Service must receive both
 normal requests and `/api/*` (including SSE). The preview workload runs the
-same real server image as its UI, but uses the distinct `pi-web-preview-state`
-volume and `/data/.../preview` subpath. Production conversations, repositories,
+same real server image as its UI, but uses the distinct
+`pi-web-preview-state-parent-nfs` volume and `/data/.../preview` subpath. Production conversations, repositories,
 worktrees, operator credentials, and Kubernetes API access are not mounted into
 that workload. Provider authentication and Pi state belong to the preview
 volume; deleting the replaceable preview slot is the explicit reset boundary.
