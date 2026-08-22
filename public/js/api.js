@@ -49,6 +49,8 @@ export const api = {
   authInput: (id, promptId, value) => fetch(`/api/auth-flows/${encodeURIComponent(id)}/input`, { method: "POST", headers: JH, body: JSON.stringify({ promptId, value }) }).then(j),
   authCancel: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
+  syncSession: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: value => {
     const body = typeof value === "string" ? { repoPath: value } : (value || {});
@@ -127,6 +129,7 @@ export async function refreshState() {
     providers: s.providers || [],
     piConfiguration: s.piConfiguration || null,
     repositorySources: s.repositorySources || null,
+    sync: s.sync || null,
     settings: s.settings || null,
     reposRoot: s.reposRoot || null,
     reposRootSource: s.reposRootSource || "default",
@@ -438,6 +441,7 @@ export function applyEvent(evt, replay = false) {
     case "session_forked":
     case "session_meta":
     case "session_merged":
+    case "sync_state":
       refreshState().catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;
     case "session_closed": {

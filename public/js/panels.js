@@ -36,6 +36,7 @@ class PiSettings extends HTMLElement {
   async onClick(e) {
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
+    if (e.target.closest("[data-act='save-sync-settings']")) return this.saveSyncSettings();
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
     if (e.target.closest("[data-act='refresh-pi-configuration']")) return this.refreshPiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
@@ -70,6 +71,25 @@ class PiSettings extends HTMLElement {
     } catch (err) {
       store.set({ defaultThinkingLevel: previous });
       this.setFeedback(`Default thinking mode failed: ${err.error || err.message || err}`, "error");
+    }
+  }
+  async saveSyncSettings() {
+    const syncSettings = store.state.settings?.sync || {};
+    const patch = { sync: {} };
+    if (syncSettings.serverUrl?.editable !== false) patch.sync.serverUrl = this.querySelector("[data-setting='syncServerUrl']")?.value.trim() || null;
+    if (syncSettings.allConversations?.editable !== false) patch.sync.allConversations = !!this.querySelector("[data-setting='syncAllConversations']")?.checked;
+    if (!Object.keys(patch.sync).length) return;
+    try {
+      await api.settingsPatch(patch);
+      await refreshState();
+      this.setFeedback("Synchronization settings saved.");
+    } catch (err) {
+      const message = err.error === "setting_overridden"
+        ? "One or more synchronization settings are deployment-controlled."
+        : err.error === "sync_active"
+          ? "Finish the active synchronized operation before changing the sync server."
+          : `Synchronization settings failed: ${err.error || err.message || err}`;
+      this.setFeedback(message, "error");
     }
   }
   async saveRepositorySettings() {
@@ -256,6 +276,19 @@ class PiSettings extends HTMLElement {
   render() {
     const providers = (store.state.providers || []).filter(provider => provider.id !== "openai" || provider.configured);
     const settings = store.state.settings || {};
+    const syncState = store.state.sync || {};
+    const syncSettings = settings.sync || {};
+    const syncServerUrl = syncSettings.serverUrl?.value || "";
+    const syncServerEditable = syncSettings.serverUrl?.editable !== false;
+    const syncAll = !!syncSettings.allConversations?.value;
+    const syncAllEditable = syncSettings.allConversations?.editable !== false;
+    const syncLabel = !syncState.configured
+      ? "Not configured"
+      : syncState.connection === "available"
+        ? "Connected"
+        : syncState.connection === "disabled"
+          ? "Disabled"
+          : "Sync client unavailable";
     const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "local";
     const sourceEditable = settings.defaultRepositorySource?.editable !== false;
     const owner = settings.githubOwner?.value || "";
@@ -310,6 +343,21 @@ class PiSettings extends HTMLElement {
           </div>
           <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
           <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div></div>
+        </div>
+      </section>
+      <section class="settings-section">
+        <div class="settings-section-title">Conversation synchronization</div>
+        <div class="settings-card settings-card-spaced">
+          <div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Sync server</div><div class="sr-sub">Canonical enrolled conversations live in the configured pi-sync service. Leave this empty to keep local-only behavior.</div></div>
+            <input class="settings-inline-input" data-setting="syncServerUrl" value="${esc(syncServerUrl)}" placeholder="https://pi-sync.example${syncServerEditable ? "" : " (deployment controlled)"}" ${syncServerEditable ? "" : "disabled"}>
+          </div>
+          <div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Synchronize all conversations</div><div class="sr-sub">Records the deployment-wide preference for the reconciliation pass. Individual conversations can be enrolled now.</div></div>
+            <label class="sync-toggle"><input type="checkbox" data-setting="syncAllConversations" ${syncAll ? "checked" : ""} ${syncAllEditable ? "" : "disabled"}><span>${syncAll ? "On" : "Off"}</span></label>
+          </div>
+          <div class="settings-row"><div class="sr-main"><div class="sr-title">${esc(syncLabel)}</div><div class="sr-sub">${syncState.implementation === "fake" ? "Using the development coordinator; no network calls are made." : syncState.error?.message || "Individual conversations can be enrolled from the active session."}</div></div><span class="status-dot ${syncState.connection === "available" ? "" : "off"}"></span></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">${syncServerEditable && syncAllEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><button class="settings-save" data-act="save-sync-settings" ${syncServerEditable || syncAllEditable ? "" : "disabled"}>Save</button></div>
         </div>
       </section>
       <section class="settings-section">
@@ -951,7 +999,9 @@ class PiConfirm extends HTMLElement {
 class PiApp extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `
-      <div class="frame"><div class="shell">
+      <div class="frame">
+        <div class="preview-banner hidden" data-preview-banner role="status" aria-label="Preview environment"></div>
+        <div class="shell">
         <pi-sidebar></pi-sidebar>
         <main class="col">
           <pi-header></pi-header>
@@ -1046,6 +1096,12 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
+    const previewBanner = this.querySelector("[data-preview-banner]");
+    const preview = store.state.uiConfig?.preview === true;
+    if (previewBanner) {
+      previewBanner.textContent = store.state.uiConfig?.label || "Preview UI · production data";
+      previewBanner.classList.toggle("hidden", !preview);
+    }
     const bar = this.querySelector("pi-header .bar");
     if (bar) this.style.setProperty("--header-height", `${bar.getBoundingClientRect().height}px`);
     for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);

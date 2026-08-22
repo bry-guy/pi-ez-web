@@ -1,6 +1,6 @@
 # Production-backed frontend preview plan
 
-Status: proposed implementation plan
+Status: preview conversion implemented in this branch; production-backed rollout remains an infra/app integration step.
 
 ## Context
 
@@ -15,6 +15,11 @@ The preview will therefore become a frontend-only deployment. The preview
 origin serves static assets from the selected branch image, while requests
 under `/api` are routed to the production pi-ez-web Service. Production remains
 the only backend process and the only client of `pi-syncd` for browser traffic.
+
+This branch implements the UI-only process, the production-data banner, the
+independent UI health/config endpoints, and the stateless preview workload.
+The old preview PVC remains declared with Argo pruning disabled as rollback
+state; it is no longer mounted by the preview pod.
 
 ## Application changes
 
@@ -46,11 +51,12 @@ uses the preview origin and needs no CORS behavior. The SSE connection at
 
 ## Preview deployment changes
 
-Change `deploy/k8s-preview` into a stateless UI workload:
+`deploy/k8s-preview` is now a stateless UI workload:
 
 - Run the application image in UI-only mode.
 - Remove the state initialization init container.
-- Remove the state PVC and `/data` mounts.
+- Remove the state PVC mount and `/data` mounts. The old rollback PVC remains
+  declared but is protected from Argo pruning.
 - Remove Pi, repository, worktree, operator, Kubeconfig, provider, GitHub, Mise,
   and package-initialization environment.
 - Remove operator Secret mounts.
@@ -111,15 +117,17 @@ must make that production-data relationship unambiguous.
 - The service worker remains scoped to the preview origin and does not cache API
   responses.
 - The production-data banner appears in desktop, mobile, and PWA layouts.
-- Kubernetes manifest tests assert the absence of preview PVC, operator Secret,
-  and Pi runtime mounts.
+- Kubernetes manifest tests assert the absence of preview PVC mounts, operator
+  Secret mounts, and Pi runtime mounts; the retained rollback PVC remains
+  explicitly protected from pruning.
 
 ## Delivery sequence
 
 1. Refactor static asset serving into a UI-only app constructor.
 2. Add UI configuration and the production-data banner.
 3. Add proxy-routing integration tests with the mock backend.
-4. Convert `deploy/k8s-preview` to the stateless UI workload.
+4. Convert `deploy/k8s-preview` to the stateless UI workload. **Done in this
+   branch.**
 5. Land the infra path split and verify SSE through the preview hostname.
 6. Keep the old preview state retained until the new preview has passed normal
    branch rollouts and production mutations through the alternate UI.

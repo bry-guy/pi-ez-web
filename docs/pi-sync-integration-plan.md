@@ -1,6 +1,6 @@
 # pi-sync integration plan
 
-Status: proposed implementation plan
+Status: adapter implementation complete against pi-sync commit `25933a7d1124faadce3a5580aa9ab91853b4d2be`; production rollout remains declarative and starts with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
 
 ## Context
 
@@ -15,6 +15,11 @@ TypeScript client, native JSONL adapter, CLI extension, and synchronized
 workspace skill. This repository owns only the pi-ez-web adapter and user
 experience. The selfhost `infra` repository deploys the service and supplies the
 tailnet route and persistent storage.
+
+The standalone pi-sync service and reusable client are now released. This
+branch consumes the pinned client behind the coordinator and supervisor lease
+boundary; rollout validation remains deliberately separate from application
+startup.
 
 For the personal deployment, all web conversations will be synchronized. The
 application also supports manual per-conversation enrollment so the upstream
@@ -226,16 +231,21 @@ continues the same session.
 
 ## Delivery sequence
 
-1. Add config schema, fake coordinator, and sync state to the domain model.
-2. Add manual enrollment API and UI against the fake coordinator.
-3. Integrate the pinned pi-sync client and real enrollment.
-4. Add supervisor preparation, invalidation, heartbeat, settlement upload, and
-   lease enforcement around all durable mutations.
-5. Add all-conversations reconciliation and new-session enrollment.
-6. Add Git upstream pointer and synchronized workspace skill context.
-7. Run the real web-to-CLI-to-web end-to-end test.
-8. Enable the production setting only after the standalone service rollout and
-   selected-session migration pass.
+The released client is now consumed behind the coordinator boundary. The
+remaining rollout work is operational validation rather than a placeholder
+network adapter:
+
+1. Build the pinned `@bry-guy/pi-sync` package into the production image.
+2. Roll out `pi-syncd` and validate its private-network health endpoint.
+3. Run the real web-to-CLI-to-web end-to-end test against the pinned service.
+4. Migrate one non-critical session and verify lease conflict, heartbeat,
+   workspace setup, stale-ETag preservation, and release behavior.
+5. Enable the production setting only after the selected-session migration
+   passes.
+
+The production deployment must start with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
+Only the later rollout step changes it to `true`; local and third-party installs
+remain unchanged when no sync URL is configured.
 
 Keep the adapter behind the configured server URL until the rollout is proven;
 unenrolled sessions must continue to behave exactly as they do today.

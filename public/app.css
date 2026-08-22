@@ -84,6 +84,19 @@ textarea, input, button { font: inherit; color: inherit; }
 .frame { width: 100%; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
 .shell { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden; }
 main.col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+.preview-banner {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--orange);
+  background: var(--orange-soft);
+  color: var(--orange);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  line-height: 1.35;
+  text-align: center;
+}
 
 /* ---------- sidebar ---------- */
 aside.rail {
@@ -557,7 +570,11 @@ pi-context-meter { display: block; padding: 0 13px; }
 .repos-root-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .settings-save { border-radius: 8px; padding: 6px 10px; font-size: 12px; }
 .settings-save:hover, .settings-save:focus-visible { border-color: var(--accent); color: var(--accent); }
-.settings-save:disabled { opacity: .55; cursor: not-allowed; }
+.settings-save:disabled, .settings-action:disabled { opacity: .55; cursor: not-allowed; }
+.sync-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 11.5px var(--mono); }
+.sync-toggle input { accent-color: var(--accent); }
+.sync-header-action { white-space: nowrap; }
+.sync-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--green); border-radius: 6px; color: var(--green); font: 10px var(--mono); letter-spacing: .04em; }
 .settings-chip {
   border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; padding: 6px 12px;
   font-family: var(--mono); font-size: 11.5px; cursor: pointer;

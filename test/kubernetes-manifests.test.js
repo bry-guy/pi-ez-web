@@ -24,13 +24,24 @@ test('production and preview Services select only their own pods', () => {
   );
 });
 
-test('preview initializes Bryan’s Pi profile with a package fallback', () => {
+test('preview is a stateless UI-only workload backed by production APIs', () => {
   const deployment = manifest('deploy/k8s-preview/deployment.yaml');
-  assert.match(deployment, /pi\.profile === 'https:\/\/github\.com\/bry-guy\/dotfiles\/blob\/main\/\.pi\/agent\/settings\.json'/);
-  assert.match(deployment, /pi\.profile = 'https:\/\/github\.com\/bry-guy\/dotfiles';/);
-  assert.match(deployment, /git:github\.com\/nicobailon\/pi-mcp-adapter/);
-  assert.match(deployment, /defaultMode: 'lite'/);
-  assert.match(deployment, /name: MISE_TRUSTED_CONFIG_PATHS\n\s+value: \/data\/pi-ez-agent\/git\/github\.com/);
+  assert.match(deployment, /name: PI_WEB_UI_ONLY\n\s+value: "1"/);
+  assert.match(deployment, /path: \/ui-health/);
+  assert.match(deployment, /name: ghcr-pull/);
+  assert.match(deployment, /selfhost\.bry-guy\.net\/capability-service: "true"/);
+  assert.doesNotMatch(deployment, /initContainers:/);
+  assert.doesNotMatch(deployment, /persistentVolumeClaim:/);
+  assert.doesNotMatch(deployment, /secret:/);
+  assert.doesNotMatch(deployment, /secretKeyRef:/);
+  assert.doesNotMatch(deployment, /mountPath: \/data/);
+  assert.doesNotMatch(deployment, /PI_WEB_HOME|KUBECONFIG|OP_SERVICE_ACCOUNT_TOKEN|PI_CODING_AGENT_DIR/);
+});
+
+test('preview rollback storage remains retained but is not mounted by the workload', () => {
+  const storage = manifest('deploy/k8s-preview/storage.yaml');
+  assert.match(storage, /argocd\.argoproj\.io\/sync-options: Prune=false/);
+  assert.match(storage, /name: pi-ez-web-state-parent/);
 });
 
 test('production pod labels do not change its immutable Deployment selector', () => {

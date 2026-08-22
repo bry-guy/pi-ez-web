@@ -7,6 +7,7 @@ import path from "node:path";
 import { appHome, loadConfig, newId } from "../config.js";
 import { WEB_PI_COMMANDS, parseSlashCommand } from "../commands.js";
 import { PiConfiguration } from "../pi-configuration.js";
+import { settleSync } from "../sync/settlement.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MOCK_MODELS = [
@@ -24,8 +25,11 @@ export class MockSupervisor {
   constructor(hub) {
     this.hub = hub;
     this.live = new Map(); // id -> { timers, queue, streaming }
+    this.syncCoordinator = null;
     this.piConfiguration = new PiConfiguration();
   }
+
+  setSyncCoordinator(coordinator) { this.syncCoordinator = coordinator || null; }
 
   // ---- storage ----
   _load(id) {
@@ -162,8 +166,26 @@ export class MockSupervisor {
       parentSessionId: null, created: new Date().toISOString(), records: [],
     };
     this._save(s);
+    void this.syncCoordinator?.sessionCreated?.(s.id);
     return { id: s.id };
   }
+
+  async allSessions() {
+    let files = [];
+    try { files = fs.readdirSync(dir()); } catch { return []; }
+    return files.map(f => this._load(path.basename(f, ".json"))).filter(Boolean).map(s => ({
+      id: s.id, cwd: s.cwd, name: s.name, parentSessionId: s.parentSessionId || null,
+      created: s.created, modified: s.modified, firstMessage: (s.records.find(r => r.role === "user") || {}).text || "",
+    }));
+  }
+
+  async syncSessionInfo(id) {
+    const s = this._load(id);
+    return s ? { id, file: fileOf(id), cwd: s.cwd, headEntryId: s.records.at(-1)?.id || "", title: s.name || "", parentSessionId: s.parentSessionId || null } : null;
+  }
+
+  async sessionFile(id) { return this._load(id) ? fileOf(id) : null; }
+  sessionIdFromFile(file) { return path.basename(String(file || "")).replace(/\\.json$/, ""); }
 
   async transcript(id) {
     const s = this._load(id);
@@ -239,6 +261,7 @@ export class MockSupervisor {
       records: kept,
     };
     this._save(s);
+    void this.syncCoordinator?.sessionCreated?.(s.id);
     return { id: s.id };
   }
 
@@ -271,6 +294,7 @@ export class MockSupervisor {
     st.streaming = false;
     st.queue = [];
     this.hub.emit(id, "turn_end", { turnId: st.turnId, reason: "stopped" });
+    await this.syncCoordinator?.agentSettled?.(id);
   }
 
   async bangRecord(id, rec) {
@@ -459,5 +483,6 @@ export class MockSupervisor {
     this.hub.emit(id, "turn_end", { turnId: st.turnId, reason });
     const next = st.queue.shift();
     if (next !== undefined) this._startTurn(id, next.text, false, next.clientMessageId);
+    else settleSync(this.syncCoordinator, id);
   }
 }

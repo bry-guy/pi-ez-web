@@ -18,6 +18,15 @@ function pathKey(value) {
   try { return path.resolve(value); } catch { return String(value || ""); }
 }
 
+export async function sessionSyncState(sessionId, sync) {
+  if (!sync?.status) return { synchronized: false };
+  try {
+    return await sync.status(sessionId);
+  } catch {
+    return { synchronized: false, syncState: "error", leaseHolder: null };
+  }
+}
+
 export function reconcileBindings(cfg, bindings) {
   const valid = new Set();
   for (const project of cfg.projects) {
@@ -74,7 +83,7 @@ export async function sessionsUsingWorkspace(project, workspacePath, sup) {
     }));
 }
 
-export async function projectState(project, sup) {
+export async function projectState(project, sup, sync = null) {
   const cfg = loadConfig();
   const bindings = loadBindings();
   const worktrees = ws.listWorktrees(project.repoPath); // branch -> path
@@ -83,6 +92,7 @@ export async function projectState(project, sup) {
   const closed = loadClosed();
   const discovered = await discoverProjectSessions(worktrees, bindings, closed, sup);
   const all = discovered.filter(s => !s.closed);
+  const syncStates = new Map(await Promise.all(all.map(async session => [session.id, await sessionSyncState(session.id, sync)])));
 
   // Session tree from fork lineage. Walk through closed ancestors so visible
   // descendants occupy the closed node's former position.
@@ -102,6 +112,7 @@ export async function projectState(project, sup) {
       id: n.id,
       title: titleOf(n),
       branch: pathToBranch[pathKey(n.cwd)] || null,
+      ...syncStates.get(n.id),
       workspacePath: n.cwd || null,
       streaming: sup.isStreaming(n.id),
       model: n.model || null,
@@ -125,6 +136,7 @@ export async function projectState(project, sup) {
           id: session.id,
           title: titleOf(session),
           streaming: sup.isStreaming(session.id),
+          ...syncStates.get(session.id),
           updatedAt: isoTime(session.modified),
           when: rel(session.modified),
         })),
@@ -149,7 +161,7 @@ export async function projectState(project, sup) {
   };
 }
 
-export async function chatsState(sup) {
+export async function chatsState(sup, sync = null) {
   const root = chatsDir();
   const cwds = [root];
   try {
@@ -165,11 +177,13 @@ export async function chatsState(sup) {
   }
   const closed = loadClosed();
   const list = discovered.filter(s => !closed.has(s.id));
+  const syncStates = new Map(await Promise.all(list.map(async session => [session.id, await sessionSyncState(session.id, sync)])));
   return list
     .sort((a, b) => compareTimestamp(b.modified, a.modified))
     .map(s => ({
       id: s.id,
       title: titleOf(s),
+      ...syncStates.get(s.id),
       when: rel(s.modified),
       updatedAt: isoTime(s.modified),
       activityAt: isoTime(s.modified),

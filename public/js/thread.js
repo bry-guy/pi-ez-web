@@ -23,6 +23,22 @@ function agentStatusGlyph(status) {
   return status === "queued" ? "○" : "◐";
 }
 
+function syncFailureText(error) {
+  const details = error?.details || {};
+  return {
+    active_lease: details.holder ? `This conversation is in use by ${details.holder}.` : "This conversation is in use by another client.",
+    sync_unavailable: "The synchronization service is temporarily unavailable.",
+    sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
+    sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
+    sync_session_not_found: "The sync server no longer has this conversation.",
+    sync_workspace_setup_required: error?.message || "Prepare the recorded Git workspace before continuing.",
+  }[error?.error] || "";
+}
+
+function syncFailureMessage(error, prefix) {
+  return `${prefix}: ${syncFailureText(error) || error?.message || error?.error || String(error)}`;
+}
+
 /* ---------------- thread ---------------- */
 class PiThread extends HTMLElement {
   connectedCallback() {
@@ -927,7 +943,7 @@ class PiComposer extends HTMLElement {
     store.set({ commandNotice: null });
     if (text.startsWith("!")) {
       try { await api.bang(id, text.slice(1).trim()); }
-      catch (err) { store.setError(`Command failed: ${err.error || err.message || err}`); }
+      catch (err) { store.setError(syncFailureMessage(err, "Command failed")); }
       return;
     }
     const streaming = store.transcript(id).streaming;
@@ -944,7 +960,7 @@ class PiComposer extends HTMLElement {
     } catch (err) {
       const message = err.error === "model_required"
         ? "No model is available."
-        : err.message || err.error || String(err);
+        : syncFailureText(err) || err.message || err.error || String(err);
       this.markPendingMessage(id, pendingId, message);
       if (err.error === "model_required") {
         store.setDraft(text);
@@ -957,7 +973,7 @@ class PiComposer extends HTMLElement {
         this.ta.value = text;
         this.attachments = images;
         this.renderAttachments();
-        store.setError(`Send failed: ${err.error || err.message || err}`);
+        store.setError(syncFailureMessage(err, "Send failed"));
       }
     }
   }

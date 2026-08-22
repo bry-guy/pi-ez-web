@@ -106,6 +106,8 @@ export const store = {
     providers: [],
     piConfiguration: null,
     repositorySources: null,
+    sync: null,
+    uiConfig: null,
     settings: null,
     repos: [],
     reposRoot: null,     // configured directory scanned by /api/repos

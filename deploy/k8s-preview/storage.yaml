@@ -2,6 +2,10 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: pi-ez-web-state-parent
+  annotations:
+    # Keep the old preview export available as rollback data while the
+    # workload itself is stateless. This resource must not be pruned by Argo.
+    argocd.argoproj.io/sync-options: Prune=false
   labels:
     app.kubernetes.io/name: pi-ez-web
     app.kubernetes.io/part-of: selfhost
