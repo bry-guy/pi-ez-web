@@ -1,6 +1,59 @@
 import { api, refreshState } from "./api.js";
 import { store } from "./store.js";
-import { esc, mobile, selectSession } from "./shell.js";
+import { esc, mobile, openSessionPicker, selectSession } from "./shell.js";
+
+const gitErrorMessage = error => ({
+  bad_branch: "Enter a valid Git branch name.",
+  no_such_context: "That Git context is no longer available.",
+  no_project_for_session: "This session is no longer attached to a project.",
+  checkout_dirty: "The primary checkout has uncommitted changes.",
+  workspace_dirty: "Clean this workspace before continuing.",
+  git_status_unavailable: "Git status is unavailable; check the workspace and try again.",
+  main_worktree_external: "The primary branch is checked out by another worktree.",
+  main_fetch_failed: "Could not fetch the primary branch's upstream.",
+  main_not_fast_forwardable: "The primary branch has diverged; reconcile it before continuing.",
+  git_switch_failed: "Git could not switch the checkout.",
+  merge_conflict: "Git reported a merge conflict; the merge was aborted.",
+  git_push_failed: "Git could not push this branch.",
+  detached_head: "This workspace is detached and has no branch to push.",
+  branch_delete_failed: "Git could not delete this branch.",
+}[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
+
+function beginOperation(kind, title, command = "") {
+  const operation = { kind, title, command, status: "running", stdout: "", stderr: "", exit: null, startedAt: Date.now() };
+  store.set({ operation });
+  return operation;
+}
+
+function completeOperation(operation, result = {}, error = null) {
+  const failed = !!error || result.ok === false;
+  const stderr = result.stderr || (error ? error.detail || error.message || String(error) : "");
+  store.set({ operation: {
+    ...operation,
+    status: failed ? "error" : "success",
+    command: result.command || operation.command,
+    stdout: result.stdout || "",
+    stderr,
+    exit: Number.isFinite(result.exit) ? result.exit : failed ? 1 : 0,
+    finishedAt: Date.now(),
+  } });
+}
+
+function showCompletedOperation(kind, title, result, command = "") {
+  const operation = { kind, title, command, status: "running", stdout: "", stderr: "", exit: null, startedAt: Date.now() };
+  completeOperation(operation, result);
+}
+
+function combineOperationResults(...results) {
+  const values = results.filter(Boolean);
+  return {
+    ok: values.every(result => result.ok !== false),
+    command: values.map(result => result.command).filter(Boolean).join("\n"),
+    stdout: values.map(result => result.stdout).filter(Boolean).join("\n"),
+    stderr: values.map(result => result.stderr).filter(Boolean).join("\n"),
+    exit: values.at(-1)?.exit,
+  };
+}
 
 /* ---------------- settings ---------------- */
 class PiSettings extends HTMLElement {
@@ -438,10 +491,10 @@ class PiFiles extends HTMLElement {
   }
   disconnectedCallback() { this.unsub?.(); }
 
-  currentBranch() {
+  currentContextId() {
     const project = store.project();
     const node = store.findSession(store.state.sessionId);
-    return node?.branch || project?.branch || null;
+    return node?.contextId || project?.contexts?.find(context => context.kind === "checkout")?.id || project?.contexts?.[0]?.id || null;
   }
 
   treeScrollKey() {
@@ -470,13 +523,14 @@ class PiFiles extends HTMLElement {
 
   availableTargets() {
     const targets = store.state.fileTargets;
+    const primary = store.project()?.defaultBranch || store.project()?.primaryBranch || "main";
     return Array.isArray(targets) && targets.length
       ? targets
-      : ["none", "HEAD", ...((store.project()?.branches || []).includes("main") ? ["main"] : [])];
+      : ["none", "HEAD", ...((store.project()?.branches || []).includes(primary) ? [primary] : [])];
   }
 
   targetLabel(target) {
-    return target === "none" ? "No diff" : target;
+    return target === "none" ? "Working tree" : target;
   }
 
   targetOptions(selected = store.state.fileTarget) {
@@ -491,13 +545,13 @@ class PiFiles extends HTMLElement {
 
   async openFile(filePath, target = store.state.fileTarget || "none") {
     const projectId = store.state.projectId;
-    const branch = this.currentBranch();
-    if (!projectId || !branch || !filePath) return;
+    const contextId = this.currentContextId();
+    if (!projectId || !contextId || !filePath) return;
     if (!this.availableTargets().includes(target)) target = "none";
     const requestId = ++this.requestId;
     store.set({ filePath, fileView: null, fileTarget: target, fileLoading: true, fileError: null });
     try {
-      const view = await api.file(projectId, branch, filePath, target);
+      const view = await api.file(projectId, contextId, filePath, target);
       if (requestId !== this.requestId || store.state.filePath !== filePath) return;
       store.set({ fileView: view, fileTargets: view.targets || store.state.fileTargets, fileTarget: view.target, fileLoading: false, fileError: null });
     } catch (err) {
@@ -604,6 +658,243 @@ class PiFiles extends HTMLElement {
   }
 }
 
+/* ---------------- branch/session picker ---------------- */
+class PiSessionPicker extends HTMLElement {
+  connectedCallback() {
+    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("input", e => {
+      const picker = store.state.sessionPicker;
+      if (!picker) return;
+      if (e.target.matches("[data-session-name]")) picker.name = e.target.value;
+      if (e.target.matches("[data-session-new-branch]")) {
+        picker.newBranch = e.target.value;
+        this.syncActionState();
+      }
+    });
+    this.addEventListener("change", e => {
+      const picker = store.state.sessionPicker;
+      if (!picker) return;
+      if (e.target.matches("[data-session-branch]")) picker.branch = e.target.value;
+      if (e.target.matches("[data-session-base-branch]")) picker.baseBranch = e.target.value;
+      store.notify("state");
+    });
+    this.render();
+  }
+
+  disconnectedCallback() { this.unsub?.(); }
+  picker() { return store.state.sessionPicker; }
+  project() { return store.state.projects.find(project => project.id === this.picker()?.projectId) || null; }
+  flatten(nodes) { return (nodes || []).flatMap(node => [node, ...this.flatten(node.children)]); }
+
+  close() { store.set({ sessionPicker: null, sessionPickerError: null }); }
+
+  selectBranch(branch) {
+    const picker = this.picker();
+    if (!picker) return;
+    picker.branch = branch;
+    picker.branchMenuOpen = false;
+    store.notify("state");
+    if (branch === "__new__") queueMicrotask(() => this.querySelector("[data-session-new-branch]")?.focus());
+  }
+
+  syncActionState() {
+    const picker = this.picker();
+    if (!picker || this.busy) return;
+    const branch = picker.branch === "__new__" ? String(picker.newBranch || "").trim() : String(picker.branch || "").trim();
+    const current = picker.currentBranch || "";
+    for (const button of this.querySelectorAll("[data-act='create-session-context'], [data-act='apply-session-branch']")) {
+      button.disabled = !branch || (button.dataset.mode && branch === current);
+    }
+  }
+
+  async refreshBranches() {
+    if (this.busy) return;
+    this.busy = true;
+    this.busyLabel = "Refreshing branches…";
+    store.set({ sessionPickerError: null });
+    try { await refreshState(); }
+    catch (err) { store.set({ sessionPickerError: `Could not refresh branches: ${err.error || err.message || err}` }); }
+    finally { this.busy = false; this.busyLabel = null; this.render(); }
+  }
+
+  async onClick(e) {
+    const scrim = this.querySelector(".session-picker-scrim");
+    if (e.target === scrim || e.target.closest("[data-act='close-session-picker']")) { this.close(); return; }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "toggle-branch-menu") {
+      const picker = this.picker();
+      if (!picker || this.busy) return;
+      picker.branchMenuOpen = !picker.branchMenuOpen;
+      store.notify("state");
+      return;
+    }
+    if (act === "select-session-branch") {
+      this.selectBranch(e.target.closest("[data-act]").dataset.branch);
+      return;
+    }
+    if (act === "refresh-session-contexts") {
+      await this.refreshBranches();
+      return;
+    }
+    if (act === "create-session-context" || act === "apply-session-branch") { await this.submit(act === "apply-session-branch" ? e.target.closest("[data-act]").dataset.mode : "new"); return; }
+    if (act === "run-hook") { await this.runHook(e.target.closest("[data-act]")?.dataset.hook); return; }
+    if (act === "close-hook-result") { store.set({ hookResult: null }); return; }
+    if (act === "merge-branch") {
+      const picker = this.picker(); const project = this.project();
+      if (!picker || !project) return;
+      const context = (project.contexts || []).find(item => item.branch === picker.currentBranch);
+      const primaryBranch = project.defaultBranch || project.primaryBranch || "main";
+      const confirm = { type: "merge", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, error: null, deleteAfter: false, closeSessions: false, sessions: context?.sessions || [], dirty: context?.dirty ?? false, status: context?.status || "unknown" };
+      this.close(); store.set({ confirm }); return;
+    }
+    if (act === "delete-branch") {
+      const picker = this.picker(); const project = this.project();
+      if (!picker || !project) return;
+      const context = (project.contexts || []).find(item => item.branch === picker.currentBranch);
+      const primaryBranch = project.defaultBranch || project.primaryBranch || "main";
+      this.close();
+      store.set({ confirm: { type: "deleteBranch", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, label: picker.currentBranch, sessions: context?.sessions || [], closeSessions: false, force: false, dirty: context?.dirty ?? false, status: context?.status || "unknown", error: null } });
+      return;
+    }
+    if (act === "push-branch") await this.push();
+  }
+
+  async submit(mode) {
+    const picker = this.picker(); const project = this.project();
+    if (!picker || !project || this.busy) return;
+    const primary = project.defaultBranch || project.primaryBranch || "main";
+    const branch = picker.branch === "__new__" ? String(picker.newBranch || "").trim() : String(picker.branch || "").trim();
+    if (!branch) { store.set({ sessionPickerError: "Enter a branch name." }); return; }
+    if (mode !== "new" && branch === picker.currentBranch) return;
+    const knownBranches = new Set([...(project.branches || []), ...(project.contexts || []).map(context => context.branch).filter(Boolean)]);
+    const needsPrimaryFetch = mode === "new" && !knownBranches.has(branch) && (picker.baseBranch || primary) === primary;
+    this.busy = true;
+    this.busyLabel = needsPrimaryFetch ? `Fetching ${primary}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Forking…";
+    store.set({ sessionPickerError: null });
+    try {
+      const enteredName = String(picker.name || "").trim();
+      const body = { branch, baseBranch: picker.baseBranch || primary, ...(mode === "new" || enteredName ? { name: enteredName || null } : {}) };
+      const result = mode === "new"
+        ? await api.newProjectSession(project.id, body)
+        : await api.branchSession(picker.sourceSessionId, { ...body, mode });
+      await refreshState();
+      const refreshedProject = store.state.projects.find(item => item.id === project.id);
+      if (refreshedProject && result.id && !store.findSession(result.id, refreshedProject.sessions)) {
+        const context = (refreshedProject.contexts || []).find(item => item.branch === branch);
+        refreshedProject.sessions.unshift({ id: result.id, title: body.name || "New session", contextId: context?.id || null, branch, workspacePath: context?.path || null, model: store.state.effectiveDefaultModel, when: "now", updatedAt: new Date().toISOString(), activityAt: new Date().toISOString(), streaming: false, children: [] });
+        store.notify("state");
+      }
+      const targetId = result?.id || picker.sourceSessionId;
+      if (!targetId) throw new Error("The server did not return a session id.");
+      store.set({ sessionPicker: null, sessionPickerError: null });
+      store.state.openTree[project.id] = true;
+      selectSession(project.id, targetId);
+      if (result.setup) showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
+    } catch (err) {
+      const messages = {
+        no_such_base_branch: "That base branch no longer exists.",
+        session_streaming: "Wait for the current response to finish before switching.",
+        same_branch: "Choose a different branch.",
+      };
+      store.set({ sessionPickerError: messages[err.error] || gitErrorMessage(err) });
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
+  }
+
+  async push() {
+    const id = this.picker()?.sourceSessionId;
+    if (!id || this.busy) return;
+    this.busy = true;
+    this.busyLabel = "Pushing…";
+    const operation = beginOperation("push", "Push", "git push");
+    let result = null;
+    try {
+      result = await api.pushBranch(id);
+      await refreshState();
+      completeOperation(operation, result);
+    } catch (err) {
+      completeOperation(operation, result || {}, err);
+      store.set({ sessionPickerError: gitErrorMessage(err) });
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
+  }
+
+  async runHook(name) {
+    const id = this.picker()?.sourceSessionId;
+    if (!id || !name || this.hookBusy) return;
+    this.hookBusy = true;
+    const title = name ? `${name[0].toUpperCase()}${name.slice(1)}` : "Hook";
+    const operation = beginOperation("hook", title, `Configured ${name} hook`);
+    let result = null;
+    try {
+      result = await api.hook(id, name);
+      await refreshState();
+      completeOperation(operation, result);
+    } catch (err) {
+      completeOperation(operation, result || {}, err);
+    } finally { this.hookBusy = false; this.render(); }
+  }
+
+  render() {
+    const picker = this.picker();
+    if (!picker) { this.innerHTML = ""; return; }
+    const project = this.project();
+    if (!project) { this.innerHTML = ""; return; }
+    const focused = document.activeElement;
+    const focusSelector = focused && this.contains(focused) && focused.matches("[data-session-name], [data-session-new-branch], [data-session-base-branch]")
+      ? (focused.matches("[data-session-name]") ? "[data-session-name]" : focused.matches("[data-session-new-branch]") ? "[data-session-new-branch]" : "[data-session-base-branch]")
+      : null;
+    const selectionStart = focused?.selectionStart;
+    const selectionEnd = focused?.selectionEnd;
+    const contexts = project.contexts || [];
+    const primary = project.defaultBranch || project.primaryBranch || contexts.find(context => context.primaryBranch)?.primaryBranch || "main";
+    const contextFor = branch => contexts.find(context => context.branch === branch) || null;
+    const branches = [...new Set([primary, ...(project.branches || []), ...contexts.map(context => context.branch).filter(Boolean)])]
+      .sort((a, b) => (a === primary ? -1 : b === primary ? 1 : a.localeCompare(b)));
+    const mode = picker.mode === "new" ? "new" : picker.mode;
+    const selected = picker.branch || (mode === "new" ? primary : picker.currentBranch || project.branch || primary);
+    const isNew = selected === "__new__";
+    const effectiveBranch = isNew ? String(picker.newBranch || "").trim() : selected;
+    const different = !!effectiveBranch && effectiveBranch !== picker.currentBranch;
+    const context = contextFor(effectiveBranch);
+    const users = context?.sessions || [];
+    const userText = users.length ? users.map(user => `<span class="session-context-user ${user.streaming ? "working" : ""}"><i></i>${esc(user.title)} · ${user.streaming ? "working" : "idle"}</span>`).join("") : "No other sessions are using this branch.";
+    const branchMeta = branch => {
+      const item = contextFor(branch);
+      if (!item) return "not checked out";
+      return `${item.kind === "checkout" ? "CHECKOUT" : "WORKTREE"} · ${item.status || (item.dirty ? "dirty" : "clean")}`;
+    };
+    const branchButton = branch => `<button type="button" class="branch-option" data-act="select-session-branch" data-branch="${esc(branch)}" role="option" aria-selected="${selected === branch}"><span class="branch-option-name">${esc(branch)}</span><span class="branch-option-meta">${esc(branchMeta(branch))}</span></button>`;
+    const selectedBranchLabel = isNew ? "＋ New branch…" : selected;
+    const pinnedBranches = branches.slice(0, 4);
+    const additionalBranches = branches.slice(4);
+    const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>First 4 pinned</span></div><div class="branch-picker-pinned">${pinnedBranches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button>${additionalBranches.length ? `<div class="branch-picker-scroll" aria-label="More branches">${additionalBranches.map(branchButton).join("")}</div>` : ""}</div>` : "";
+    const branchField = `<div class="branch-picker"><button type="button" class="branch-picker-trigger" data-act="toggle-branch-menu" aria-expanded="${!!picker.branchMenuOpen}" aria-haspopup="listbox"><span>${esc(selectedBranchLabel)}</span><span class="branch-picker-caret">${picker.branchMenuOpen ? "⌃" : "⌄"}</span></button>${branchMenu}</div>`;
+    const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
+    const existing = mode !== "new";
+    const current = picker.currentBranch || "";
+    const primarySelected = current === primary;
+    const actionButtons = existing
+      ? `<button class="settings-action" data-act="apply-session-branch" data-mode="switch" ${this.busy || !different ? "disabled" : ""}>Switch</button><button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Fork</button>`
+      : `<button class="settings-save" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button>`;
+    const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
+    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>Push</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
+    const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
+    const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
+    const hookButtons = hookNames.map(name => `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${this.hookBusy ? "disabled" : ""}>${esc(hookLabel(name))}</button>`).join("");
+    const hookSection = hookButtons ? `<div class="workspace-actions">${hookButtons}</div>` : "";
+    const error = store.state.sessionPickerError ? `<div class="session-picker-error">${esc(store.state.sessionPickerError)}</div>` : "";
+    const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
+    const subtitle = existing ? `${esc(project.name)} · switch or fork this conversation` : `${esc(project.name)} · choose a branch for this conversation`;
+    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}<div class="session-context-heading"><span>Workspace</span><button class="settings-action quiet" data-act="refresh-session-contexts" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Refreshing branches…" ? "Refreshing…" : "Refresh"}</button></div>${progress}<div class="session-context-users branch-user-list">${userText}</div>${error}${hookSection}${branchActions}</div><div class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker" ${this.busy ? "disabled" : ""}>Cancel</button>${actionButtons}</div></div></section></div>`;
+    if (focusSelector) {
+      const next = this.querySelector(focusSelector);
+      if (next) {
+        next.focus({ preventScroll: true });
+        if (selectionStart != null && typeof next.setSelectionRange === "function") next.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+      }
+    }
+  }
+}
 /* ---------------- repo picker ---------------- */
 class PiRepoPicker extends HTMLElement {
   connectedCallback() {
@@ -700,7 +991,8 @@ class PiRepoPicker extends HTMLElement {
       await refreshState();
       store.state.openTree[result.id] = true;
       selectSession(result.id, result.sessionId);
-      store.set({ hookResult: result.setup || null, workspaceSettingsOpen: result.setup && !result.setup.ok });
+      store.set({ hookResult: null, workspaceSettingsOpen: result.setup && !result.setup.ok });
+      if (result.setup) showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
     } catch (err) {
       this.connecting = false;
       const messages = {
@@ -916,22 +1208,51 @@ class PiRepoPicker extends HTMLElement {
   }
 }
 
-/* ---------------- confirmation modal (merge / close) ---------------- */
+/* ---------------- operation modal ---------------- */
+class PiOperation extends HTMLElement {
+  connectedCallback() {
+    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.addEventListener("click", e => {
+      const operation = store.state.operation;
+      if (!operation || operation.status === "running") return;
+      const scrim = this.querySelector(".operation-scrim");
+      if (e.target === scrim || e.target.closest("[data-act='close-operation']")) store.set({ operation: null });
+    });
+    this.render();
+  }
+
+  disconnectedCallback() { this.unsub?.(); }
+
+  render() {
+    const operation = store.state.operation;
+    if (!operation) { this.innerHTML = ""; return; }
+    const running = operation.status === "running";
+    const failed = operation.status === "error";
+    const status = running ? "Running…" : failed ? `Failed · exit ${operation.exit ?? 1}` : `Completed · exit ${operation.exit ?? 0}`;
+    const command = operation.command || "configured operation";
+    const terminal = [
+      `$ ${command}`,
+      operation.stdout || "",
+      operation.stderr ? `[stderr]\n${operation.stderr}` : "",
+      running ? "… running" : `\n[exit ${operation.exit ?? (failed ? 1 : 0)}]`,
+    ].filter(Boolean).join("\n");
+    this.innerHTML = `<div class="operation-scrim"><section class="operation-modal" role="dialog" aria-modal="true" aria-label="${esc(operation.title)}"><div class="operation-head"><div><div class="operation-title">${esc(operation.title)}</div><div class="operation-status ${failed ? "failed" : running ? "running" : "success"}" role="status">${esc(status)}</div></div><button class="ghost-btn" data-act="close-operation" aria-label="Close" ${running ? "disabled" : ""}>×</button></div><div class="operation-body"><div class="operation-command-label">Terminal output</div><pre class="operation-terminal" aria-live="polite">${esc(terminal)}</pre></div><div class="operation-actions"><button class="confirm-back" data-act="close-operation" ${running ? "disabled" : ""}>${running ? "Working…" : "Close"}</button></div></section></div>`;
+  }
+}
+
+/* ---------------- confirmation modal ---------------- */
 class PiConfirm extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => {
       const scrim = this.querySelector(".confirm-scrim");
-      if (e.target === scrim || e.target.closest("[data-act='cancel']")) {
-        store.set({ confirm: null });
-      } else if (e.target.closest("[data-act='navigate-session']")) {
-        const id = e.target.closest("[data-act='navigate-session']")?.dataset.id;
-        const p = store.project();
-        if (p && id) selectSession(p.id, id);
-        store.set({ confirm: null });
-      } else if (e.target.closest("[data-act='go']")) {
-        this.go();
-      }
+      if (e.target === scrim || e.target.closest("[data-act='cancel']")) store.set({ confirm: null });
+      else if (e.target.closest("[data-act='go']")) void this.go();
+    });
+    this.addEventListener("change", e => {
+      if (e.target.matches("[data-confirm-delete-after]")) store.set(s => ({ confirm: { ...s.confirm, deleteAfter: e.target.checked } }));
+      if (e.target.matches("[data-confirm-close-sessions]")) store.set(s => ({ confirm: { ...s.confirm, closeSessions: e.target.checked } }));
+      if (e.target.matches("[data-confirm-force]")) store.set(s => ({ confirm: { ...s.confirm, force: e.target.checked } }));
     });
     this.render();
   }
@@ -939,59 +1260,72 @@ class PiConfirm extends HTMLElement {
 
   async go() {
     const c = store.state.confirm;
-    if (!c) return;
+    if (!c || this.busy) return;
+    const project = store.state.projects.find(item => item.id === c.projectId);
+    const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
+    this.busy = true;
+    this.busyLabel = c.type === "merge" ? `Fetching ${primary} and merging…` : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
+    const operation = c.type === "merge" || c.type === "deleteBranch"
+      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, c.type === "merge" ? `git merge --no-ff --no-edit ${c.branch}${c.deleteAfter ? `\ngit branch -D ${c.branch}` : ""}` : `git branch -D ${c.branch}`)
+      : null;
+    let result = null;
+    let followup = null;
     try {
-      if (c.type === "merge") await api.merge(c.id);
-      else await api.close(c.id);
+      if (c.type === "close") {
+        await api.close(c.id);
+      } else if (c.type === "merge") {
+        result = await api.mergeBranch(c.id);
+        if (c.deleteAfter) followup = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+      } else if (c.type === "deleteBranch") {
+        result = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+      }
+      await refreshState();
+      if (operation) completeOperation(operation, combineOperationResults(result, followup));
       store.set({ confirm: null });
+      const active = store.state.sessionId;
+      if (active && !store.findAnySession(active)) {
+        const project = store.state.projects.find(item => item.id === c.projectId);
+        const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
+        const first = this.flatten(project?.sessions || []).find(session => session.branch === primary) || this.flatten(project?.sessions || [])[0];
+        if (first) selectSession(c.projectId, first.id);
+      }
     } catch (err) {
-      const msgs = {
-        merge_conflict: "merge conflict — the checkout was restored; resolve by hand or keep working",
-        workspace_dirty: "worktree has uncommitted changes — commit them first",
-        checkout_dirty: "the project checkout has uncommitted changes",
-        session_streaming: "session is mid-turn — stop it first",
-        merge_rehome_failed: "the merge landed, but one session could not be moved; the worktree was kept",
-        merge_cleanup_failed: "the merge landed, but cleanup failed; check Workspace settings for the remaining worktree",
-        main_worktree_external: "main is checked out by another worktree; remove that worktree outside the app first",
-        return_rehome_failed: "main is ready, but this session could not be moved to the checkout",
-        sessions_active: "stop the active sessions before merging",
-      };
-      store.set(s => ({ confirm: { ...s.confirm, error: msgs[err.error] || err.error || "failed" } }));
-    }
+      if (operation) {
+        const prior = combineOperationResults(result, followup);
+        completeOperation(operation, { ...prior, stderr: [prior.stderr, err.detail || err.message || String(err)].filter(Boolean).join("\n") }, err);
+      }
+      store.set(s => ({ confirm: { ...s.confirm, error: gitErrorMessage(err) } }));
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
+
+  flatten(nodes) { return (nodes || []).flatMap(node => [node, ...this.flatten(node.children)]); }
 
   render() {
     const c = store.state.confirm;
     if (!c) { this.innerHTML = ""; return; }
-    const p = store.project();
-    const target = "main";
-    const isMerge = c.type === "merge";
-    const active = (c.sessions || []).filter(session => session.streaming || store.transcript(session.id).streaming);
-    const checkoutBranch = p?.branch && p.branch !== target ? ` The checkout will switch from ${esc(p.branch)} to ${target} first.` : "";
-    const title = isMerge ? "Merge to main" : c.kind === "chat" ? "Close chat" : "Close session";
-    const body = isMerge
-      ? `Merge ${esc(c.branch)} into ${target}.${checkoutBranch} All sessions using this worktree will move to the repository checkout on ${target}.`
-        + (active.length ? `<div class="confirm-sessions"><strong>Active sessions will be interrupted:</strong>${active.map(session => `<button data-act="navigate-session" data-id="${esc(session.id)}">${esc(session.title)}</button>`).join("")}</div>` : "")
-      : `“${esc(c.label)}” will be closed and removed from the list. Its transcript stays in session storage.`;
-    const warn = isMerge
-      ? `The worktree and branch will be removed. Any uncommitted worktree changes will be lost.`
-      : c.externalMain
-        ? "This is an external main worktree. Closing archives this session but leaves the protected worktree in place."
-        : !isMerge && c.branch && c.branch !== target
-          ? `The worktree for ${esc(c.branch)} will be removed. Any changes on this branch will be lost.` : "";
-    const cta = isMerge ? "Merge" : c.kind === "chat" ? "Close chat" : "Close session";
-    this.innerHTML = `<div class="confirm-scrim">
-      <div class="confirm-modal">
-        <div class="confirm-title">${title}</div>
-        <div class="confirm-body">${body}</div>
-        ${warn ? `<div class="confirm-warn">${warn}</div>` : ""}
-        ${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}
-        <div class="confirm-actions">
-          <button class="confirm-back" data-act="cancel">Go back</button>
-          <button class="confirm-cta ${isMerge ? "accent" : "danger"}" data-act="go">${cta}</button>
-        </div>
-      </div>
-    </div>`;
+    const project = store.state.projects.find(item => item.id === c.projectId);
+    const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
+    const sessions = c.sessions || [];
+    const activeSessions = sessions.filter(session => session.streaming);
+    const sessionList = sessions.length ? `<div class="confirm-sessions"><strong>Sessions using this branch</strong>${sessions.map(session => `<div>${esc(session.title)} · ${session.streaming ? "working" : "idle"}</div>`).join("")}</div>` : "";
+    let title = "", body = "", options = "", action = "Confirm";
+    if (c.type === "close") {
+      title = c.kind === "chat" ? "Close chat" : "Close session";
+      body = `“${esc(c.label)}” will be archived. Its transcript and Git context remain available.`;
+      action = c.kind === "chat" ? "Close chat" : "Close session";
+    } else if (c.type === "merge") {
+      title = `Merge ${esc(c.branch)} to ${esc(primary)}?`;
+      body = `This performs a local merge after checking that ${esc(primary)} is clean and current. It does not push.`;
+      options = `<label class="confirm-check"><input type="checkbox" data-confirm-delete-after ${c.deleteAfter ? "checked" : ""}><span>Delete branch and worktree after merge</span></label>${c.deleteAfter && activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}`;
+      action = "Merge locally";
+    } else {
+      title = `Delete ${esc(c.branch)}?`;
+      body = `The local branch and worktree will be deleted. Remote branches are not affected.${activeSessions.length ? " Working sessions will be interrupted." : ""}`;
+      options = `${sessions.length ? `<div class="confirm-warn">Affected sessions will move to ${esc(primary)} unless you choose to close them.</div>` : ""}${activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}${c.dirty ? `<label class="confirm-check"><input type="checkbox" data-confirm-force ${c.force ? "checked" : ""}><span>I understand uncommitted changes will be deleted</span></label>` : ""}`;
+      action = "Delete branch";
+    }
+    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force);
+    this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Working…") : action}</button></div></div></div>`;
   }
 }
 
@@ -1018,6 +1352,8 @@ class PiApp extends HTMLElement {
           <span>New pi update ready.</span><button class="update-btn" data-act="update">Reload</button>
         </div>
         <pi-repo-picker></pi-repo-picker>
+        <pi-session-picker></pi-session-picker>
+        <pi-operation></pi-operation>
         <pi-confirm></pi-confirm>
         <div class="reload-prompt hidden" data-reload-prompt>
           <div class="reload-card"><div class="screen-title">Reload required</div><div class="proj-sub" data-reload-message></div><button class="primary-btn" data-act="reload">Reload</button></div>
@@ -1043,10 +1379,17 @@ class PiApp extends HTMLElement {
     this.unsub = store.subscribe(w => { if (w === "state") this.sync(); });
     this.onResize = () => this.sync();
     window.addEventListener("resize", this.onResize);
+    this.gitRefreshTimer = setInterval(() => {
+      // Do not replace the picker DOM while a user is typing or choosing a
+      // branch. The explicit Refresh action owns modal Git updates.
+      if (store.inProject() && !store.state.sessionPicker && !store.state.confirm) void refreshState().catch(() => {});
+    }, 3500);
+    this.gitRefreshTimer.unref?.();
     this.sync();
   }
   disconnectedCallback() {
     this.unsub?.();
+    clearInterval(this.gitRefreshTimer);
     window.removeEventListener("resize", this.onResize);
   }
 
@@ -1054,7 +1397,7 @@ class PiApp extends HTMLElement {
     const p = store.project();
     if (!p || !store.inProject()) return null;
     const node = store.findSession(store.state.sessionId);
-    return `${p.id}:${node?.workspacePath || node?.branch || p.branch || ""}:${store.state.fileTarget}`;
+    return `${p.id}:${node?.contextId || node?.workspacePath || p.contexts?.[0]?.id || ""}:${store.state.fileTarget}`;
   }
 
   async ensureFiles(force = false) {
@@ -1076,7 +1419,7 @@ class PiApp extends HTMLElement {
     store.notify("files");
     const node = store.findSession(store.state.sessionId);
     try {
-      const result = await api.files(store.state.projectId, node?.branch, store.state.fileTarget);
+      const result = await api.files(store.state.projectId, node?.contextId || store.project()?.contexts?.[0]?.id, store.state.fileTarget);
       if (this.filesKey() === key) {
         store.state.files = result.tree || [];
         store.state.fileTargets = result.targets || store.state.fileTargets;
@@ -1119,7 +1462,9 @@ class PiApp extends HTMLElement {
   }
 }
 
+customElements.define("pi-operation", PiOperation);
 customElements.define("pi-confirm", PiConfirm);
+customElements.define("pi-session-picker", PiSessionPicker);
 customElements.define("pi-settings", PiSettings);
 customElements.define("pi-files", PiFiles);
 customElements.define("pi-repo-picker", PiRepoPicker);

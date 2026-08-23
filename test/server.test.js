@@ -134,9 +134,10 @@ test("serves the UI", async () => {
 
 test("state exposes the API contract and health marker", async () => {
   const state = await (await get("/api/state")).json();
-  assert.equal(state.apiContractVersion, 3);
+  assert.equal(state.apiContractVersion, 5);
   assert.ok(state.capabilities.includes("provider-auth"));
-  assert.ok(state.capabilities.includes("workspace-actions"));
+  assert.ok(state.capabilities.includes("workspace-contexts"));
+  assert.ok(state.capabilities.includes("workspace-branches"));
   assert.ok(state.capabilities.includes("slash-commands"));
   assert.ok(state.capabilities.includes("project-hooks"));
   assert.ok(state.capabilities.includes("pi-resources"));
@@ -144,9 +145,10 @@ test("state exposes the API contract and health marker", async () => {
   assert.ok(state.capabilities.includes("subagent-activity"));
   assert.equal(state.piConfiguration.profile.status, "none");
   assert.equal(state.settings.githubClientId, undefined);
+  assert.ok(state.projects.every(project => Array.isArray(project.contexts)));
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
-  assert.equal(health.apiContractVersion, 3);
+  assert.equal(health.apiContractVersion, 5);
 });
 
 test("repository picker uses the configured local repositories root", async () => {
@@ -189,7 +191,10 @@ test("plain chats use isolated scratch workspaces and retain legacy discovery", 
   const branchResponse = await post(`/api/sessions/${a.id}/branch`, { branch: "not-a-chat-branch", create: true });
   assert.equal(branchResponse.status, 404);
   const forkResponse = await post(`/api/sessions/${b.id}/fork`, {});
-  assert.equal(forkResponse.status, 404);
+  assert.equal(forkResponse.status, 200);
+  const forkedChat = await forkResponse.json();
+  const forkedMeta = await (await get(`/api/sessions/${forkedChat.id}/meta`)).json();
+  assert.equal(forkedMeta.cwd, metaB.cwd);
   const mergeResponse = await post(`/api/sessions/${b.id}/merge`, {});
   assert.equal(mergeResponse.status, 404);
   assert.equal((await mergeResponse.json()).error, "no_project_for_session");
@@ -394,6 +399,7 @@ test("project creation: first session on the checkout branch", async () => {
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.equal(p.branch, "main");
+  assert.equal(p.defaultBranch, "main");
   assert.deepEqual(p.workspaceStatus.main.sessions.map(session => session.id), [firstSessionId]);
   assert.equal(p.occupied, undefined);
   assert.equal(p.mode, undefined);
@@ -409,12 +415,15 @@ test("slash command discovery supports /settings and /name", async () => {
   assert.ok(commandNames.includes("settings"));
   assert.ok(commandNames.includes("name"));
   assert.ok(commandNames.includes("compact"));
+  assert.ok(commandNames.includes("fork"));
   const settings = await post(`/api/sessions/${firstSessionId}/command`, { text: "/settings" });
   assert.deepEqual(await settings.json(), { ok: true, action: "settings" });
   const named = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name Web session" });
   assert.equal(named.status, 200);
   assert.equal((await named.json()).name, "Web session");
   assert.equal((await (await get(`/api/sessions/${firstSessionId}/meta`)).json()).name, "Web session");
+  const slashFork = await post(`/api/sessions/${firstSessionId}/command`, { text: "/fork" });
+  assert.deepEqual(await slashFork.json(), { ok: true, action: "fork" });
   const currentName = await post(`/api/sessions/${firstSessionId}/command`, { text: "/name" });
   assert.equal(currentName.status, 200);
   assert.equal((await currentName.json()).action, "notice");
@@ -474,7 +483,8 @@ test("file explorer returns current content and HEAD/main diffs safely", async (
     assert.equal(tree.target, "none");
     assert.ok(tree.targets.includes("HEAD"));
     assert.ok(tree.tree.some(node => node.p === "feature.js"));
-    assert.equal(tree.tree.find(node => node.p === "feature.js").s, undefined);
+    assert.equal(tree.tree.find(node => node.p === "feature.js").s, "new");
+    assert.equal(tree.tree.find(node => node.p === "scratch.txt").s, "new");
     const noDiff = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=none`)).json();
     assert.equal(noDiff.diff, null);
 
@@ -487,6 +497,7 @@ test("file explorer returns current content and HEAD/main diffs safely", async (
     assert.equal(changed.get("changes/modified.txt").s, "modified");
     assert.equal(changed.get("changes").s, "modified");
     assert.equal(changed.get("README.md").s, undefined);
+    assert.equal(diffTree.statusTarget, "HEAD");
 
     const current = await (await get(`/api/projects/${projectId}/file?branch=feat%2Fjson&path=feature.js&target=HEAD`)).json();
     assert.equal(current.content, "const value = 1;\n");
@@ -613,11 +624,16 @@ test("fork transcript truncates at the forked message and seeds lineage", async 
   assert.match(parentNode, new RegExp(fr.id)); // fork appears in the tree
 });
 
-test("standalone branch and fork endpoints are removed", async () => {
+test("standalone branch mutation is removed and slash fork stays on the same branch", async () => {
   const branch = await post(`/api/sessions/${firstSessionId}/branch`, { branch: "legacy" });
   assert.equal(branch.status, 404);
   const fork = await post(`/api/sessions/${firstSessionId}/fork`, {});
-  assert.equal(fork.status, 404);
+  assert.equal(fork.status, 200);
+  const body = await fork.json();
+  assert.equal(body.branch, "feat/json");
+  const childMeta = await (await get(`/api/sessions/${body.id}/meta`)).json();
+  const parentMeta = await (await get(`/api/sessions/${firstSessionId}/meta`)).json();
+  assert.equal(childMeta.cwd, parentMeta.cwd);
 });
 
 test("branch delete: dirty refused, force removes", async () => {
@@ -708,18 +724,104 @@ test("checkout workspace cannot be deleted", async () => {
   assert.equal(r.status, 400);
 });
 
-test("sessions stay on their current workspace unless Worktree is requested", async () => {
+test("new sessions persist their selected Git context", async () => {
   const manualRepo = makeRepo("manual-repo");
   const created = await (await post("/api/projects", { repoPath: manualRepo })).json();
   const second = await (await post(`/api/projects/${created.id}/sessions`, {})).json();
   const sse = new SSE(base + "/api/events");
   await post(`/api/sessions/${created.sessionId}/message`, { text: "manual project turn" });
   await sse.wait(e => e.sessionId === created.sessionId && e.type === "turn_end");
-  assert.equal(loadBindings()[created.sessionId], undefined);
-  assert.equal(loadBindings()[second.id], undefined);
+  assert.equal(loadBindings()[created.sessionId].workspacePath, manualRepo);
+  assert.equal(loadBindings()[second.id].workspacePath, manualRepo);
   const state = await (await get("/api/state")).json();
   const project = state.projects.find(item => item.id === created.id);
   assert.equal(project.workspaceStatus.main.sessions.length, 2);
+});
+
+test("new and fork sessions can target discovered Git contexts", async () => {
+  const contextRepo = makeRepo("context-picker-repo");
+  const worktree = path.join(tmp, "context-picker-worktree");
+  git(contextRepo, "worktree", "add", "-b", "feature/context-picker", worktree);
+  const created = await (await post("/api/projects", { repoPath: contextRepo })).json();
+  const state = await (await get("/api/state")).json();
+  const project = state.projects.find(item => item.id === created.id);
+  const context = project.contexts.find(item => item.branch === "feature/context-picker");
+  assert.equal(context.kind, "worktree");
+  fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep me\n");
+  const newSession = await (await post(`/api/projects/${created.id}/sessions`, { contextId: context.id })).json();
+  assert.equal(newSession.branch, "feature/context-picker");
+  const fork = await (await post(`/api/projects/${created.id}/sessions`, {
+    mode: "fork", sourceSessionId: created.sessionId, contextId: context.id,
+  })).json();
+  assert.equal(fork.contextId, context.id);
+  assert.equal(fork.forkedFrom, created.sessionId);
+  assert.equal(fs.readFileSync(path.join(worktree, "uncommitted.txt"), "utf8"), "keep me\n");
+  const refreshed = await (await get("/api/state")).json();
+  const refreshedContext = refreshed.projects.find(item => item.id === created.id).contexts.find(item => item.id === context.id);
+  assert.deepEqual(new Set(refreshedContext.sessions.map(session => session.id)), new Set([newSession.id, fork.id]));
+});
+
+test("branch sessions create worktrees, merge locally, and delete back to main", async () => {
+  const branchRepo = makeRepo("branch-workflow-repo");
+  const created = await (await post("/api/projects", { repoPath: branchRepo })).json();
+  const branchSession = await (await post(`/api/projects/${created.id}/sessions`, {
+    branch: "feature/workflow", name: "Workflow", baseBranch: "main",
+  })).json();
+  assert.equal(branchSession.branch, "feature/workflow");
+  let state = await (await get("/api/state")).json();
+  let project = state.projects.find(item => item.id === created.id);
+  const worktree = project.worktrees["feature/workflow"];
+  fs.writeFileSync(path.join(worktree, "workflow.txt"), "done\n");
+  git(worktree, "add", "workflow.txt"); git(worktree, "commit", "-m", "workflow");
+  const shared = await (await post(`/api/projects/${created.id}/sessions`, { branch: "feature/workflow" })).json();
+  const merged = await post(`/api/sessions/${branchSession.id}/merge-local`, {});
+  assert.equal(merged.status, 200, await merged.clone().text());
+  assert.equal(fs.readFileSync(path.join(branchRepo, "workflow.txt"), "utf8"), "done\n");
+  const deleted = await fetch(`${base}/api/projects/${created.id}/branches/feature%2Fworkflow`, {
+    method: "DELETE", headers: J, body: JSON.stringify({ closeSessions: false }),
+  });
+  assert.equal(deleted.status, 200, await deleted.clone().text());
+  assert.equal(ws.currentBranch(branchRepo), "main");
+  assert.equal(ws.listBranches(branchRepo).includes("feature/workflow"), false);
+  state = await (await get("/api/state")).json();
+  project = state.projects.find(item => item.id === created.id);
+  assert.equal(project.sessions.find(session => session.id === branchSession.id).branch, "main");
+  assert.equal(project.sessions.find(session => session.id === shared.id).branch, "main");
+});
+
+test("push explicitly publishes the active branch without force", async () => {
+  const pushRepo = makeRepo("push-workflow-repo");
+  const remote = path.join(tmp, "push-workflow-remote.git");
+  fs.mkdirSync(remote);
+  git(remote, "init", "--bare");
+  git(pushRepo, "remote", "add", "origin", remote);
+  git(pushRepo, "push", "-u", "origin", "main");
+  const created = await (await post("/api/projects", { repoPath: pushRepo })).json();
+  const branchSession = await (await post(`/api/projects/${created.id}/sessions`, { branch: "feature/push" })).json();
+  const state = await (await get("/api/state")).json();
+  const worktree = state.projects.find(project => project.id === created.id).worktrees["feature/push"];
+  fs.writeFileSync(path.join(worktree, "pushed.txt"), "published\n");
+  git(worktree, "add", "pushed.txt"); git(worktree, "commit", "-m", "publish");
+  const response = await post(`/api/sessions/${branchSession.id}/push`, {});
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(git(remote, "show-ref", "--verify", "refs/heads/feature/push").trim().split(" ")[0], git(worktree, "rev-parse", "HEAD").trim());
+});
+
+test("missing worktrees remain visible as unavailable contexts", async () => {
+  const missingRepo = makeRepo("missing-context-repo");
+  const worktree = path.join(tmp, "missing-context-worktree");
+  git(missingRepo, "worktree", "add", "-b", "feature/missing", worktree);
+  const created = await (await post("/api/projects", { repoPath: missingRepo })).json();
+  const state = await (await get("/api/state")).json();
+  const context = state.projects.find(item => item.id === created.id).contexts.find(item => item.branch === "feature/missing");
+  const session = await (await post(`/api/projects/${created.id}/sessions`, { contextId: context.id })).json();
+  git(missingRepo, "worktree", "remove", "--force", worktree);
+  const missing = await (await get("/api/state")).json();
+  const missingProject = missing.projects.find(item => item.id === created.id);
+  const unavailable = missingProject.contexts.find(item => item.id === context.id);
+  assert.equal(unavailable.kind, "unavailable");
+  assert.equal(unavailable.sessions.some(item => item.id === session.id), true);
+  assert.equal(missingProject.sessions.some(item => item.id === session.id), true);
 });
 
 test("switch changes the session workspace branch without creating a worktree", async () => {

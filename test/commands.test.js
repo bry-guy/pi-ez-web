@@ -4,7 +4,7 @@ import { WEB_PI_COMMANDS, commandInfo, parseSlashCommand } from "../server/comma
 
 const expectedBuiltins = [
   "settings", "model", "scoped-models", "export", "import", "share", "copy", "name", "session",
-  "changelog", "hotkeys", "tree", "trust", "login", "logout", "new", "compact",
+  "changelog", "hotkeys", "tree", "trust", "login", "logout", "new", "fork", "compact",
   "resume", "reload", "quit", "debug",
 ];
 

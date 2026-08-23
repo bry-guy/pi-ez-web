@@ -47,7 +47,7 @@ after(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test("close a worktree session: destructive — worktree AND branch removed, transcript kept", async () => {
+test("close a worktree session: archives only and leaves Git context intact", async () => {
   await post(`/api/sessions/${mainSessionId}/worktree`, { branch: "feat/throwaway" });
   const p1 = await proj();
   const wt = p1.worktrees["feat/throwaway"];
@@ -57,8 +57,8 @@ test("close a worktree session: destructive — worktree AND branch removed, tra
   assert.equal(r.status, 200);
 
   const p2 = await proj();
-  assert.equal(fs.existsSync(wt), false);                        // worktree gone
-  assert.equal(p2.branches.includes("feat/throwaway"), false);   // branch force-deleted
+  assert.equal(fs.existsSync(wt), true);                         // worktree survives
+  assert.equal(p2.branches.includes("feat/throwaway"), true);    // branch survives
   assert.equal(JSON.stringify(p2.sessions).includes(mainSessionId), false); // hidden
   const snap = await (await get(`/api/sessions/${mainSessionId}/transcript`)).json();
   assert.ok(Array.isArray(snap.records));                        // transcript survives

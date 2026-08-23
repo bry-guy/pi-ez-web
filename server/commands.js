@@ -18,6 +18,7 @@ export const WEB_PI_COMMANDS = Object.freeze([
   { name: "login", description: "Configure provider authentication", argumentHint: "<provider>", source: "pi" },
   { name: "logout", description: "Remove provider authentication", source: "pi" },
   { name: "new", description: "Start a new web session", source: "pi" },
+  { name: "fork", description: "Fork this session on the same branch", source: "pi" },
   { name: "compact", description: "Manually compact the session context", argumentHint: "[instructions]", source: "pi" },
   { name: "resume", description: "Open another session", source: "pi" },
   { name: "reload", description: "Reload extensions, skills, prompts, and resources", source: "pi" },

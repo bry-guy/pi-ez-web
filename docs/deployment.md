@@ -24,10 +24,19 @@ Caddy configuration to the production Service, while all other paths go to the
 preview UI Service. The old preview PVC/NFS export remains retained as rollback
 state and is not mounted by the new workload.
 
+For an isolated full-stack branch preview, the preview Service must receive both
+normal requests and `/api/*` (including SSE). The preview workload runs the
+same real server image as its UI, but uses the distinct
+`pi-web-preview-state-parent-nfs` volume and `/data/.../preview` subpath. Production conversations, repositories,
+worktrees, operator credentials, and Kubernetes API access are not mounted into
+that workload. Provider authentication and Pi state belong to the preview
+volume; deleting the replaceable preview slot is the explicit reset boundary.
+The platform repository owns the Caddy route that selects this mode.
+
 - `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, cached remote Pi profile, and chat scratch space.
 - `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
 - `reposRoot` — the checked-out repositories.
-- `worktreeRoot` — Git worktrees created by the app.
+- `worktreeRoot` — the configured root for app-created linked worktrees; existing worktrees are also discovered from Git.
 
 The image includes `git` and CA certificates. GitHub private clones use HTTPS
 and a temporary askpass helper; public GitHub clones use HTTPS without a token.

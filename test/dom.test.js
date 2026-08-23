@@ -5,9 +5,9 @@ import { marked } from "marked";
 import createDOMPurify from "dompurify";
 
 const state = {
-  apiContractVersion: 3,
+  apiContractVersion: 5,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "workspace-contexts", "workspace-branches", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"],
   mode: "mock",
   defaultModel: "mock/fast",
   defaultThinkingLevel: "xhigh",
@@ -17,10 +17,18 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main", "develop"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" }, workspaceStatus: { main: { branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, ahead: 0, behind: 0, sessions: [], externalMain: false, protected: false } }, hooks: { check: true }, updated: "now",
+    branches: ["main", "develop", "feature/alpha", "feature/beta", "feature/gamma", "feature/delta", "feature/epsilon"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" },
+    contexts: [
+      { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, sessions: [
+        { id: "s1", title: "New session", when: "now", streaming: false },
+        { id: "sibling", title: "Sibling session", when: "now", streaming: false },
+      ] },
+      { id: "ctx-feature", branch: "feature/viewer", path: "/tmp/demo-feature", kind: "worktree", dirty: true, status: "dirty", ahead: 0, behind: 0, sessions: [] },
+    ],
+    workspaceStatus: { main: { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, sessions: [], externalMain: false, protected: false } }, hooks: { check: true }, updated: "now",
     sessions: [
-      { id: "s1", title: "New session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
-      { id: "sibling", title: "Sibling session", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
+      { id: "s1", title: "New session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
+      { id: "sibling", title: "Sibling session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] },
     ],
   }],
   chats: [],
@@ -85,6 +93,7 @@ async function boot() {
         { name: "name", description: "Set the session display name", source: "pi" },
       ] });
       if (url === "/api/sessions/s1/command") return json({ ok: true, action: "session_meta" });
+      if (url === "/api/sessions/s1/hooks/check" && options.method === "POST") return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "" });
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
@@ -105,8 +114,9 @@ async function boot() {
         const target = new URL(url, "http://pi-web.test").searchParams.get("target") || "none";
         const targets = ["none", "HEAD", "main"];
         const tree = target === "none" ? [
-          { n: "src", p: "src", c: [{ n: "app.js", p: "src/app.js" }] },
+          { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }] },
           { n: "README.md", p: "README.md" },
+          { n: "new.js", p: "new.js", s: "new" },
         ] : [
           { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }, { n: "untouched.js", p: "src/untouched.js" }] },
           { n: "new.js", p: "new.js", s: "new" },
@@ -144,24 +154,35 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector("pi-settings"));
   store.set({ view: "chat" });
   root.querySelector("pi-header [data-act='workspace-settings']").click();
-  assert.ok(root.querySelector(".workspace-modal"));
-  store.state.transcripts.sibling.streaming = true;
-  store.notify("transcript");
-  assert.equal(store.state.workspaceSettingsOpen, true);
-  assert.match(root.querySelector(".workspace-modal")?.textContent || "", /Sessions using this workspace/);
-  store.set({ workspaceSettingsOpen: false });
+  assert.ok(root.querySelector(".session-picker"));
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, true);
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, true);
+  assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
+  assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
+  assert.equal(root.querySelector("[data-session-name]").value, "New session");
+  assert.match(root.querySelector(".session-picker-actions").textContent, /Session/);
+  assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")));
+  assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));
+  assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
+  assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
+  assert.ok(root.querySelector("[data-act='push-branch']"));
+  root.querySelector("[data-act='run-hook']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector(".operation-title").textContent, /Check/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /npm test/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /check ok/);
+  root.querySelector("[data-act='close-operation']").click();
+  assert.equal(store.state.operation, null);
+  root.querySelector("[data-act='toggle-branch-menu']").click();
+  assert.equal(root.querySelectorAll(".branch-picker-pinned .branch-option").length, 4);
+  assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 4);
+  assert.ok(root.querySelector("[data-act='select-session-branch'][data-branch='__new__']"));
+  root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false);
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, false);
+  root.querySelector("[data-act='close-session-picker']").click();
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
-
-  store.set({ workspaceSettingsOpen: true });
-  root.querySelector("[data-act='open-branch-switch']").click();
-  assert.ok(root.querySelector(".branch-switch-form"));
-  assert.ok(root.querySelector("[data-act='select-branch-switch'][data-branch='develop']"));
-  root.querySelector("[data-act='cancel-branch-switch']").click();
-  root.querySelector("[data-act='open-worktree']").click();
-  assert.ok(root.querySelector(".worktree-form"));
-  assert.ok(root.querySelector("[data-worktree-fork]"));
-  store.set({ workspaceSettingsOpen: false, worktreeFormOpen: false });
 
   store.state.openTree.p1 = false;
   store.notify("state");
@@ -199,6 +220,19 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(projectPlus);
   projectPlus.click();
   await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector(".session-picker"));
+  assert.match(root.querySelector(".branch-picker-trigger").textContent, /main/);
+  root.querySelector("[data-act='toggle-branch-menu']").click();
+  root.querySelector("[data-act='select-session-branch'][data-branch='__new__']").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const newBranchInput = root.querySelector("[data-session-new-branch]");
+  assert.equal(dom.window.document.activeElement, newBranchInput);
+  newBranchInput.value = "feature/from-picker";
+  newBranchInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(dom.window.document.activeElement, newBranchInput);
+  assert.equal(root.querySelector("[data-act='create-session-context']").disabled, false);
+  root.querySelector("[data-act='create-session-context']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
 
@@ -294,8 +328,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector(".file-tree-target"));
   assert.equal(fileTarget.getAttribute("aria-label"), "Diff target");
   assert.equal(fileTarget.value, "none");
-  assert.match(fileTarget.selectedOptions[0].textContent, /No diff/);
+  assert.match(fileTarget.selectedOptions[0].textContent, /Working tree/);
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));
+  assert.ok(root.querySelector("pi-files .file-row.status-new[data-file='new.js']"));
   fileTarget.value = "HEAD";
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -500,10 +535,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   scroller.dispatchEvent(new dom.window.Event("scroll"));
   assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
 
-  store.set({ workspaceSettingsOpen: true });
-  assert.equal(root.querySelector(".workspace-modal [data-act='merge']")?.textContent.trim(), "Merge to main");
-  assert.match(root.querySelector(".workspace-modal")?.textContent || "", /feat\/ship/);
-  assert.equal(root.querySelector(".fork-btn"), null);
+  store.set({ workspaceSettingsOpen: false });
+  root.querySelector("pi-header [data-act='workspace-settings']")?.click();
+  assert.ok(root.querySelector(".session-picker"));
+  assert.ok(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"));
+  root.querySelector("[data-act='close-session-picker']")?.click();
 
   dom.window.close();
 });

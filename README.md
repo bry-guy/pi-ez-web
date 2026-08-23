@@ -1,6 +1,6 @@
 # pi-ez-web
 
-A self-hostable web UI for [Pi](https://github.com/earendil-works/pi) coding-agent sessions: chat with Pi in the browser, attach projects, and work in branch-backed sessions.
+A self-hostable web UI for [Pi](https://github.com/earendil-works/pi) coding-agent sessions: chat with Pi in the browser, attach projects, and choose Git branches for conversations.
 
 ## Example
 
@@ -41,13 +41,13 @@ tables, links, quotes, and code blocks); model-supplied HTML is removed and the
 rendered output is sanitized. The composer discovers Pi extension, prompt-template,
 and skill commands. Pi's built-in slash commands are web-adapted too: model selection, compaction, export/download, copy, session stats, reload, navigation, and provider settings work from the same `/` palette.
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
-OpenAI API-key login, and the default-model selector. The file tree and
-Workspace settings appear only inside a **project** session — connect a repo first
-(the `+` next to PROJECTS). Workspace settings expose explicit Switch branch,
-Worktree, Pull, and Merge to main actions, show every session sharing the
-current workspace, and offer Worktree → Open as fork. Switch branch changes a
-non-main workspace in place; Return to main moves a session to the repository
-checkout. Plain chats intentionally have none of those affordances.
+OpenAI API-key login, and the default-model selector. Project sessions provide a
+small branch workflow: choose a branch and name when starting, then use the
+session title to Switch or Fork into another branch. The same view offers local
+Merge to main, Push, and confirmed local branch deletion. Branch state,
+checkout/worktree kind, clean/dirty state, and sessions sharing a context remain
+visible. `/fork` remains Pi's built-in same-branch conversation fork. Plain chats
+intentionally have none of the project branch controls.
 
 ## Install and configure
 
@@ -63,7 +63,6 @@ Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its au
     { "id": "my-project", "name": "my-project", "repoPath": "/path/to/my-project" }
   ],
   "reposRoot": "~/src",
-  "worktreeRoot": null,
   "defaultModel": null,
   "sync": {
     "serverUrl": null,
@@ -161,22 +160,22 @@ opens the Device Flow directly; approve its displayed code in GitHub while
 leaving the repository dialog open.
 
 The default local repository root is `$HOME/src`. The picker also accepts an
-absolute or `~/...` repository path directly. Omit `worktreeRoot` to use the
-Pi-adjacent default `~/.pi/worktrees`, or set it to an absolute path. Project
-entries do not need a mode setting. Project hooks are inherited from
-`projectHooks` and may be overridden per project with a `hooks` object, for
-example `"hooks": { "setup": "./script/install", "check": "./script/check" }`.
-The setup hook runs after connecting a repository or creating a worktree and can
-be rerun from Workspace settings. Other configured hooks are manual workspace
-actions. `main` belongs to the repository checkout: Worktree and Fork never
-create a linked `main` worktree, while Return to main moves a session back to
-that checkout. Worktree names are explicit, with an automatic name based on the
-session's first message when the name is left blank. Pi-web's config, bindings,
-chats, and UI state remain under `~/.pi-web-ui`; existing worktrees are
-discovered in place and are not moved. Plain chats use private scratch
-workspaces under `~/.pi-web-ui/chats/<scratch-id>` and scratch directories are
-retained for manual cleanup. The model picker is backed by Pi's available model
-runtime.
+absolute or `~/...` repository path directly. Existing Git worktrees are
+discovered in place. The repository's primary branch (detected from
+`origin/HEAD`, the current `main`/`master` branch, or the available local
+branches) uses the repository checkout; app-created non-primary branches use
+worktrees. Creating a branch from the primary branch fetches and fast-forwards
+it when possible; merging locally into it performs the same freshness and
+cleanliness checks. Push is explicit and never forced.
+Project hooks are inherited from `projectHooks` and may be overridden per
+project with a `hooks` object, for example
+`"hooks": { "setup": "./script/install", "check": "./script/check" }`.
+Configured hooks remain explicit commands and may change the selected context.
+Pi-web's config, bindings, chats, and UI state remain under `~/.pi-web-ui`;
+bindings preserve a session's execution context and are not branch state. Plain
+chats use private scratch workspaces under
+`~/.pi-web-ui/chats/<scratch-id>` and scratch directories are retained for
+manual cleanup. The model picker is backed by Pi's available model runtime.
 
 ### iOS / PWA
 

@@ -67,6 +67,7 @@ export function hookResult(result, name) {
     signal: result.signal || null,
     stdout: result.stdout || "",
     stderr: result.stderr || "",
+    command: redacted(result.command || ""),
     ok: result.exit === 0,
   };
 }

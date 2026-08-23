@@ -643,6 +643,7 @@ export class RealSupervisor {
     if (parsed.name === "tree" || parsed.name === "resume") return { action: "sidebar" };
     if (parsed.name === "trust") return { action: "notice", title: "Project trust", message: "Web sessions run with the server's configured headless trust policy." };
     if (parsed.name === "new") return { action: "new" };
+    if (parsed.name === "fork") return { action: "fork" };
     if (parsed.name === "compact") {
       const st = await this._attachById(id);
       try {

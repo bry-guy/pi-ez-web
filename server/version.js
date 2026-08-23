@@ -1,4 +1,4 @@
-export const API_CONTRACT_VERSION = 3;
+export const API_CONTRACT_VERSION = 5;
 export const API_CAPABILITIES = Object.freeze([
   "provider-auth",
   "github-device-auth",
@@ -6,7 +6,8 @@ export const API_CAPABILITIES = Object.freeze([
   "session-activity",
   "slash-commands",
   "project-hooks",
-  "workspace-actions",
+  "workspace-contexts",
+  "workspace-branches",
   "pi-resources",
   "extension-activity",
   "subagent-activity",

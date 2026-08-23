@@ -1,7 +1,7 @@
-import { api, openTranscript } from "./api.js";
+import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
-import { esc, newChat, newProjectSession } from "./shell.js";
+import { esc, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -899,8 +899,15 @@ class PiComposer extends HTMLElement {
       else await newProjectSession(store.state.projectId);
       return;
     }
-    if (action === "clone" || action === "fork") {
-      store.setError("Open Workspace settings and choose Worktree → Open as fork.");
+    if (action === "fork") {
+      try {
+        const result = await api.forkSession(id);
+        await refreshState();
+        if (result.projectId) selectSession(result.projectId, result.id);
+        else selectChat(result.id);
+      } catch (error) {
+        store.setError(error.message || error.error || "Could not fork this session.");
+      }
       return;
     }
     if (action === "quit") {

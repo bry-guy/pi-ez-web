@@ -22,14 +22,37 @@ const icon = name => {
   return `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
 };
 
+export function openSessionPicker(projectId, { mode = "new", sourceSessionId = null, branch = null, name = null } = {}) {
+  const project = store.state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  const source = sourceSessionId || (mode !== "new" ? store.state.sessionId : null);
+  const active = source ? store.findSession(source, project.sessions) : null;
+  const defaultBranch = project.defaultBranch || project.primaryBranch || "main";
+  const currentBranch = active ? (active.branch || defaultBranch) : (project.branch || defaultBranch);
+  store.set({
+    sessionPicker: {
+      projectId,
+      mode: ["switch", "fork"].includes(mode) ? mode : "new",
+      sourceSessionId: source,
+      branch: branch || (mode === "new" ? defaultBranch : currentBranch),
+      baseBranch: defaultBranch,
+      name: name ?? (mode === "new" ? "" : active?.name || active?.title || ""),
+      branchMenuOpen: false,
+      currentBranch,
+    },
+    sessionPickerError: null,
+    drawerOpen: false,
+  });
+}
+
 export function selectSession(projectId, sessionId) {
   const project = store.state.projects.find(p => p.id === projectId);
   const node = findNode(project?.sessions, sessionId);
   store.set({
-    view: "chat", projectId, sessionId, chatId: null, drawerOpen: false,
+    view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
-    workspaceSettingsOpen: false, branchSwitchFormOpen: false, branchSwitchBranch: "", branchSwitchRemote: "", worktreeFormOpen: false, workspaceError: null, model: node?.model || store.state.effectiveDefaultModel || null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
+    workspaceSettingsOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
@@ -38,9 +61,9 @@ export function selectSession(projectId, sessionId) {
 export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
   store.set({
-    view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false,
-    workspaceSettingsOpen: false, branchSwitchFormOpen: false, branchSwitchBranch: "", branchSwitchRemote: "", worktreeFormOpen: false, workspaceError: null, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
+    view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
+    workspaceSettingsOpen: false, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "chat", id: chatId });
@@ -75,19 +98,7 @@ export async function newChat() {
 }
 
 export async function newProjectSession(projectId) {
-  const { id } = await api.newProjectSession(projectId);
-  await refreshState();
-  const project = store.state.projects.find(p => p.id === projectId);
-  if (project && !findNode(project.sessions, id)) {
-    const now = new Date().toISOString();
-    project.sessions.unshift({
-      id, title: "New session", branch: project.branch, workspacePath: project.repoPath,
-      model: store.state.effectiveDefaultModel, when: "now", updatedAt: now, activityAt: now,
-      streaming: false, children: [],
-    });
-  }
-  store.state.openTree[projectId] = true;
-  selectSession(projectId, id);
+  openSessionPicker(projectId, { mode: "new" });
 }
 
 function findNode(nodes, id) {
@@ -296,30 +307,16 @@ class PiHeader extends HTMLElement {
     this.onDocumentKeydown = e => {
       if (e.key === "Escape" && store.state.workspaceSettingsOpen) {
         e.preventDefault();
-        store.set({ workspaceSettingsOpen: false, worktreeFormOpen: false, workspaceError: null });
+        store.set({ workspaceSettingsOpen: false });
       }
     };
     document.addEventListener("keydown", this.onDocumentKeydown);
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
-      if (e.target.matches(".new-branch-input") && e.key === "Enter") { e.preventDefault(); void this.createWorktree(); return; }
-      if ((e.key === "Enter" || e.key === " ") && !e.target.matches("button,input")) {
+      if ((e.key === "Enter" || e.key === " ") && !e.target.matches("button,input,select")) {
         const t = e.target.closest("[data-act]");
         if (t) { e.preventDefault(); t.click(); }
       }
-    });
-    this.addEventListener("input", e => {
-      if (e.target.matches(".branch-switch-input")) {
-        store.state.branchSwitchBranch = e.target.value;
-        store.state.branchSwitchRemote = "";
-        store.notify("state");
-      } else if (e.target.matches(".new-branch-input")) {
-        store.state.worktreeBranch = e.target.value;
-        store.state.worktreeRemote = "";
-      }
-    });
-    this.addEventListener("change", e => {
-      if (e.target.matches("[data-worktree-fork]")) store.set({ worktreeFork: e.target.checked });
     });
     this.render();
   }
@@ -341,45 +338,17 @@ class PiHeader extends HTMLElement {
         ? { drawerOpen: !store.state.drawerOpen }
         : { railOpen: !store.state.railOpen });
     } else if (act === "settings") {
-      store.set({ view: "settings", workspaceSettingsOpen: false, worktreeFormOpen: false });
+      store.set({ view: "settings", workspaceSettingsOpen: false });
     } else if (act === "sync-session") {
       await this.syncSession();
     } else if (act === "workspace-settings") {
-      store.set(s => ({ workspaceSettingsOpen: !s.workspaceSettingsOpen, branchSwitchFormOpen: false, worktreeFormOpen: false, workspaceError: null }));
+      const p = store.project();
+      if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
+      void refreshState().catch(() => {});
     } else if (act === "close-workspace-settings") {
-      store.set({ workspaceSettingsOpen: false, branchSwitchFormOpen: false, worktreeFormOpen: false, workspaceError: null });
+      store.set({ workspaceSettingsOpen: false });
     } else if (act === "files") {
       this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
-    } else if (act === "open-branch-switch") {
-      store.set({ branchSwitchFormOpen: true, branchSwitchBranch: this.sessionBranch() || "", branchSwitchRemote: "", worktreeFormOpen: false, workspaceError: null });
-    } else if (act === "cancel-branch-switch") {
-      store.set({ branchSwitchFormOpen: false, workspaceError: null, branchSwitchBranch: "", branchSwitchRemote: "" });
-    } else if (act === "select-branch-switch") {
-      store.set({ branchSwitchBranch: t.dataset.branch || "", branchSwitchRemote: t.dataset.remote || "", workspaceError: null });
-    } else if (act === "switch-branch") {
-      await this.switchBranch();
-    } else if (act === "open-worktree") {
-      store.set({ branchSwitchFormOpen: false, worktreeFormOpen: true, workspaceError: null, worktreeFork: false });
-    } else if (act === "cancel-worktree") {
-      store.set({ worktreeFormOpen: false, workspaceError: null, worktreeBranch: "", worktreeRemote: "", worktreeFork: false });
-    } else if (act === "select-worktree") {
-      store.set({ worktreeBranch: t.dataset.branch || "", worktreeRemote: t.dataset.remote || "", workspaceError: null });
-    } else if (act === "create-worktree") {
-      await this.createWorktree();
-    } else if (act === "pull") {
-      await this.pull();
-    } else if (act === "merge") {
-      const node = store.findSession(store.state.sessionId);
-      const sessions = store.sessionsUsingWorkspace(node?.workspacePath);
-      store.set({ workspaceSettingsOpen: false, confirm: { type: "merge", id: store.state.sessionId, branch: this.sessionBranch(), sessions, error: null } });
-    } else if (act === "workspace-session") {
-      const p = store.project();
-      if (p && t.dataset.id) selectSession(p.id, t.dataset.id);
-      store.set({ workspaceSettingsOpen: false });
-    } else if (act === "hook") {
-      await this.runHook(t.dataset.hook);
-    } else if (act === "close-hook-result") {
-      store.set({ hookResult: null });
     }
   }
 
@@ -413,112 +382,27 @@ class PiHeader extends HTMLElement {
     }
   }
 
-  async runHook(name) {
-    const id = store.state.sessionId;
-    if (!id || !name) return;
-    try {
-      const result = await api.hook(id, name);
-      store.set({ hookResult: result });
-      await refreshState();
-    } catch (err) {
-      store.set({ hookResult: { hook: name, ok: false, exit: err.status || 1, stdout: err.stdout || "", stderr: err.stderr || err.message || err.error || "Hook failed." } });
-    }
-  }
-
-  async switchBranch() {
-    const id = store.state.sessionId;
-    const branch = store.state.branchSwitchBranch.trim();
-    if (!id || !branch || this.switchBusy) return;
-    this.switchBusy = true;
-    store.set({ workspaceError: null });
-    try {
-      await api.switchBranch(id, branch, store.state.branchSwitchRemote || undefined);
-      await refreshState();
-      store.set({ branchSwitchFormOpen: false, branchSwitchBranch: "", branchSwitchRemote: "", workspaceError: null, files: [], filePath: null, fileView: null, filesLoadedKey: null });
-    } catch (err) {
-      const messages = {
-        bad_branch: "Choose a branch.",
-        no_such_branch: "That branch is not available locally.",
-        branch_in_use: "That branch is already checked out in another worktree.",
-        branch_exists: "That branch already exists locally.",
-        invalid_remote_branch: "That remote branch is no longer available.",
-        workspace_dirty: "Clean the workspace before switching branches.",
-        sessions_active: "Stop the active sessions using this workspace first.",
-        main_worktree_forbidden: "main belongs at the repository checkout; use Return to main.",
-        main_worktree_external: `main is checked out by another worktree${err.workspacePath ? ` at ${err.workspacePath}` : ""}. Remove it outside the app first.`,
-        return_rehome_failed: "main is ready, but this session could not move to the checkout.",
-        git_switch_failed: err.detail || "Git could not switch branches.",
-        sync_workspace_in_use: "A synchronized conversation is using this workspace.",
-        sync_shared_workspace: "This workspace is shared by another synchronized conversation.",
-        sync_workspace_setup_required: err.message || "Prepare the synchronized Git workspace first.",
-      };
-      store.set({ workspaceError: messages[err.error] || err.error || err.message || "Could not switch branches." });
-    } finally {
-      this.switchBusy = false;
-      this.render();
-    }
-  }
-
-  async createWorktree() {
-    const id = store.state.sessionId;
-    if (!id || this.worktreeBusy) return;
-    this.worktreeBusy = true;
-    store.set({ workspaceError: null });
-    try {
-      const result = await api.worktree(id, {
-        branch: store.state.worktreeBranch.trim(),
-        fromRef: store.state.worktreeRemote || undefined,
-        fork: !!store.state.worktreeFork,
-      });
-      await refreshState();
-      store.set({ workspaceSettingsOpen: !!(result.setup && !result.setup.ok), worktreeFormOpen: false, worktreeBranch: "", worktreeRemote: "", worktreeFork: false, workspaceError: null, hookResult: result.setup || null });
-      if (result.id && result.id !== id) {
-        store.state.openTree[id] = true;
-        selectSession(store.state.projectId, result.id);
-        store.set({ hookResult: result.setup || null, workspaceSettingsOpen: !!(result.setup && !result.setup.ok) });
-      }
-    } catch (err) {
-      const messages = {
-        checkout_dirty: "The project checkout has uncommitted changes; clean it before opening a fork.",
-        branch_exists: "That branch already exists.",
-        invalid_remote_branch: "That remote branch is no longer available.",
-        main_worktree_forbidden: "main belongs at the repository checkout; use Return to main.",
-        fork_requires_transcript: "Start a conversation before opening it as a fork.",
-        session_streaming: "Stop the current response before moving this session.",
-        active_lease: "This conversation is in use by another client.",
-        sync_conflict: "The canonical conversation changed elsewhere.",
-        sync_workspace_setup_required: err.message || "Prepare the synchronized Git workspace first.",
-      };
-      store.set({ workspaceError: messages[err.error] || err.error || err.message || "Could not create worktree." });
-    } finally {
-      this.worktreeBusy = false;
-      this.render();
-    }
-  }
-
-  async pull() {
-    const id = store.state.sessionId;
-    if (!id) return;
-    try {
-      const result = await api.pull(id);
-      store.set({ hookResult: { hook: "git pull", ok: true, exit: 0, stdout: result.stdout || "Already up to date.", stderr: result.stderr || "" } });
-      await refreshState();
-    } catch (err) {
-      store.set({ hookResult: { hook: "git pull", ok: false, exit: err.status || 1, stdout: "", stderr: err.detail || err.message || err.error || "Git pull failed." } });
-    }
+  sessionContext() {
+    const p = store.project();
+    const node = store.findSession(store.state.sessionId);
+    if (!p) return null;
+    return p.contexts?.find(context => context.id === node?.contextId)
+      || p.contexts?.find(context => context.path === node?.workspacePath)
+      || p.contexts?.find(context => context.kind === "checkout")
+      || p.contexts?.[0]
+      || null;
   }
 
   sessionBranch() {
-    const p = store.project();
-    if (!p) return null;
-    const n = store.findSession(store.state.sessionId);
-    return n?.branch || p.branch;
+    return this.sessionContext()?.branch || null;
+  }
+
+  contextLabel(context) {
+    if (context?.kind === "unavailable") return "Unavailable context";
+    return context?.branch || `detached @ ${(context?.head || "unknown").slice(0, 8)}`;
   }
 
   render() {
-    const active = document.activeElement;
-    const preserveBranchInput = active?.matches?.(".new-branch-input");
-    const branchSelection = preserveBranchInput ? [active.selectionStart, active.selectionEnd] : null;
     const s = store.state;
     const p = store.project();
     const inProject = store.inProject() && p;
@@ -533,15 +417,13 @@ class PiHeader extends HTMLElement {
       : activeSession?.synchronized && activeSession.syncState !== "error"
         ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
         : s.sync?.configured && s.sync.connection === "available" && activeSession && !activeStreaming
-        ? `<button class="settings-action sync-header-action" data-act="sync-session" ${this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "Synchronizing…" : "Synchronize this conversation"}</button>`
-        : "";
-    const branch = inProject ? this.sessionBranch() : null;
-    const workspace = branch && p ? (p.workspaceStatus?.[branch] || {
-      kind: branch === p.branch ? "checkout" : "worktree", path: node?.workspacePath || p.repoPath, dirty: false, ahead: 0, behind: 0, sessions: [], externalMain: false, protected: false,
-    }) : null;
-    const workspaceArea = inProject && branch ? `
+          ? `<button class="settings-action sync-header-action" data-act="sync-session" ${this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "Synchronizing…" : "Synchronize this conversation"}</button>`
+          : "";
+    const workspace = inProject ? this.sessionContext() : null;
+    const branch = workspace ? this.contextLabel(workspace) : null;
+    const workspaceArea = inProject && workspace ? `
       <div class="bar-sub">
-        <button class="workspace-trigger" data-act="workspace-settings" title="Open workspace settings" aria-label="Open workspace settings for ${esc(p.name)} ${esc(branch)}">
+        <button class="workspace-trigger" data-act="workspace-settings" title="Show Git context" aria-label="Show Git context for ${esc(p.name)} ${esc(branch)}">
           <span class="workspace-repo">${esc(p.name)}</span><span class="workspace-divider">·</span>
           <span class="workspace-branch">${esc(branch)}</span>${this.workspaceLabels(workspace)}
         </button>
@@ -549,7 +431,6 @@ class PiHeader extends HTMLElement {
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
-    const modal = inProject && s.workspaceSettingsOpen ? this.workspaceSettings(p, node, branch, workspace) : "";
     const sidebarOpen = mobile() ? s.drawerOpen : s.railOpen;
     const sidebarControl = mobile()
       ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
@@ -557,72 +438,24 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}</div>
-      ${syncControl}${filesBtn}${modal}
+      ${syncControl}${filesBtn}
     </header>`;
-    if (preserveBranchInput) {
-      const input = this.querySelector(".new-branch-input");
-      if (input) {
-        input.focus();
-        if (branchSelection) input.setSelectionRange(...branchSelection);
-      }
-    }
   }
 
   statusBits(status) {
-    return [status.dirty ? "dirty" : "clean", status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""].filter(Boolean).join(" · ");
+    const cleanliness = status.status === "unavailable" ? "unavailable" : status.status === "unknown" || status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean";
+    return [cleanliness, status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""].filter(Boolean).join(" · ");
   }
 
   workspaceLabels(status) {
-    const kind = status.kind === "checkout" ? "CHECKOUT" : "WORKTREE";
-    return [kind, status.dirty ? "dirty" : "clean", status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""]
+    const kind = status.kind === "checkout" ? "CHECKOUT" : status.kind === "unavailable" ? "UNAVAILABLE" : "WORKTREE";
+    const cleanliness = status.status === "unavailable" ? "unavailable" : status.status === "unknown" || status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean";
+    return [kind, cleanliness, status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""]
       .filter(Boolean)
       .map((label, index) => `<span class="workspace-badge ${index === 0 ? "kind" : "state"}">${esc(label)}</span>`)
       .join("");
   }
 
-  workspaceSettings(p, node, branch, workspace) {
-    const s = store.state;
-    const sessions = store.sessionsUsingWorkspace(node?.workspacePath || workspace.path);
-    const hasTranscript = (store.transcript(s.sessionId).records || []).length > 0;
-    const sessionRows = sessions.length
-      ? sessions.map(session => `<button class="workspace-session ${session.streaming ? "streaming" : ""}" data-act="workspace-session" data-id="${esc(session.id)}"><span class="workspace-session-dot"></span><span class="workspace-session-main"><strong>${esc(session.title)}</strong><small>${session.streaming ? "working" : "idle"}</small></span><span class="workspace-session-when">${esc(session.when || "")}</span></button>`).join("")
-      : `<div class="workspace-empty">No sessions are using this workspace.</div>`;
-    const branches = (p.branches || []).filter(value => value !== "main").map(value => `<button class="workspace-branch-option" data-act="select-worktree" data-branch="${esc(value)}">${esc(value)}${p.worktrees?.[value] ? "" : " · no worktree yet"}</button>`).join("");
-    const remotes = (p.remoteBranches || []).filter(value => {
-      const local = value.includes("/") ? value.slice(value.indexOf("/") + 1) : value;
-      return local !== "main";
-    }).map(value => {
-      const local = value.includes("/") ? value.slice(value.indexOf("/") + 1) : value;
-      return `<button class="workspace-branch-option remote" data-act="select-worktree" data-branch="${esc(local)}" data-remote="${esc(value)}">${esc(value)}</button>`;
-    }).join("");
-    const externalMain = !!p.workspaceStatus?.main?.externalMain;
-    const switchBranches = (p.branches || []).map(value => {
-      const current = value === branch;
-      const main = value === "main";
-      const inOtherWorkspace = main ? externalMain : !!p.worktrees?.[value] && p.worktrees[value] !== workspace.path;
-      const label = main && externalMain ? "protected" : current ? "current" : main && workspace.kind === "worktree" ? "return" : inOtherWorkspace ? "worktree" : "switch";
-      return `<button class="workspace-branch-option ${current ? "current" : ""}" data-act="select-branch-switch" data-branch="${esc(value)}" ${current || inOtherWorkspace ? "disabled" : ""}>${esc(value)}<small>${label}</small></button>`;
-    }).join("");
-    const switchRemotes = (p.remoteBranches || []).filter(value => {
-      const local = value.includes("/") ? value.slice(value.indexOf("/") + 1) : value;
-      return local !== "main" && !(p.branches || []).includes(local);
-    }).map(value => {
-      const local = value.includes("/") ? value.slice(value.indexOf("/") + 1) : value;
-      return `<button class="workspace-branch-option remote" data-act="select-branch-switch" data-branch="${esc(local)}" data-remote="${esc(value)}">${esc(value)}<small>remote</small></button>`;
-    }).join("");
-    const hookResult = s.hookResult ? `<div class="hook-result ${s.hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(s.hookResult.hook || "hook")}</strong><span>exit ${esc(s.hookResult.exit)}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${s.hookResult.stdout ? `<pre>${esc(s.hookResult.stdout)}</pre>` : ""}${s.hookResult.stderr ? `<pre class="hook-stderr">${esc(s.hookResult.stderr)}</pre>` : ""}</div>` : "";
-    const returningToMain = workspace.kind === "worktree" && s.branchSwitchBranch === "main";
-    const switchDescription = returningToMain
-      ? "Move this session to the repository checkout on main. The current worktree and its other sessions stay here."
-      : "Switches this workspace in place; all sessions using it move together. This does not create a worktree.";
-    const switchCta = returningToMain ? "Return to main" : "Switch branch";
-    const mainWarning = externalMain ? `<div class="workspace-error">main is checked out by another worktree at <span class="settings-mono">${esc(p.worktrees.main)}</span>. Return to main and Merge are unavailable until that worktree is removed outside the app.</div>` : "";
-    const switchForm = s.branchSwitchFormOpen ? `<div class="worktree-form branch-switch-form"><label class="workspace-label" for="branch-switch-input">${returningToMain ? "Return this session to" : "Switch this workspace to"}</label><div class="workspace-help">${switchDescription}</div><input id="branch-switch-input" class="new-branch-input branch-switch-input" placeholder="branch name" aria-label="Branch to switch to" value="${esc(s.branchSwitchBranch)}">${switchBranches || switchRemotes ? `<div class="workspace-branch-options"><span>Available branches</span>${switchBranches}${switchRemotes}</div>` : ""}${s.workspaceError ? `<div class="workspace-error">${esc(s.workspaceError)}</div>` : ""}<div class="workspace-actions"><button class="settings-action quiet" data-act="cancel-branch-switch">Cancel</button><button class="settings-save" data-act="switch-branch" ${this.switchBusy || s.branchSwitchBranch === branch || (s.branchSwitchBranch === "main" && externalMain) ? "disabled" : ""}>${this.switchBusy ? "Switching…" : switchCta}</button></div></div>` : "";
-    const form = s.worktreeFormOpen ? `<div class="worktree-form"><label class="workspace-label" for="worktree-branch">Branch name</label><input id="worktree-branch" class="new-branch-input" placeholder="leave blank for an automatic name" aria-label="Worktree branch name" value="${esc(s.worktreeBranch)}">${branches || remotes ? `<div class="workspace-branch-options"><span>Existing branches</span>${branches}${remotes}</div>` : ""}<label class="workspace-check"><input type="checkbox" data-worktree-fork ${hasTranscript ? "" : "disabled"} ${s.worktreeFork && hasTranscript ? "checked" : ""}><span>Open as fork</span><small>${hasTranscript ? "Create a child session and leave this session here." : "Start a conversation before opening it as a fork."}</small></label>${s.workspaceError ? `<div class="workspace-error">${esc(s.workspaceError)}</div>` : ""}<div class="workspace-actions"><button class="settings-action quiet" data-act="cancel-worktree">Cancel</button><button class="settings-save" data-act="create-worktree" ${this.worktreeBusy ? "disabled" : ""}>${this.worktreeBusy ? "Creating…" : "Create worktree"}</button></div></div>` : "";
-    const setup = !!p.hooks?.setup;
-    const manualHooks = Object.entries(p.hooks || {}).filter(([name, enabled]) => enabled && name !== "setup").map(([name]) => `<button class="settings-action" data-act="hook" data-hook="${esc(name)}">Run ${esc(name)}</button>`).join("");
-    return `<div class="workspace-scrim" data-act="close-workspace-settings"><section class="workspace-modal" role="dialog" aria-label="Workspace settings"><div class="workspace-modal-head"><div><div class="modal-title">Workspace settings</div><div class="workspace-subtitle">${esc(p.name)} · ${esc(workspace.kind === "checkout" ? "CHECKOUT" : "WORKTREE")} · <span class="settings-mono">${esc(workspace.path || "")}</span></div></div><button class="ghost-btn" data-act="close-workspace-settings" aria-label="Close workspace settings">×</button></div><div class="workspace-scroll"><section class="workspace-section"><div class="workspace-section-title">Git workspace</div><div class="workspace-summary"><strong>${esc(branch)}</strong><span>${esc(this.statusBits(workspace))}</span></div>${mainWarning}<div class="workspace-sessions-title">Sessions using this workspace</div><div class="workspace-sessions">${sessionRows}</div><div class="workspace-actions"><button class="settings-action" data-act="open-branch-switch">${workspace.kind === "worktree" && branch !== "main" ? "Switch / return" : "Switch branch"}</button><button class="settings-action" data-act="open-worktree">Worktree</button><button class="settings-action" data-act="pull">Pull</button>${workspace.kind === "worktree" && branch !== "main" && !workspace.externalMain ? `<button class="settings-save" data-act="merge">Merge to main</button>` : ""}</div>${switchForm}${form}</section><section class="workspace-section"><div class="workspace-section-title">Workspace setup</div><div class="workspace-help">${setup ? "A setup hook is configured for this project. It runs after connecting a repository or creating a worktree." : "No setup hook is configured. New worktrees use the repository as-is."}</div><div class="workspace-actions">${setup ? `<button class="settings-action" data-act="hook" data-hook="setup">Run setup</button>` : ""}${manualHooks}</div>${hookResult}</section></div></section></div>`;
-  }
 }
 
 customElements.define("pi-sidebar", PiSidebar);

@@ -1,8 +1,7 @@
-// Git workspace operations. Invariants:
-// - Workspace = worktree, one per branch (git enforces one checkout per branch).
-// - Git mutations are explicit: Switch changes the current workspace branch;
-//   Worktree and Fork add worktrees under worktreeRoot.
-// - Fork carries dirty state via stash transfer (stashes share the object store).
+// Git context discovery plus the small set of explicit branch operations exposed
+// by the web UI. Session state is still path-based; Git is never inferred from a
+// stale session branch binding.
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,14 +18,122 @@ export function isGitRepo(dir) {
 }
 
 export function currentBranch(dir) {
-  try { return git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim(); } catch { return null; }
+  try { return git(dir, "symbolic-ref", "--quiet", "--short", "HEAD").trim() || null; } catch { return null; }
+}
+
+export function currentHead(dir) {
+  try { return git(dir, "rev-parse", "HEAD").trim() || null; } catch { return null; }
+}
+
+function gitFailure(code, error, fallback = code) {
+  return Object.assign(new Error(code), {
+    code,
+    detail: String(error?.stderr || error?.stdout || error?.message || fallback).trim().slice(0, 1200),
+  });
+}
+
+export function validateBranchName(value) {
+  const branch = String(value || "").trim();
+  if (!branch || branch.startsWith("-") || branch.includes("..") || branch.endsWith("/")) {
+    throw Object.assign(new Error("bad_branch"), { code: "bad_branch" });
+  }
+  try { execFileSync("git", ["check-ref-format", "--branch", branch], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  catch (error) { throw gitFailure("bad_branch", error, "Invalid branch name"); }
+  return branch;
+}
+
+export function defaultBranch(repoPath) {
+  const localBranches = listBranches(repoPath);
+  const current = currentBranch(repoPath);
+  let remoteHead = null;
+  try {
+    const symbolic = git(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").trim();
+    remoteHead = symbolic.replace(/^origin\//, "") || null;
+  } catch { /* origin/HEAD is optional */ }
+  const candidates = [remoteHead, current === "main" || current === "master" ? current : null, "main", "master", current];
+  return candidates.find(branch => branch && localBranches.includes(branch)) || current || MAIN_BRANCH;
+}
+
+export function branchUpstream(repoPath, branch = null) {
+  branch ||= defaultBranch(repoPath);
+  try {
+    return git(repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branch}@{upstream}`).trim() || null;
+  } catch { return null; }
+}
+
+export function mainExternalWorktree(repoPath, primaryBranch = defaultBranch(repoPath)) {
+  return listContexts(repoPath).find(context => context.branch === primaryBranch && context.kind === "worktree") || null;
+}
+
+// Put the primary checkout on the repository's default branch and, when it has
+// an upstream, fast-forward it after fetching. Callers use this at
+// branch-creation and merge boundaries, never as an implicit session-open side
+// effect.
+export function prepareMain(repoPath, { fetch = true, primaryBranch = null } = {}) {
+  primaryBranch ||= defaultBranch(repoPath);
+  const external = mainExternalWorktree(repoPath, primaryBranch);
+  if (external) throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external", workspacePath: external.path });
+  const branch = currentBranch(repoPath);
+  const mainStatus = dirtyState(repoPath);
+  if (mainStatus.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: mainStatus.error });
+  if (mainStatus.dirty) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
+  if (branch !== primaryBranch) {
+    try { execFileSync("git", ["switch", primaryBranch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (error) { throw gitFailure("git_switch_failed", error); }
+  }
+  const upstream = branchUpstream(repoPath, primaryBranch);
+  if (!upstream || !fetch) return { branch: primaryBranch, upstream, fetched: false, fastForwarded: false };
+  const remote = upstream.split("/")[0];
+  try {
+    execFileSync("git", ["fetch", "--prune", remote], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) { throw gitFailure("main_fetch_failed", error); }
+  try {
+    const before = currentHead(repoPath);
+    execFileSync("git", ["merge", "--ff-only", upstream], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
+  } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
+}
+
+export function pushWorkspace(workspacePath) {
+  const branch = currentBranch(workspacePath);
+  if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
+  try {
+    const upstream = branchUpstream(workspacePath, branch);
+    const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
+    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: execFileSync("git", args, { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+  } catch (error) { throw gitFailure("git_push_failed", error); }
+}
+
+export function mergeBranch(repoPath, branch) {
+  validateBranchName(branch);
+  try {
+    return execFileSync("git", ["merge", "--no-ff", "--no-edit", branch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    try { execFileSync("git", ["merge", "--abort"], { cwd: repoPath, stdio: ["ignore", "pipe", "pipe"] }); } catch { /* no merge to abort */ }
+    throw gitFailure("merge_conflict", error);
+  }
+}
+
+export function deleteLocalBranch(repoPath, branch, primaryBranch = defaultBranch(repoPath)) {
+  validateBranchName(branch);
+  if (branch === primaryBranch) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
+  try { return execFileSync("git", ["branch", "-D", branch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  catch (error) { throw gitFailure("branch_delete_failed", error); }
 }
 
 export function isDirty(dir) {
   try { return git(dir, "status", "--porcelain").trim().length > 0; } catch { return false; }
 }
 
-export function workspaceStatus({ repoPath, branch, workspacePath }) {
+function dirtyState(dir) {
+  try {
+    return { dirty: git(dir, "status", "--porcelain").trim().length > 0, error: null };
+  } catch (error) {
+    return { dirty: null, error: String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400) };
+  }
+}
+
+export function workspaceStatus({ repoPath, branch, workspacePath, primaryBranch = defaultBranch(repoPath) }) {
   let upstream = null;
   let ahead = 0;
   let behind = 0;
@@ -39,12 +146,14 @@ export function workspaceStatus({ repoPath, branch, workspacePath }) {
     }
   } catch { /* a branch without an upstream has no ahead/behind counts */ }
   const kind = path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree";
-  const externalMain = branch === MAIN_BRANCH && kind === "worktree";
+  branch ||= currentBranch(workspacePath);
+  const externalMain = branch === primaryBranch && kind === "worktree";
+  const state = dirtyState(workspacePath);
   return {
-    branch,
+    branch: branch || null,
     path: workspacePath,
     kind,
-    dirty: isDirty(workspacePath),
+    dirty: state.dirty,
     upstream,
     ahead,
     behind,
@@ -53,6 +162,72 @@ export function workspaceStatus({ repoPath, branch, workspacePath }) {
   };
 }
 
+export function contextId(repoPath, workspacePath) {
+  const key = `${path.resolve(repoPath)}\0${path.resolve(workspacePath)}`;
+  return `ctx_${createHash("sha256").update(key).digest("hex").slice(0, 20)}`;
+}
+
+export function listWorktreeRecords(repoPath) {
+  const out = git(repoPath, "worktree", "list", "--porcelain");
+  const records = [];
+  let record = null;
+  const finish = () => {
+    if (!record) return;
+    record.path = logicalWorktreePath(repoPath, record.path);
+    records.push(record);
+    record = null;
+  };
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      finish();
+      record = { path: line.slice(9).trim(), head: null, branch: null, detached: false };
+    } else if (!record) {
+      continue;
+    } else if (line.startsWith("HEAD ")) {
+      record.head = line.slice(5).trim() || null;
+    } else if (line.startsWith("branch ")) {
+      record.branch = line.slice(7).trim().replace(/^refs\/heads\//, "") || null;
+    } else if (line === "detached") {
+      record.detached = true;
+    }
+  }
+  finish();
+  return records;
+}
+
+export function contextStatus({ repoPath, workspacePath, record = null, primaryBranch = defaultBranch(repoPath) }) {
+  const status = workspaceStatus({
+    repoPath,
+    workspacePath,
+    branch: currentBranch(workspacePath) || record?.branch || null,
+    primaryBranch,
+  });
+  return {
+    ...status,
+    id: contextId(repoPath, workspacePath),
+    head: currentHead(workspacePath) || record?.head || null,
+    detached: !status.branch,
+    primaryBranch,
+    status: status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean",
+    statusError: dirtyState(workspacePath).error,
+  };
+}
+
+export function listContexts(repoPath) {
+  return listWorktreeRecords(repoPath).map(record => contextStatus({
+    repoPath,
+    workspacePath: record.path,
+    record,
+  }));
+}
+
+export function resolveContext(repoPath, id) {
+  const context = listContexts(repoPath).find(item => item.id === String(id || ""));
+  if (!context) throw Object.assign(new Error("no_such_context"), { code: "no_such_context" });
+  return context;
+}
+
+// Legacy API helpers retained for migration; current UI never calls them.
 export function pullWorkspace(workspacePath) {
   try {
     return {
@@ -67,8 +242,8 @@ export function pullWorkspace(workspacePath) {
   }
 }
 
-export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = null }) {
-  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = null, primaryBranch = defaultBranch(repoPath) }) {
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
     throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
   }
   const args = ["switch"];
@@ -143,17 +318,12 @@ function logicalWorktreePath(repoPath, discoveredPath) {
   return discoveredPath;
 }
 
-// Live discovery, pi-web style: { branch -> worktreePath } incl. the checkout itself.
+// Legacy branch -> path discovery. New UI code should use listContexts(),
+// because detached worktrees and branch changes need a stable path identity.
 export function listWorktrees(repoPath) {
-  const out = git(repoPath, "worktree", "list", "--porcelain");
   const map = {};
-  let wt = null;
-  for (const line of out.split("\n")) {
-    if (line.startsWith("worktree ")) wt = line.slice(9).trim();
-    else if (line.startsWith("branch ") && wt) {
-      map[line.slice(7).trim().replace(/^refs\/heads\//, "")] = logicalWorktreePath(repoPath, wt);
-      wt = null;
-    } else if (line === "detached") wt = null;
+  for (const context of listContexts(repoPath)) {
+    if (context.branch) map[context.branch] = context.path;
   }
   return map;
 }
@@ -163,15 +333,20 @@ export function prune(repoPath) {
 }
 
 function worktreePathFor(root, projectId, branch) {
-  return path.join(root, projectId, slug(branch).replace(/\//g, "__"));
+  const base = path.join(root, projectId, slug(branch).replace(/\//g, "__"));
+  if (!fs.existsSync(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
 }
 
-// Ensure a workspace (worktree) exists for `branch`; create branch from
-// `fromRef` (default: repo HEAD) if it doesn't exist. Returns its path.
-// Never touches the user's checkout: if the branch is checked out there,
-// that IS the workspace.
-export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef }) {
-  if (branch === MAIN_BRANCH) {
+// Ensure a workspace (worktree) exists for `branch`; create a new branch from
+// `fromRef` when it does not exist. The main branch remains checkout-only.
+// Existing branch-only checkouts are observed and reused rather than moved.
+export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef, primaryBranch = defaultBranch(repoPath) }) {
+  branch = validateBranchName(branch);
+  if (branch === primaryBranch) {
     throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
   }
   const existing = listWorktrees(repoPath);
@@ -187,9 +362,9 @@ export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fro
   return wt;
 }
 
-export function removeWorkspace({ repoPath, workspacePath, force = false }) {
+export function removeWorkspace({ repoPath, workspacePath, force = false, primaryBranch = defaultBranch(repoPath) }) {
   const branch = currentBranch(workspacePath);
-  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
     throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external" });
   }
   if (!force && isDirty(workspacePath)) {
@@ -202,14 +377,16 @@ export function removeWorkspace({ repoPath, workspacePath, force = false }) {
   git(repoPath, ...args, workspacePath.replace(/\/$/, ""));
 }
 
+// Legacy Git-mutating fork helper. Conversation forks now select an existing
+// context and never transfer working-tree state.
 // Fork: new branch + worktree from the parent workspace's HEAD. Dirty state
 // may be transferred from an app-owned worktree, but the user's checkout is
 // sacred and is rejected before any stash mutation.
-export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch }) {
+export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch, primaryBranch = defaultBranch(repoPath) }) {
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
   let n = 1, branch = String(requestedBranch || "").trim();
   if (branch) {
-    if (branch === MAIN_BRANCH) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+    if (branch === primaryBranch) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
     if (existingBranches.includes(branch)) throw Object.assign(new Error("branch_exists"), { code: "branch_exists" });
   } else if (forkBranchBase) {
     do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));
