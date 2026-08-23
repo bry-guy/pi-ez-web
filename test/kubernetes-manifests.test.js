@@ -38,6 +38,14 @@ test('preview initializes Bryan’s Pi profile with a package fallback', () => {
   assert.doesNotMatch(deployment, /name: OP_SERVICE_ACCOUNT_TOKEN|name: operator-secrets/);
 });
 
+test('generic worktree setup does not assume an npm bootstrap task', () => {
+  for (const relativePath of ['deploy/k8s/deployment.yaml', 'deploy/k8s-preview/deployment.yaml']) {
+    const deployment = manifest(relativePath);
+    assert.match(deployment, /setup: 'mise trust --yes && mise install',/);
+    assert.match(deployment, /project\.hooks \|\|= \{ setup: 'mise trust --yes && mise install && mise run bootstrap' \};/);
+  }
+});
+
 test('production pod labels do not change its immutable Deployment selector', () => {
   const deployment = manifest('deploy/k8s/deployment.yaml');
 

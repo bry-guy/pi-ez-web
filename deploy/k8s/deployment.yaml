@@ -49,11 +49,13 @@ spec:
               } catch {}
               value.reposRoot ||= '/data/pi-ez-workspaces';
               value.worktreeRoot ||= '/data/pi-ez-worktrees';
+              const legacySetup = 'mise trust --yes && mise install && mise run bootstrap';
               value.projectHooks = {
-                setup: 'mise trust --yes && mise install && mise run bootstrap',
+                setup: 'mise trust --yes && mise install',
                 check: 'mise run check',
                 ...(value.projectHooks || {}),
               };
+              if (value.projectHooks.setup === legacySetup) value.projectHooks.setup = 'mise trust --yes && mise install';
               const projectHookSets = { ...(value.projectHookSets || {}) };
               projectHookSets.infra = {
                 setup: 'mise trust --yes && mise run selfhost:tooling:init',

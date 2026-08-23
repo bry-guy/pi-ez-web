@@ -72,11 +72,13 @@ spec:
               const ponytailDir = '/data/pi-ez-operator-home/.config/ponytail';
               fs.mkdirSync(ponytailDir, { recursive: true });
               fs.writeFileSync(`${ponytailDir}/config.json`, JSON.stringify({ defaultMode: 'lite' }, null, 2) + '\n');
+              const legacySetup = 'mise trust --yes && mise install && mise run bootstrap';
               value.projectHooks = {
-                setup: 'mise trust --yes && mise install && mise run bootstrap',
+                setup: 'mise trust --yes && mise install',
                 check: 'mise run check',
                 ...(value.projectHooks || {}),
               };
+              if (value.projectHooks.setup === legacySetup) value.projectHooks.setup = 'mise trust --yes && mise install';
               const projectHookSets = { ...(value.projectHookSets || {}) };
               projectHookSets.infra = {
                 setup: 'mise trust --yes && mise run selfhost:tooling:init',
