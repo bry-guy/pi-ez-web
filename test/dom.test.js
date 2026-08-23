@@ -32,6 +32,7 @@ const state = {
     ],
   }],
   chats: [],
+  sync: { version: 1, configured: true, enabled: true, connection: "available", implementation: "fake", error: null },
   providers: [
     { id: "anthropic", name: "Anthropic", configured: true, sourceLabel: "OAuth", availableModels: 2, authMethods: [{ id: "oauth", label: "Anthropic OAuth" }], canLogout: true },
     { id: "openai", name: "OpenAI", configured: false, availableModels: 0, authMethods: [{ id: "api_key", label: "OpenAI API key" }], canLogout: false },
@@ -87,6 +88,11 @@ async function boot() {
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
+      if (url === "/api/sessions/s1/sync" && options.method === "POST") {
+        state.projects[0].sessions[0].synchronized = true;
+        state.projects[0].sessions[0].syncState = "available";
+        return json({ ok: true, sessionId: "s1", created: true, synchronized: true, syncState: "available" });
+      }
       if (url === "/api/sessions/s1/commands") return json({ commands: [
         { name: "settings", description: "Open settings", source: "pi" },
         { name: "model", description: "Select a model", source: "pi" },
@@ -163,6 +169,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".session-picker-actions").textContent, /Session/);
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")));
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));
+  assert.equal(root.querySelector("pi-header [data-act='sync-session']"), null, "Sync is no longer a header action");
+  assert.equal(root.querySelector(".session-picker [data-act='sync-session']").textContent, "sync");
+  root.querySelector(".session-picker [data-act='sync-session']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector(".operation-title").textContent, /Synchronize this conversation/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /Conversation synchronized/);
+  root.querySelector("[data-act='close-operation']").click();
+  assert.equal(root.querySelector(".operation-modal"), null);
+  assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Enrolled sessions do not offer sync again");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='push-branch']"));
@@ -174,8 +189,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-act='close-operation']").click();
   assert.equal(store.state.operation, null);
   root.querySelector("[data-act='toggle-branch-menu']").click();
-  assert.equal(root.querySelectorAll(".branch-picker-pinned .branch-option").length, 4);
-  assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 4);
+  assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 8);
+  assert.deepEqual([...root.querySelectorAll(".branch-picker-scroll .branch-option")].map(button => button.dataset.branch), [
+    "main", "develop", "feature/alpha", "feature/beta", "feature/delta", "feature/epsilon", "feature/gamma", "feature/viewer",
+  ]);
+  assert.equal(root.querySelector(".branch-picker-pinned"), null);
   assert.ok(root.querySelector("[data-act='select-session-branch'][data-branch='__new__']"));
   root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false);
@@ -221,12 +239,18 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   projectPlus.click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector(".session-picker"));
+  assert.equal(root.querySelectorAll(".session-history-row").length, 2);
+  assert.match(root.querySelector(".session-history").textContent, /History/);
   assert.match(root.querySelector(".branch-picker-trigger").textContent, /main/);
+  const newSessionName = root.querySelector("[data-session-name]");
+  newSessionName.value = "Chat Name";
+  newSessionName.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   root.querySelector("[data-act='toggle-branch-menu']").click();
   root.querySelector("[data-act='select-session-branch'][data-branch='__new__']").click();
   await new Promise(resolve => setTimeout(resolve, 0));
   const newBranchInput = root.querySelector("[data-session-new-branch]");
   assert.equal(dom.window.document.activeElement, newBranchInput);
+  assert.equal(newBranchInput.value, "feature/chat-name");
   newBranchInput.value = "feature/from-picker";
   newBranchInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, newBranchInput);
@@ -235,6 +259,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
+  assert.match(root.querySelector(".operation-title").textContent, /Fetch main/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /main fetched and prepared/);
+  root.querySelector("[data-act='close-operation']").click();
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -402,6 +429,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(textarea.value, "", "a different session starts with its own draft");
   root.querySelector("[data-id='s1']").click();
   assert.equal(textarea.value, "foo", "returning to a session restores its draft");
+  const enter = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  textarea.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, false, "Return leaves newline insertion to the textarea");
+  assert.equal(store.transcript("s1").records.some(record => record.pending), false, "Return does not send a message");
   textarea.value = "/";
   textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -540,6 +571,16 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector(".session-picker"));
   assert.ok(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"));
   root.querySelector("[data-act='close-session-picker']")?.click();
+
+  const closeButton = root.querySelector("[data-id='sibling'] .row-close");
+  assert.ok(closeButton);
+  closeButton.click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(store.state.confirm, null, "Closing a session does not open a warning modal");
+  assert.equal(root.querySelector(".confirm-modal"), null);
+  assert.match(root.querySelector(".operation-title").textContent, /Close session/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /Session closed/);
+  root.querySelector("[data-act='close-operation']")?.click();
 
   dom.window.close();
 });

@@ -576,7 +576,6 @@ pi-context-meter { display: block; padding: 0 13px; }
 .settings-save:disabled, .settings-action:disabled, .confirm-cta:disabled { opacity: .55; cursor: not-allowed; }
 .sync-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 11.5px var(--mono); }
 .sync-toggle input { accent-color: var(--accent); }
-.sync-header-action { white-space: nowrap; }
 .sync-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--green); border-radius: 6px; color: var(--green); font: 10px var(--mono); letter-spacing: .04em; }
 .danger-outline { border-color: var(--red) !important; background: var(--del-bg) !important; color: var(--red) !important; }
 .danger-outline:not(:disabled):hover, .danger-outline:not(:disabled):focus-visible { background: color-mix(in oklch, var(--red) 18%, var(--surface-2)) !important; }
@@ -646,16 +645,16 @@ aside.files.file-viewer {
 /* ---------- branch/session picker ---------- */
 .session-picker-scrim {
   position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center;
-  padding: 9vh 16px 20px; background: oklch(0.15 0.02 255 / .52);
+  overflow-y: auto; overscroll-behavior: contain; padding: 9vh 16px 20px; background: oklch(0.15 0.02 255 / .52);
 }
 .session-picker {
-  width: min(620px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden;
+  width: min(620px, calc(100vw - 32px)); max-height: min(82vh, 720px); min-height: 0; overflow: hidden;
   display: flex; flex-direction: column; border-radius: 14px; background: var(--surface-2); box-shadow: var(--elevation-2);
 }
-.session-picker-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; background: var(--surface); }
+.session-picker-head { display: flex; align-items: flex-start; gap: 12px; flex: 0 0 auto; padding: 16px 18px 13px; background: var(--surface); }
 .session-picker-head > div { flex: 1; min-width: 0; }
 .session-picker-subtitle { margin-top: 4px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-.session-picker-body { overflow: visible; max-height: none; padding: 14px 16px 14px; }
+.session-picker-body { min-height: 0; overflow-y: auto; max-height: calc(min(82vh, 720px) - 124px); padding: 14px 16px 14px; }
 .session-picker-modes { display: flex; gap: 6px; }
 .session-mode { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer; font: 11.5px var(--mono); }
 .session-mode:hover, .session-mode:focus-visible, .session-mode.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); outline: 0; }
@@ -673,7 +672,7 @@ aside.files.file-viewer {
 .branch-picker-menu-head { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px 6px; border-bottom: 1px solid var(--border); color: var(--faint); font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
 .branch-picker-menu-head span:last-child { color: var(--accent); font-size: 9px; }
 .branch-picker-pinned { display: grid; gap: 4px; padding: 4px; }
-.branch-picker-scroll { max-height: 132px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border-top: 1px solid var(--border); scrollbar-gutter: stable; }
+.branch-picker-scroll { max-height: min(42vh, 300px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border-top: 1px solid var(--border); scrollbar-gutter: stable; }
 .branch-option, .branch-new-option { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--muted); padding: 9px 9px; text-align: left; cursor: pointer; font: 11.5px var(--mono); }
 .branch-option:hover, .branch-option:focus-visible, .branch-option[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); outline: 0; }
 .branch-option-name { min-width: 0; overflow-wrap: anywhere; }
@@ -687,7 +686,19 @@ aside.files.file-viewer {
 .session-branch-actions { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
 .session-context-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 2px 8px; color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .session-context-heading .settings-action { padding: 4px 8px; font-size: 10px; text-transform: none; letter-spacing: normal; }
+.session-context-heading-actions { display: flex; align-items: center; gap: 6px; }
 .session-picker .workspace-actions { justify-content: flex-end; }
+.session-history { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
+.session-history-heading { margin: 0 2px 8px; }
+.session-history-heading > span:last-child { color: var(--faint); font-size: 9.5px; font-weight: 400; letter-spacing: normal; text-transform: none; }
+.session-history-scroll { display: grid; gap: 4px; max-height: 230px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; scrollbar-gutter: stable; }
+.session-history-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); text-align: left; cursor: pointer; }
+.session-history-row:hover, .session-history-row:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--text); outline: 0; }
+.session-history-main { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.session-history-main strong { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.session-history-main small { overflow: hidden; color: var(--faint); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.session-history-resume { flex: 0 0 auto; color: var(--accent); font: 10px var(--mono); }
+.session-history-empty { padding: 8px 2px; color: var(--muted); font-size: 11.5px; }
 .session-context-list { display: grid; gap: 6px; }
 .session-context-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 10px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); text-align: left; cursor: pointer; }
 .session-context-row:hover, .session-context-row:focus-visible { border-color: var(--accent); background: var(--surface-2); outline: 0; }
@@ -712,7 +723,8 @@ aside.files.file-viewer {
 
 /* ---------- modal ---------- */
 .scrim {
-  position: absolute; inset: 0; background: oklch(0.2 0.02 255 / 0.45); z-index: 20;
+  position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
+  background: oklch(0.2 0.02 255 / 0.45); z-index: 20;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .drawer-scrim {
@@ -792,9 +804,9 @@ aside.files.file-viewer {
   .subagent-title span { display: block; margin-top: 2px; }
   .modal { width: 100%; height: 80%; max-height: none; }
   .session-picker-scrim { align-items: stretch; padding: max(10px, env(safe-area-inset-top)) 0 0; }
-  .session-picker { width: 100%; max-height: none; border-radius: 12px 12px 0 0; }
-  .session-picker-body { max-height: none; flex: 0 0 auto; }
-  .session-picker-actions { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  .session-picker { width: 100%; height: 100%; max-height: none; border-radius: 12px 12px 0 0; }
+  .session-picker-body { max-height: none; flex: 1 1 auto; overflow-y: auto; }
+  .session-picker-actions { flex: 0 0 auto; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }
   aside.files {
     position: absolute; inset: var(--header-height, 54px) 0 0 auto; width: 302px; max-width: 86%; z-index: 12;
@@ -807,6 +819,8 @@ aside.files.file-viewer {
   .file-code, .file-diff-body { max-height: none; }
 }
 .hidden { display: none !important; }
+body.modal-open { overflow: hidden; }
+body.modal-open .scrollable { overflow: hidden; }
 
 /* hover-reveal close x on sidebar rows */
 .row .row-close {
@@ -819,7 +833,7 @@ aside.files.file-viewer {
 
 .workspace-scrim {
   position: fixed; inset: 0; z-index: 36; display: flex; align-items: flex-start; justify-content: flex-start;
-  padding: 64px 14px 20px; background: oklch(0.15 0.02 255 / .48);
+  overflow-y: auto; overscroll-behavior: contain; padding: 64px 14px 20px; background: oklch(0.15 0.02 255 / .48);
 }
 .workspace-modal {
   width: min(620px, calc(100vw - 28px)); max-height: min(82vh, 720px); overflow: hidden;
@@ -871,7 +885,7 @@ aside.files.file-viewer {
 /* operation modal (hooks / Git commands) */
 .operation-scrim {
   position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
-  padding: 22px; background: oklch(0.15 0.02 255 / .68);
+  overflow-y: auto; overscroll-behavior: contain; padding: 22px; background: oklch(0.15 0.02 255 / .68);
 }
 .operation-modal {
   width: min(700px, 100%); max-height: min(78vh, 640px); display: flex; flex-direction: column;
@@ -895,7 +909,8 @@ aside.files.file-viewer {
 
 /* confirmation modal (merge / close) */
 .confirm-scrim {
-  position: absolute; inset: 0; background: oklch(0.15 0.02 255 / 0.6); z-index: 40;
+  position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
+  background: oklch(0.15 0.02 255 / 0.6); z-index: 40;
   display: flex; align-items: center; justify-content: center; padding: 22px;
 }
 .confirm-modal {
