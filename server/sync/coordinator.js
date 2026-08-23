@@ -116,13 +116,17 @@ class BaseCoordinator {
   }
 
   async withMutation(sessionId, task, options = {}) {
+    const report = options.progress;
+    report?.({ type: "phase", phase: "mutation-queued", message: "Waiting for other session mutations." });
     const previous = this.mutationQueues.get(sessionId) || Promise.resolve();
     let releaseQueue;
     const current = new Promise(resolve => { releaseQueue = resolve; });
     this.mutationQueues.set(sessionId, current);
     await previous;
     try {
+      report?.({ type: "phase", phase: "mutation-start", message: "Starting session mutation." });
       const lease = await this.beginMutation(sessionId, options);
+      report?.({ type: lease?.managed ? "phase" : "result", phase: lease?.managed ? "sync-ready" : "local-session", message: lease?.managed ? "Synchronization lease is ready." : "Session is local-only; no sync lease required." });
       let result;
       try {
         result = await task(lease);
@@ -133,7 +137,11 @@ class BaseCoordinator {
       // A failed settlement retains the uncertain lease and pending envelope
       // so a later heartbeat can retry safely. Do not release it from this
       // catch path; only task failures are safe to abandon without uploading.
-      if (lease?.managed && !options.streaming) await this.commitAndRelease(sessionId, lease);
+      if (lease?.managed && !options.streaming) {
+        report?.({ type: "phase", phase: "sync-settle", message: "Settling synchronized session state." });
+        await this.commitAndRelease(sessionId, { ...lease, progress: report });
+        report?.({ type: "result", phase: "sync-release", message: "Synchronization lease released." });
+      }
       return result;
     } finally {
       releaseQueue();
@@ -189,10 +197,12 @@ export class FakeSyncCoordinator extends BaseCoordinator {
     });
   }
 
-  async enroll(sessionId) {
+  async enroll(sessionId, { progress = null } = {}) {
     this.assertConfigured();
+    progress?.({ type: "phase", phase: "sync-enroll-check", message: "Checking the local session before enrollment." });
     await this.assertIdle(sessionId);
     const meta = await this.sessionMeta(sessionId);
+    progress?.({ type: "phase", phase: "sync-enroll-read", message: "Reading the local session transcript." });
     const records = this.supervisor?.transcript ? await this.supervisor.transcript(sessionId) : [];
     const existing = this.remote.get(sessionId);
     if (!existing) {
@@ -202,6 +212,7 @@ export class FakeSyncCoordinator extends BaseCoordinator {
         etag: `fake-${this.remote.size + 1}`,
       });
     }
+    progress?.({ type: "result", phase: "sync-enroll-write", message: existing ? "The synchronized session already exists." : "Writing the synchronized session snapshot." });
     markSyncEnrolled(sessionId);
     return { ok: true, created: !existing, ...(this.status(sessionId)) };
   }
@@ -486,8 +497,9 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
   }
 
-  async _enroll(sessionId, { automatic = false } = {}) {
+  async _enroll(sessionId, { automatic = false, progress = null } = {}) {
     this.assertConfigured();
+    progress?.({ type: "phase", phase: "sync-enroll-check", message: "Checking the synchronization service." });
     await this.assertIdle(sessionId);
     const remote = (await this._list()).find(item => item.sessionId === sessionId);
     if (remote) {
@@ -499,14 +511,17 @@ export class PiSyncCoordinator extends BaseCoordinator {
       markSyncPending(sessionId);
       throw syncError("The sync server no longer has this conversation; explicit re-enrollment is required.", "sync_session_not_found");
     }
+    progress?.({ type: "phase", phase: "sync-enroll-read", message: "Normalizing the local session snapshot." });
     const envelope = await this._sessionEnvelope(sessionId);
     try {
       const client = await this._client();
+      progress?.({ type: "phase", phase: "sync-enroll-write", message: "Uploading the enrollment snapshot." });
       const response = await client.enroll(envelope);
       markSyncEnrolled(sessionId);
       this.blocked.delete(sessionId);
       this.listCache = null;
       this._recordConnection();
+      progress?.({ type: "result", phase: "sync-enroll-complete", message: "The remote enrollment was created." });
       return { ok: true, created: true, etag: response.etag, ...await this.status(sessionId) };
     } catch (error) {
       const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error, "sync_enrollment_failed");
@@ -653,8 +668,9 @@ export class PiSyncCoordinator extends BaseCoordinator {
     return active;
   }
 
-  async prepareMutation(sessionId, { optional = false, allowStreaming = false } = {}) {
+  async prepareMutation(sessionId, { optional = false, allowStreaming = false, progress = null } = {}) {
     this.assertConfigured();
+    progress?.({ type: "phase", phase: "sync-prepare", message: "Checking synchronization state." });
     return this._exclusive(sessionId, async () => {
       let current = this.active.get(sessionId);
       if (current?.releasePending) {
@@ -679,6 +695,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       const enrolled = await this._ensureEnrolled(sessionId, optional);
       if (!enrolled) return { managed: false };
       if (!allowStreaming) await this.assertIdle(sessionId);
+      progress?.({ type: "phase", phase: "sync-acquire", message: "Acquiring synchronization lease." });
       const client = await this._client();
       let acquired;
       try { acquired = await client.acquire(sessionId, this.holder); }
@@ -706,6 +723,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
         if (acquired.session?.sessionId !== sessionId) {
           throw syncError("The sync server returned a different session identity.", "sync_enrollment_failed");
         }
+        progress?.({ type: "phase", phase: "sync-materialize", message: "Materializing the canonical session snapshot." });
         const info = await this.supervisor?.syncSessionInfo?.(sessionId);
         if (acquired.session.workspace) verifyWorkspacePointer(acquired.session.workspace, info?.cwd);
         if (this.supervisor?.prepareSyncSnapshot) {
@@ -835,10 +853,11 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
   }
 
-  async _commitUnlocked(sessionId, active) {
+  async _commitUnlocked(sessionId, active, progress = null) {
     if (this.active.get(sessionId) !== active) return { managed: false };
     let envelope;
     try {
+      progress?.({ type: "phase", phase: "sync-normalize", message: "Normalizing the updated session snapshot." });
       envelope = await this._normalizeForCommit(sessionId, active);
     } catch (error) {
       const converted = error?.code?.startsWith?.("sync_")
@@ -853,6 +872,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       return { ok: true, etag: active.etag, ...await this.status(sessionId) };
     }
     try {
+      progress?.({ type: "phase", phase: "sync-upload", message: "Uploading the settled session snapshot." });
       const response = await active.client.update(sessionId, envelope, active.token, active.etag);
       active.etag = response.etag;
       active.envelope = response.session;
@@ -877,16 +897,16 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
   }
 
-  async commitSettled(sessionId) {
+  async commitSettled(sessionId, options = {}) {
     return this._exclusive(sessionId, async () => {
       const active = this.active.get(sessionId);
       if (!active) return { managed: false };
-      return this._commitUnlocked(sessionId, active);
+      return this._commitUnlocked(sessionId, active, options.progress);
     });
   }
 
-  async commitAndRelease(sessionId) {
-    return this.commitSettled(sessionId);
+  async commitAndRelease(sessionId, options = {}) {
+    return this.commitSettled(sessionId, options);
   }
 
   async agentSettled(sessionId) {

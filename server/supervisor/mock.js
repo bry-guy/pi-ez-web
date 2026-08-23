@@ -95,10 +95,11 @@ export class MockSupervisor {
       throw Object.assign(new Error("pi_configuration_busy"), { code: "pi_configuration_busy" });
     }
   }
-  async reloadPiConfiguration() {
+  async reloadPiConfiguration({ report = null } = {}) {
     this.assertPiConfigurationReloadable();
+    report?.({ type: "phase", phase: "runtime-load", message: "Reloading mock Pi profile settings and resources." });
     this.piConfiguration.invalidate();
-    return this.piConfiguration.state({ force: true });
+    return this.piConfiguration.state({ force: true, report });
   }
   piConfigurationState() { return this.piConfiguration.state(); }
   async commands() { return WEB_PI_COMMANDS.map(command => ({ ...command })); }

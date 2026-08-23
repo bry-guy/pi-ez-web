@@ -1,4 +1,4 @@
-import { api, openTranscript, refreshState } from "./api.js";
+import { api, openTranscript, refreshState, transcriptLoading } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
 import { store } from "./store.js";
 
@@ -49,7 +49,7 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   });
 }
 
-export function selectSession(projectId, sessionId) {
+export function selectSession(projectId, sessionId, { showOperation = false } = {}) {
   const project = store.state.projects.find(p => p.id === projectId);
   const node = findNode(project?.sessions, sessionId);
   store.set({
@@ -60,7 +60,10 @@ export function selectSession(projectId, sessionId) {
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
-  openTranscript(sessionId);
+  const operation = showOperation && !transcriptLoading(sessionId)
+    ? beginOperation("open-session", "Open session", "", "Request started.")
+    : null;
+  openTranscript(sessionId, { operation });
 }
 export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
@@ -115,12 +118,12 @@ export async function closeConversation(id, kind = "session") {
   if (!id || closeOperationInFlight) return;
   closeOperationInFlight = true;
   const label = kind === "chat" ? "Close chat" : "Close session";
-  const operation = beginOperation("close", label, "pi close", `${label}…`);
+  const operation = beginOperation("close", label, "", "Request started.");
   let result = null;
   try {
-    result = await api.close(id);
-    await refreshState();
-    completeOperation(operation, { ...result, stdout: result.stdout || (kind === "chat" ? "Chat closed." : "Session closed.") });
+    result = await api.close(id, operation.id, kind);
+    completeOperation(operation, result);
+    void refreshState().catch(err => store.setError(`Could not refresh state after close: ${err.message || err}`));
   } catch (error) {
     const displayError = Object.assign(new Error(closeErrorMessage(error)), error);
     completeOperation(operation, result || {}, displayError);
@@ -213,10 +216,10 @@ class PiSidebar extends HTMLElement {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
       if (!p) return;
       const first = p.sessions[0];
-      if (first) selectSession(p.id, first.id);
+      if (first) selectSession(p.id, first.id, { showOperation: true });
       else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false });
     } else if (act === "session-row") {
-      selectSession(t.dataset.pid, t.dataset.id);
+      selectSession(t.dataset.pid, t.dataset.id, { showOperation: true });
     } else if (act === "chat-row") selectChat(t.dataset.id);
   }
 

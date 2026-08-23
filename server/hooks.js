@@ -28,12 +28,14 @@ export function publicHooks(cfg, project) {
   return Object.fromEntries(Object.entries(projectHooks(cfg, project)).map(([name, command]) => [name, !!command]));
 }
 
-export function runHook(command, { cwd, env = process.env, spawnImpl = spawn } = {}) {
+export function runHook(command, { cwd, env = process.env, spawnImpl = spawn, report = null } = {}) {
   return new Promise(resolve => {
     if (typeof command !== "string" || !command.trim()) {
       resolve({ exit: 0, stdout: "", stderr: "", command: null });
       return;
     }
+    const startedAt = Date.now();
+    report?.({ type: "process_start", phase: "hook", command, cwd, message: `Running configured hook.` });
     const child = spawnImpl("/bin/sh", ["-c", command], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     if (!child || typeof child.on !== "function") {
       resolve({ exit: 1, stdout: "", stderr: "hook runner failed", command });
@@ -41,17 +43,28 @@ export function runHook(command, { cwd, env = process.env, spawnImpl = spawn } =
     }
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", chunk => { stdout += chunk; });
-    child.stderr?.on("data", chunk => { stderr += chunk; });
+    child.stdout?.on("data", chunk => {
+      const value = String(chunk);
+      stdout += value;
+      report?.({ type: "process_output", phase: "hook", command, cwd, stream: "stdout", output: redacted(value) });
+    });
+    child.stderr?.on("data", chunk => {
+      const value = String(chunk);
+      stderr += value;
+      report?.({ type: "process_output", phase: "hook", command, cwd, stream: "stderr", output: redacted(value) });
+    });
     let settled = false;
     const finish = result => {
       if (settled) return;
       settled = true;
+      const safeStdout = redacted(stdout);
+      const safeStderr = redacted(stderr || result.error || "");
+      report?.({ type: "process_end", phase: "hook", command, cwd, stream: safeStderr ? "stderr" : "stdout", output: safeStderr || safeStdout, exit: result.exit, durationMs: Date.now() - startedAt, message: result.exit === 0 ? "Configured hook completed." : "Configured hook failed." });
       resolve({
         exit: result.exit,
         signal: result.signal || null,
-        stdout: redacted(stdout),
-        stderr: redacted(stderr || result.error || ""),
+        stdout: safeStdout,
+        stderr: safeStderr,
         command,
       });
     };

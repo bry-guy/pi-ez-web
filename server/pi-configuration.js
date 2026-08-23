@@ -9,12 +9,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appHome, loadConfig, resolvePath } from "./config.js";
+import { appHome, effectivePiConfig, loadConfig, resolvePath } from "./config.js";
+import { readStoredAuth } from "./github.js";
 
 const MAX_PROFILE_BYTES = 512 * 1024;
 const MAX_PROFILE_SKILL_BYTES = 128 * 1024;
 const MAX_PROFILE_SKILL_TOTAL = 512 * 1024;
 const MAX_PROFILE_SKILLS = 128;
+const MAX_PROFILE_RESOURCES = 512;
+const MAX_PROFILE_RESOURCE_BYTES = 256 * 1024;
+const MAX_PROFILE_RESOURCE_TOTAL = 2 * 1024 * 1024;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
 const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"];
@@ -129,17 +133,22 @@ function githubProfileParts(input) {
   return { owner, repo: rawRepo.replace(/\.git$/, ""), marker, ref, rest };
 }
 
-export function githubProfileRepository(input) {
+export function githubProfileRepository(input, refOverride = null) {
   const parts = githubProfileParts(input);
   if (!parts) return null;
-  return { owner: parts.owner, repo: parts.repo, ref: parts.marker === "blob" || parts.marker === "tree" ? parts.ref || "HEAD" : "HEAD" };
+  return {
+    owner: parts.owner,
+    repo: parts.repo,
+    ref: refOverride || (parts.marker === "blob" || parts.marker === "tree" ? parts.ref || "HEAD" : "HEAD"),
+    explicitRef: parts.marker === "blob" || parts.marker === "tree" ? parts.ref || null : null,
+  };
 }
 
-export function githubProfileSettingsUrl(input) {
+export function githubProfileSettingsUrl(input, refOverride = null) {
   const parts = githubProfileParts(input);
   if (!parts) return input;
   const { owner, repo, marker, ref, rest } = parts;
-  if (!marker) return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/.pi/agent/settings.json`;
+  if (!marker) return `https://raw.githubusercontent.com/${owner}/${repo}/${refOverride || "HEAD"}/.pi/agent/settings.json`;
   if (marker === "blob" && ref && rest.length) {
     return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${rest.join("/")}`;
   }
@@ -148,6 +157,15 @@ export function githubProfileSettingsUrl(input) {
     return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${suffix}`;
   }
   return input;
+}
+
+function githubAuthHeaders(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (hostname !== "api.github.com" && hostname !== "raw.githubusercontent.com") return {};
+    const token = process.env.PI_WEB_GITHUB_TOKEN || readStoredAuth()?.accessToken;
+    return token ? { authorization: `Bearer ${token}` } : {};
+  } catch { return {}; }
 }
 
 function profileLocation(source) {
@@ -170,7 +188,7 @@ async function readRemoteJson(url, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROFILE_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: { accept: "application/json" } });
+    const response = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: { accept: "application/json", ...githubAuthHeaders(url) } });
     if (!response.ok) throw new Error(`Profile request returned HTTP ${response.status}.`);
     if (response.url && new URL(response.url).protocol !== "https:") throw new Error("Pi profile URL redirected away from HTTPS.");
     const declaredSize = Number(response.headers.get("content-length"));
@@ -186,7 +204,25 @@ async function readRemoteJson(url, fetchImpl) {
   }
 }
 
-async function readRemoteText(url, fetchImpl) {
+async function resolveGithubProfileRef(source, fetchImpl) {
+  const repository = githubProfileRepository(source);
+  if (!repository) return null;
+  if (repository.explicitRef) return repository.ref;
+  const apiUrl = `https://api.github.com/repos/${repository.owner}/${repository.repo}`;
+  try {
+    const metadata = await readRemoteJson(apiUrl, fetchImpl);
+    if (typeof metadata?.default_branch === "string" && metadata.default_branch.trim()) return metadata.default_branch.trim();
+  } catch { /* public metadata is optional; raw branch fallback below is authoritative */ }
+  for (const candidate of ["main", "master"]) {
+    try {
+      await readRemoteJson(githubProfileSettingsUrl(source, candidate), fetchImpl);
+      return candidate;
+    } catch { /* try the other conventional branch */ }
+  }
+  return null;
+}
+
+async function readRemoteText(url, fetchImpl, { maxBytes = MAX_PROFILE_SKILL_BYTES, label = "skill" } = {}) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("Pi profile URLs must be credential-free HTTPS URLs.");
   if (["localhost", "localhost.localdomain"].includes(parsed.hostname.toLowerCase())) throw new Error("Localhost Pi profile URLs are not allowed.");
@@ -194,13 +230,13 @@ async function readRemoteText(url, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROFILE_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: { accept: "text/plain" } });
-    if (!response.ok) throw new Error(`Profile skill request returned HTTP ${response.status}.`);
+    const response = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: { accept: "text/plain", ...githubAuthHeaders(url) } });
+    if (!response.ok) throw new Error(`Profile ${label} request returned HTTP ${response.status}.`);
     if (response.url && new URL(response.url).protocol !== "https:") throw new Error("Pi profile skill URL redirected away from HTTPS.");
     const declaredSize = Number(response.headers.get("content-length"));
-    if (declaredSize > MAX_PROFILE_SKILL_BYTES) throw new Error("Pi profile skill is too large.");
+    if (declaredSize > maxBytes) throw new Error(`Pi profile ${label} is too large.`);
     const data = new Uint8Array(await response.arrayBuffer());
-    if (data.byteLength > MAX_PROFILE_SKILL_BYTES) throw new Error("Pi profile skill is too large.");
+    if (data.byteLength > maxBytes) throw new Error(`Pi profile ${label} is too large.`);
     return new TextDecoder().decode(data);
   } catch (error) {
     if (error?.name === "AbortError") throw new Error("Pi profile skill request timed out.");
@@ -210,53 +246,90 @@ async function readRemoteText(url, fetchImpl) {
   }
 }
 
-function githubSkillUrl(repository, file) {
+function githubResourceUrl(repository, file) {
   return `https://raw.githubusercontent.com/${repository.owner}/${repository.repo}/${repository.ref}/${file}`;
 }
 
-async function fetchGithubProfileSkills(source, fetchImpl) {
-  const repository = githubProfileRepository(source);
-  if (!repository) return [];
+const PROFILE_SKILL_PREFIXES = [".agents/skills/", ".pi/agent/skills/"];
+const PROFILE_EXTENSION_PREFIXES = [".pi/agent/extensions/", ".pi/extensions/"];
+function profileResourceKind(file, declaredExtensionPaths = []) {
+  if (PROFILE_SKILL_PREFIXES.some(prefix => file.startsWith(prefix))) return "skill";
+  if (PROFILE_EXTENSION_PREFIXES.some(prefix => file.startsWith(prefix))) return "extension";
+  if (declaredExtensionPaths.some(prefix => file === prefix || file.startsWith(`${prefix}/`))) return "extension";
+  return null;
+}
+
+async function fetchGithubProfileResources(source, fetchImpl, refOverride = null, declaredExtensionPaths = []) {
+  const repository = githubProfileRepository(source, refOverride);
+  if (!repository) return { ref: null, resources: [] };
   const treeUrl = `https://api.github.com/repos/${repository.owner}/${repository.repo}/git/trees/${repository.ref}?recursive=1`;
   const tree = await readRemoteJson(treeUrl, fetchImpl);
   const entries = (tree?.tree || [])
     .filter(entry => entry?.type === "blob" && typeof entry.path === "string"
-      && entry.path.startsWith(".agents/skills/") && entry.path.endsWith(".md")
-      && !entry.path.split("/").includes(".."))
+      && profileResourceKind(entry.path, declaredExtensionPaths) && !entry.path.split("/").includes(".."))
     .sort((a, b) => a.path.localeCompare(b.path));
-  if (entries.length > MAX_PROFILE_SKILLS) throw new Error("Pi profile contains too many skills.");
+  if (entries.filter(entry => profileResourceKind(entry.path, declaredExtensionPaths) === "skill" && entry.path.endsWith("/SKILL.md")).length > MAX_PROFILE_SKILLS) {
+    throw new Error("Pi profile contains too many skills.");
+  }
+  if (entries.length > MAX_PROFILE_RESOURCES) throw new Error("Pi profile contains too many resources.");
 
-  const skills = [];
+  const resources = [];
   let total = 0;
   for (const entry of entries) {
-    if (Number(entry.size) > MAX_PROFILE_SKILL_BYTES) throw new Error(`Pi profile skill is too large: ${entry.path}`);
-    const content = await readRemoteText(githubSkillUrl(repository, entry.path), fetchImpl);
+    const kind = profileResourceKind(entry.path, declaredExtensionPaths);
+    if (Number(entry.size) > MAX_PROFILE_RESOURCE_BYTES) throw new Error(`Pi profile ${kind} is too large: ${entry.path}`);
+    const content = await readRemoteText(githubResourceUrl(repository, entry.path), fetchImpl, { maxBytes: MAX_PROFILE_RESOURCE_BYTES, label: kind });
     total += Buffer.byteLength(content, "utf8");
-    if (total > MAX_PROFILE_SKILL_TOTAL) throw new Error("Pi profile skills are too large.");
-    skills.push({ path: entry.path, content });
+    if (total > MAX_PROFILE_RESOURCE_TOTAL) throw new Error("Pi profile resources are too large.");
+    resources.push({ path: entry.path, content, kind });
   }
-  return skills;
+  return { ref: repository.ref, commit: typeof tree?.sha === "string" ? tree.sha : null, resources };
 }
 
-function profileSkillsRoot(location) {
-  const key = createHash("sha256").update(location.resolved).digest("hex").slice(0, 24);
-  return path.join(appHome(), "pi-profile-skills", key);
+function profileResourcesRoot(location) {
+  const key = createHash("sha256").update(`${location.resolved}@${location.ref || "HEAD"}`).digest("hex").slice(0, 24);
+  return path.join(appHome(), "pi-profile-resources", key);
 }
 
-function materializeProfileSkills(location, skills) {
-  const root = path.resolve(profileSkillsRoot(location));
-  const paths = [];
-  for (const skill of skills || []) {
-    if (!skill || typeof skill.path !== "string" || typeof skill.content !== "string") continue;
-    const relative = skill.path.replaceAll("/", path.sep);
-    if (!relative.startsWith(`.agents${path.sep}skills${path.sep}`) || relative.split(path.sep).includes("..")) continue;
-    const target = path.resolve(root, relative);
-    if (!target.startsWith(`${root}${path.sep}`)) continue;
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(target, skill.content, { encoding: "utf8", mode: 0o600 });
-    if (target.endsWith(`${path.sep}SKILL.md`)) paths.push(target);
+function remoteExtensionPaths(settings) {
+  return (Array.isArray(settings?.extensions) ? settings.extensions : [])
+    .map(sourceOf)
+    .filter(source => source && /^\.\/?[^/]/.test(source) && !source.split("/").includes(".."))
+    .map(source => source.replace(/^\.\//, "").replace(/\/$/, ""))
+    .filter(Boolean);
+}
+
+function resourceRelativePath(value) {
+  const relative = String(value || "").replaceAll("/", path.sep);
+  return relative && !relative.split(path.sep).includes("..") ? relative : null;
+}
+
+function materializeProfileResources(location, resources) {
+  const root = path.resolve(profileResourcesRoot(location));
+  const stage = `${root}.stage-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  const skillPaths = [];
+  const extensionPaths = [];
+  fs.rmSync(stage, { recursive: true, force: true });
+  fs.mkdirSync(stage, { recursive: true, mode: 0o700 });
+  try {
+    for (const resource of resources || []) {
+      const relative = resourceRelativePath(resource.path);
+      if (!relative || typeof resource.content !== "string") continue;
+      const target = path.resolve(stage, relative);
+      if (!target.startsWith(`${stage}${path.sep}`)) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(target, resource.content, { encoding: "utf8", mode: 0o600 });
+      if (resource.kind === "skill" && target.endsWith(`${path.sep}SKILL.md`)) skillPaths.push(path.resolve(root, relative));
+      if (resource.kind === "extension") extensionPaths.push(path.resolve(root, relative));
+    }
+    fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.renameSync(stage, root);
+    return { root, skillPaths, extensionPaths };
+  } catch (error) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    throw error;
   }
-  return paths;
 }
 
 function readLocalJson(file) {
@@ -319,14 +392,25 @@ export function recoverIncompleteGitPackages(agentDir, settings) {
   if (recovered.length) console.warn("pi-ez-web: recovered incomplete Pi package checkout(s)", recovered);
   return recovered;
 }
-function readProfileCache(location) {
+function readProfileCacheForSource(source) {
   try {
     const cached = JSON.parse(fs.readFileSync(profileCachePath(), "utf8"));
-    return cached?.source === location.requested && cached?.resolvedSource === location.resolved && isObject(cached.settings)
-      ? cached : null;
+    if (cached?.source !== source || !isObject(cached.settings)) return null;
+    const resources = Array.isArray(cached.resources)
+      ? cached.resources
+      : (cached.skills || []).map(resource => ({ ...resource, kind: "skill" }));
+    return { ...cached, resources };
   } catch { return null; }
 }
-function writeProfileCache(location, settings, skills = []) {
+
+function readProfileCache(location) {
+  try {
+    const cached = readProfileCacheForSource(location.requested);
+    if (cached?.resolvedSource !== location.resolved) return null;
+    return cached;
+  } catch { return null; }
+}
+function writeProfileCache(location, settings, resources = [], { ref = null, commit = null } = {}) {
   const file = profileCachePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -335,8 +419,10 @@ function writeProfileCache(location, settings, skills = []) {
       source: location.requested,
       resolvedSource: location.resolved,
       fetchedAt: new Date().toISOString(),
+      ref,
+      commit,
       settings,
-      skills,
+      resources,
     }, null, 2) + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
     fs.renameSync(temporary, file);
   } finally {
@@ -422,74 +508,115 @@ export class PiConfiguration {
     this.runtime = null;
   }
 
-  async resolve(piConfig = loadConfig().pi, { force = false } = {}) {
+  async resolve(piConfig = effectivePiConfig(), { force = false, report = null } = {}) {
     const key = JSON.stringify(piConfig);
     if (!force && this.cache?.key === key) return this.cache.promise;
-    const promise = this.#resolve(piConfig);
+    const promise = this.#resolve(piConfig, report);
     this.cache = { key, promise };
     return promise;
   }
 
-  async #resolve(piConfig) {
-    const warnings = [];
+  async #resolve(piConfig, report = null) {
+    let warnings = [];
     const inline = inlineSettings(piConfig, warnings);
     let settings = {};
     let profile = { status: "none", source: null, resolvedSource: null, error: null };
     let location = null;
-    let profileSkills = [];
+    let resources = [];
+    let materialized = null;
+    let profileCommit = null;
 
     if (piConfig.profile) {
       try {
         location = profileLocation(piConfig.profile);
+        if (location.type === "url") {
+          report?.({ type: "phase", phase: "profile-branch", message: "Resolving the GitHub dotfiles default branch." });
+          const cachedHint = readProfileCacheForSource(location.requested);
+          location.ref = await resolveGithubProfileRef(location.requested, this.fetchImpl) || cachedHint?.ref || "HEAD";
+          location.resolved = githubProfileSettingsUrl(location.requested, location.ref);
+        }
+        report?.({ type: "phase", phase: "profile-settings", message: location.type === "url" ? `Fetching ${location.resolved}.` : `Reading ${location.resolved}.` });
         const value = location.type === "url"
           ? await readRemoteJson(location.resolved, this.fetchImpl)
           : readLocalJson(location.resolved);
         if (!isObject(value)) throw new Error("Pi profile settings must contain a JSON object.");
+        const declaredExtensionPaths = location.type === "url" ? remoteExtensionPaths(value) : [];
         if (location.type === "url") {
           try {
-            profileSkills = await fetchGithubProfileSkills(location.requested, this.fetchImpl);
+            report?.({ type: "phase", phase: "profile-resources", message: "Fetching dotfiles skills and extensions." });
+            const fetched = await fetchGithubProfileResources(location.requested, this.fetchImpl, location.ref, declaredExtensionPaths);
+            resources = fetched.resources;
+            profileCommit = fetched.commit || null;
+            report?.({ type: "phase", phase: "profile-materialize", message: `Materializing ${resources.length} dotfiles resources.` });
+            materialized = materializeProfileResources(location, resources);
+            try { writeProfileCache(location, value, resources, { ref: location.ref, commit: profileCommit }); }
+            catch (error) { warnings.push(`Could not cache Pi profile: ${publicError(error)}`); }
           } catch (error) {
-            profileSkills = readProfileCache(location)?.skills || [];
-            warnings.push(`Could not refresh Pi profile skills: ${publicError(error)}`);
+            report?.({ type: "warning", phase: "profile-resources", message: `Dotfiles resource refresh failed: ${publicError(error)}` });
+            const cached = readProfileCache(location);
+            resources = cached?.resources || [];
+            profileCommit = cached?.commit || null;
+            if (resources.length) {
+              report?.({ type: "phase", phase: "profile-cache", message: `Using ${resources.length} cached dotfiles resources.` });
+              materialized = materializeProfileResources(location, resources);
+              warnings.push(`Could not refresh Pi profile resources: ${publicError(error)}`);
+            } else {
+              warnings.push(`Could not refresh Pi profile resources: ${publicError(error)}`);
+            }
           }
-          try { writeProfileCache(location, value, profileSkills); }
-          catch (error) { warnings.push(`Could not cache Pi profile: ${publicError(error)}`); }
         }
         settings = prepareProfileSettings(value, {
           baseDir: location.type === "file" ? path.dirname(location.resolved) : appHome(),
           remote: location.type === "url",
           warnings,
         });
+        if (declaredExtensionPaths.length) {
+          warnings = warnings.filter(warning => !declaredExtensionPaths.some(source => warning.includes(source)));
+        }
+        if (materialized) {
+          settings.skills = unique([...(settings.skills || []), ...materialized.skillPaths]);
+          settings.extensions = unique([...(settings.extensions || []), ...materialized.extensionPaths]);
+        }
         profile = {
           status: "loaded",
           source: location.requested,
           resolvedSource: location.resolved,
+          ref: location.ref || null,
+          commit: profileCommit,
+          resourceCount: resources.length,
           error: null,
           loadedAt: new Date().toISOString(),
         };
       } catch (error) {
         const cached = location?.type === "url" ? readProfileCache(location) : null;
         if (cached) {
-          profileSkills = cached.skills || [];
+          resources = cached.resources || [];
+          profileCommit = cached.commit || null;
+          report?.({ type: "phase", phase: "profile-cache", message: `Using ${resources.length} cached dotfiles resources.` });
+          materialized = materializeProfileResources(location, resources);
           settings = prepareProfileSettings(cached.settings, { baseDir: appHome(), remote: true, warnings });
+          settings.skills = unique([...(settings.skills || []), ...materialized.skillPaths]);
+          settings.extensions = unique([...(settings.extensions || []), ...materialized.extensionPaths]);
+          report?.({ type: "warning", phase: "profile-cache", message: `Using the cached Pi profile because refresh failed: ${publicError(error)}` });
           warnings.push(`Using cached Pi profile because refresh failed: ${publicError(error)}`);
           profile = {
             status: "cached",
             source: location.requested,
             resolvedSource: location.resolved,
+            ref: cached.ref || location.ref || null,
+            commit: profileCommit,
+            resourceCount: resources.length,
             error: publicError(error),
             loadedAt: cached.fetchedAt,
           };
         } else {
-          profile = { status: "error", source: piConfig.profile, resolvedSource: null, error: publicError(error) };
+          report?.({ type: "error", phase: "profile-load", message: `Pi profile load failed: ${publicError(error)}` });
+          profile = { status: "error", source: piConfig.profile, resolvedSource: location?.resolved || null, ref: location?.ref || null, error: publicError(error) };
         }
       }
     }
 
     const overlay = addInlineResources(settings, inline);
-    if (location?.type === "url" && profileSkills.length) {
-      overlay.skills = unique([...(overlay.skills || []), ...materializeProfileSkills(location, profileSkills)]);
-    }
     // Package setup runs in managed Git checkouts that may contain mise.toml.
     // Use the image's system npm and avoid auto-installing peer dependency trees;
     // an explicitly supplied profile npmCommand remains authoritative.
@@ -506,32 +633,48 @@ export class PiConfiguration {
     return { settingsManager: SettingsManager.fromStorage(storage), resolved };
   }
 
-  recordRuntime(resourceLoader, extensionsResult) {
-    const skills = resourceLoader.getSkills().skills || [];
+  recordRuntime(resourceLoader, extensionsResult, sessionId = null, cwd = null) {
+    const skillState = resourceLoader.getSkills();
+    const extensionState = extensionsResult || resourceLoader.getExtensions();
+    const extensionErrors = (extensionState.errors || []).map(error => ({ path: error.path, error: publicError(error.error) }));
+    const skillDiagnostics = (skillState.diagnostics || []).map(diagnostic => ({
+      path: diagnostic.path || null,
+      message: publicError(diagnostic.message || diagnostic.error || diagnostic),
+      severity: diagnostic.severity || "warning",
+    }));
     this.runtime = {
       loadedAt: new Date().toISOString(),
-      extensions: (extensionsResult.extensions || []).map(extension => ({
+      ...(sessionId ? { sessionId } : {}),
+      ...(cwd ? { cwd } : {}),
+      extensions: (extensionState.extensions || []).map(extension => ({
+        name: extension.name || path.basename(extension.path || extension.resolvedPath || "<extension>"),
         path: extension.path || extension.resolvedPath || "<extension>",
-        source: extension.sourceInfo?.source || null,
+        ...(extension.sourceInfo?.source ? { source: extension.sourceInfo.source } : {}),
+        ...(extension.sourceInfo?.scope ? { scope: extension.sourceInfo.scope } : {}),
+        ...(extension.sourceInfo?.origin ? { origin: extension.sourceInfo.origin } : {}),
       })),
-      errors: (extensionsResult.errors || []).map(error => ({ path: error.path, error: publicError(error.error) })),
-      skills: skills.map(skill => ({
+      errors: extensionErrors,
+      extensionDiagnostics: extensionErrors,
+      skills: (skillState.skills || []).map(skill => ({
         name: skill.name,
         description: skill.description,
         path: skill.filePath,
-        source: skill.sourceInfo?.source || null,
+        ...(skill.sourceInfo?.source ? { source: skill.sourceInfo.source } : {}),
+        ...(skill.sourceInfo?.scope ? { scope: skill.sourceInfo.scope } : {}),
+        ...(skill.sourceInfo?.origin ? { origin: skill.sourceInfo.origin } : {}),
         disableModelInvocation: !!skill.disableModelInvocation,
       })),
+      skillDiagnostics,
       prompts: resourceLoader.getPrompts().prompts.length,
     };
   }
 
   recordRuntimeError(error) {
-    this.runtime = { loadedAt: new Date().toISOString(), extensions: [], errors: [{ path: "<pi-configuration>", error: publicError(error) }], skills: [], prompts: 0 };
+    this.runtime = { loadedAt: new Date().toISOString(), extensions: [], errors: [{ path: "<pi-configuration>", error: publicError(error) }], extensionDiagnostics: [{ path: "<pi-configuration>", error: publicError(error) }], skills: [], skillDiagnostics: [], prompts: 0 };
   }
 
   async state(options) {
-    const resolved = await this.resolve(undefined, options);
+    const resolved = await this.resolve(effectivePiConfig(), options);
     return {
       config: resolved.piConfig,
       profile: resolved.profile,

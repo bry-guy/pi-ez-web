@@ -2,7 +2,7 @@
 // by the web UI. Session state is still path-based; Git is never inferred from a
 // stale session branch binding.
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { slug } from "./config.js";
@@ -11,6 +11,21 @@ export const MAIN_BRANCH = "main";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function gitLogged(cwd, args, report) {
+  const command = `git ${args.join(" ")}`;
+  const startedAt = Date.now();
+  report?.({ type: "process_start", phase: "git", command, cwd, message: `Running ${command}.` });
+  try {
+    const stdout = git(cwd, ...args);
+    report?.({ type: "process_end", phase: "git", command, cwd, stream: "stdout", output: stdout, exit: 0, durationMs: Date.now() - startedAt, message: `${command} completed.` });
+    return stdout;
+  } catch (error) {
+    const stderr = String(error?.stderr || error?.stdout || error?.message || "").trim();
+    report?.({ type: "process_end", phase: "git", command, cwd, stream: "stderr", output: stderr, exit: Number.isFinite(error?.status) ? error.status : 1, durationMs: Date.now() - startedAt, message: `${command} failed.` });
+    throw error;
+  }
 }
 
 export function isGitRepo(dir) {
@@ -69,7 +84,38 @@ export function mainExternalWorktree(repoPath, primaryBranch = defaultBranch(rep
 // an upstream, fast-forward it after fetching. Callers use this at
 // branch-creation and merge boundaries, never as an implicit session-open side
 // effect.
-export function prepareMain(repoPath, { fetch = true, primaryBranch = null } = {}) {
+function runGitProcess(cwd, args, report) {
+  return new Promise((resolve, reject) => {
+    const command = `git ${args.join(" ")}`;
+    const startedAt = Date.now();
+    report?.({ type: "process_start", phase: "git", command, cwd, message: `Running ${command}.` });
+    const child = spawn("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => {
+      const value = String(chunk);
+      stdout += value;
+      report?.({ type: "process_output", phase: "git", command, cwd, stream: "stdout", output: value });
+    });
+    child.stderr.on("data", chunk => {
+      const value = String(chunk);
+      stderr += value;
+      report?.({ type: "process_output", phase: "git", command, cwd, stream: "stderr", output: value });
+    });
+    child.on("error", error => {
+      report?.({ type: "process_end", phase: "git", command, cwd, stream: "stderr", output: stderr || error.message, exit: 1, durationMs: Date.now() - startedAt, message: `${command} failed.` });
+      reject(Object.assign(error, { stderr, stdout, status: 1 }));
+    });
+    child.on("close", code => {
+      const exit = typeof code === "number" ? code : 1;
+      report?.({ type: "process_end", phase: "git", command, cwd, stream: exit === 0 ? "stdout" : "stderr", output: exit === 0 ? stdout : stderr || stdout, exit, durationMs: Date.now() - startedAt, message: exit === 0 ? `${command} completed.` : `${command} failed.` });
+      if (exit === 0) resolve(stdout);
+      else reject(Object.assign(new Error(`${command} failed`), { stderr, stdout, status: exit }));
+    });
+  });
+}
+
+export function prepareMain(repoPath, { fetch = true, primaryBranch = null, report = null } = {}) {
   primaryBranch ||= defaultBranch(repoPath);
   const external = mainExternalWorktree(repoPath, primaryBranch);
   if (external) throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external", workspacePath: external.path });
@@ -78,29 +124,29 @@ export function prepareMain(repoPath, { fetch = true, primaryBranch = null } = {
   if (mainStatus.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: mainStatus.error });
   if (mainStatus.dirty) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
   if (branch !== primaryBranch) {
-    try { execFileSync("git", ["switch", primaryBranch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    try { gitLogged(repoPath, ["switch", primaryBranch], report); }
     catch (error) { throw gitFailure("git_switch_failed", error); }
   }
   const upstream = branchUpstream(repoPath, primaryBranch);
   if (!upstream || !fetch) return { branch: primaryBranch, upstream, fetched: false, fastForwarded: false };
   const remote = upstream.split("/")[0];
   try {
-    execFileSync("git", ["fetch", "--prune", remote], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    gitLogged(repoPath, ["fetch", "--prune", remote], report);
   } catch (error) { throw gitFailure("main_fetch_failed", error); }
   try {
     const before = currentHead(repoPath);
-    execFileSync("git", ["merge", "--ff-only", upstream], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    gitLogged(repoPath, ["merge", "--ff-only", upstream], report);
     return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
   } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
 }
 
-export function pushWorkspace(workspacePath) {
+export function pushWorkspace(workspacePath, { report = null } = {}) {
   const branch = currentBranch(workspacePath);
   if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
   try {
     const upstream = branchUpstream(workspacePath, branch);
     const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
-    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: execFileSync("git", args, { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: gitLogged(workspacePath, args, report), stderr: "" };
   } catch (error) { throw gitFailure("git_push_failed", error); }
 }
 
@@ -119,6 +165,30 @@ export function deleteLocalBranch(repoPath, branch, primaryBranch = defaultBranc
   if (branch === primaryBranch) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
   try { return execFileSync("git", ["branch", "-D", branch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
   catch (error) { throw gitFailure("branch_delete_failed", error); }
+}
+
+export async function prepareMainAsync(repoPath, { fetch = true, primaryBranch = null, report = null } = {}) {
+  primaryBranch ||= defaultBranch(repoPath);
+  const external = mainExternalWorktree(repoPath, primaryBranch);
+  if (external) throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external", workspacePath: external.path });
+  const branch = currentBranch(repoPath);
+  const mainStatus = dirtyState(repoPath);
+  if (mainStatus.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: mainStatus.error });
+  if (mainStatus.dirty) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
+  if (branch !== primaryBranch) {
+    try { await runGitProcess(repoPath, ["switch", primaryBranch], report); }
+    catch (error) { throw gitFailure("git_switch_failed", error); }
+  }
+  const upstream = branchUpstream(repoPath, primaryBranch);
+  if (!upstream || !fetch) return { branch: primaryBranch, upstream, fetched: false, fastForwarded: false };
+  const remote = upstream.split("/")[0];
+  try { await runGitProcess(repoPath, ["fetch", "--prune", remote], report); }
+  catch (error) { throw gitFailure("main_fetch_failed", error); }
+  try {
+    const before = currentHead(repoPath);
+    await runGitProcess(repoPath, ["merge", "--ff-only", upstream], report);
+    return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
+  } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
 }
 
 export function isDirty(dir) {
@@ -344,7 +414,7 @@ function worktreePathFor(root, projectId, branch) {
 // Ensure a workspace (worktree) exists for `branch`; create a new branch from
 // `fromRef` when it does not exist. The main branch remains checkout-only.
 // Existing branch-only checkouts are observed and reused rather than moved.
-export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef, primaryBranch = defaultBranch(repoPath) }) {
+export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef, primaryBranch = defaultBranch(repoPath), report = null }) {
   branch = validateBranchName(branch);
   if (branch === primaryBranch) {
     throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
@@ -355,9 +425,9 @@ export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fro
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   const branches = listBranches(repoPath);
   if (branches.includes(branch)) {
-    git(repoPath, "worktree", "add", wt, branch);
+    gitLogged(repoPath, ["worktree", "add", wt, branch], report);
   } else {
-    git(repoPath, "worktree", "add", "-b", branch, wt, fromRef || "HEAD");
+    gitLogged(repoPath, ["worktree", "add", "-b", branch, wt, fromRef || "HEAD"], report);
   }
   return wt;
 }

@@ -1,3 +1,4 @@
+import { appendOperationEvent, completeOperation, completeOperationSnapshot } from "./operations.js";
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const JH = { "content-type": "application/json" };
@@ -35,18 +36,18 @@ export const api = {
   authInput: (id, promptId, value) => fetch(`/api/auth-flows/${encodeURIComponent(id)}/input`, { method: "POST", headers: JH, body: JSON.stringify({ promptId, value }) }).then(j),
   authCancel: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
-  syncSession: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  syncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: value => {
     const body = typeof value === "string" ? { repoPath: value } : (value || {});
     return fetch("/api/projects", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
   },
-  newProjectSession: (projectId, options = {}) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: JH, body: JSON.stringify(options || {}) }).then(j),
+  newProjectSession: (projectId, options = {}) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
   forkSession: (id, name = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ name }) }).then(j),
-  branchSession: (id, options = {}) => fetch(`/api/sessions/${encodeURIComponent(id)}/branch-context`, { method: "POST", headers: JH, body: JSON.stringify(options || {}) }).then(j),
+  branchSession: (id, options = {}) => fetch(`/api/sessions/${encodeURIComponent(id)}/branch-context`, { method: "POST", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
   mergeBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/merge-local`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
-  pushBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  pushBranch: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   deleteBranch: (projectId, branch, options = {}) => fetch(`/api/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: JH, body: JSON.stringify(options || {}) }).then(j),
   repos: () => fetch("/api/repos").then(j),
   repositorySources: () => fetch("/api/repository-sources").then(j),
@@ -84,19 +85,25 @@ export const api = {
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
   command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
   exportSession: (id, format = "html") => `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
-  hook: (id, name) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  hook: (id, name, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   settings: (defaultModel, reposRoot) => {
     const body = {};
     if (defaultModel !== undefined) body.defaultModel = defaultModel;
     if (reposRoot !== undefined) body.reposRoot = reposRoot;
     return fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(body) }).then(j);
   },
-  settingsPatch: patch => fetch("/api/settings", { method: "POST", headers: JH, body: JSON.stringify(patch || {}) }).then(j),
-  close: (id) => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
+  settingsPatch: patch => {
+    const operationId = patch?.operationId;
+    return fetch("/api/settings", { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(patch || {}) }).then(j);
+  },
+  close: (id, operationId = null, kind = "session") => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify({ ...(operationId ? { operationId } : {}), kind }) }).then(j),
 };
 
-export async function refreshState() {
-  const s = await api.state();
+let stateRefreshPromise = null;
+export function refreshState() {
+  if (stateRefreshPromise) return stateRefreshPromise;
+  const request = (async () => {
+    const s = await api.state();
   const active = findSessionInState(s, store.activeKey());
   store.set({
     projects: s.projects,
@@ -124,7 +131,14 @@ export async function refreshState() {
     const transcript = store.state.transcripts[chat.id] ||= { records: [], streaming: false, seq: -1 };
     transcript.streaming = !!chat.streaming;
   }
-  store.notify("transcript");
+    store.notify("transcript");
+  })();
+  stateRefreshPromise = request;
+  request.then(
+    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
+    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
+  );
+  return request;
 }
 
 function seedStreaming(nodes) {
@@ -167,8 +181,12 @@ async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
   }
 }
 
-export async function openTranscript(id, { scrollToLatest = true } = {}) {
+export function transcriptLoading(id) { return loading.has(id); }
+
+export async function openTranscript(id, { scrollToLatest = true, operation = null } = {}) {
   if (!id || loading.has(id)) return;
+  const startedAt = Date.now();
+  operation && appendOperationEvent(operation.id, { type: "request", message: `GET /api/sessions/${id}/transcript` });
   loading.add(id);
   buffers.set(id, []);
   try {
@@ -189,7 +207,12 @@ export async function openTranscript(id, { scrollToLatest = true } = {}) {
     for (const evt of buffers.get(id) || []) {
       if (evt.seq > snapshotSeq) applyEvent(evt, true);
     }
+    if (operation) {
+      appendOperationEvent(operation.id, { type: "result", message: `Loaded ${records.length} transcript records in ${Date.now() - startedAt}ms.` });
+      completeOperation(operation, { ok: true, httpStatus: 200 });
+    }
   } catch (err) {
+    if (operation) completeOperation(operation, {}, err);
     store.setError(`Could not load transcript: ${err.error || err.message || err}`);
   } finally {
     buffers.delete(id);
@@ -299,6 +322,14 @@ function tOf(id) {
 function byId(records, id) { return records.find(r => r.id === id); }
 
 export function applyEvent(evt, replay = false) {
+  if (evt.type === "operation_log") {
+    appendOperationEvent(evt.operationId, evt.event);
+    return;
+  }
+  if (evt.type === "operation_complete") {
+    completeOperationSnapshot(evt.operation);
+    return;
+  }
   const t = tOf(evt.sessionId);
   const seq = Number(evt.seq);
   if (Number.isFinite(seq)) {

@@ -529,11 +529,14 @@ pi-context-meter { display: block; padding: 0 13px; }
   font: 11.5px var(--mono);
 }
 .settings-feedback.error { border-color: var(--red); background: color-mix(in oklch, var(--red) 10%, var(--surface)); color: var(--red); }
-.pi-skill-list { margin-top: 8px; color: var(--muted); font-size: 11px; }
-.pi-skill-list summary { cursor: pointer; color: var(--accent); }
-.pi-skill-list ul { display: grid; gap: 4px; margin: 7px 0 0; padding-left: 18px; }
-.pi-skill-list li { display: flex; gap: 8px; min-width: 0; }
-.pi-skill-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-loaded-list { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.pi-loaded-list summary { cursor: pointer; color: var(--accent); }
+.pi-resource-scroll { max-height: 190px; overflow: auto; margin-top: 7px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); scrollbar-gutter: stable; }
+.pi-resource-scroll ul { display: grid; gap: 6px; margin: 0; padding-left: 17px; }
+.pi-resource-scroll li { display: grid; grid-template-columns: minmax(90px, max-content) minmax(0, 1fr); gap: 2px 8px; min-width: 0; }
+.pi-resource-scroll li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.pi-resource-scroll li small { grid-column: 1 / -1; color: var(--faint); font-family: var(--mono); overflow-wrap: anywhere; }
+.pi-resource-empty { color: var(--faint); font-family: var(--mono); }
 .settings-action:not(:disabled):hover, .settings-action:not(:disabled):focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .settings-action.quiet { background: var(--surface); color: var(--muted); }
 .settings-save { background: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 42%, var(--border)); }
@@ -882,7 +885,7 @@ body.modal-open .scrollable { overflow: hidden; }
 .workspace-error { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font: 11px var(--mono); }
 .workspace-section .hook-result { position: static; width: auto; max-height: 260px; margin-top: 10px; }
 
-/* operation modal (hooks / Git commands) */
+/* truthful operation log modal */
 .operation-scrim {
   position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
   overflow-y: auto; overscroll-behavior: contain; padding: 22px; background: oklch(0.15 0.02 255 / .68);
@@ -970,6 +973,7 @@ body.modal-open .scrollable { overflow: hidden; }
    rounded corners, and elevation provide the hierarchy instead. */
 *:not(button), *::before, *::after { border: 0 !important; }
 /* Keep modal controls visibly button-like after the flat chrome reset. */
+.pi-resource-scroll { border: 1px solid var(--border) !important; }
 .session-picker .settings-action, .session-picker .settings-save,
 .session-picker .branch-picker-trigger, .session-picker .branch-option, .session-picker .branch-new-option,
 .operation-modal .confirm-back, .confirm-modal .confirm-back, .confirm-modal .confirm-cta,

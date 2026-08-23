@@ -28,6 +28,7 @@ const DEFAULTS = {
   },
   pi: {
     profile: null, // local profile dir/settings.json or HTTPS settings URL
+    profileSource: "auto", // auto | explicit | disabled
     packages: [], // additional Pi package sources
     extensions: [], // additional package sources or server-local extension paths
   },
@@ -75,13 +76,21 @@ export function normalizePiConfig(value, { strict = false } = {}) {
   if (value == null) return { ...DEFAULTS.pi };
   if (typeof value !== "object" || Array.isArray(value)) return invalid("Pi configuration must be an object.");
   if (value.profile !== undefined && value.profile !== null && typeof value.profile !== "string") return invalid("Pi profile must be a path or HTTPS URL.");
+  if (value.profileSource !== undefined && !["auto", "explicit", "disabled"].includes(value.profileSource)) return invalid("Pi profile source must be auto, explicit, or disabled.");
   for (const key of ["packages", "extensions"]) {
     if (value[key] !== undefined && (!Array.isArray(value[key]) || value[key].some(entry => typeof entry !== "string"))) {
       return invalid(`Pi ${key} must be an array of strings.`);
     }
   }
+  const profile = typeof value.profile === "string" && value.profile.trim() ? value.profile.trim() : null;
+  const profileSource = value.profileSource === "disabled"
+    ? "disabled"
+    : value.profileSource === "auto" || !profile
+      ? "auto"
+      : "explicit";
   return {
-    profile: typeof value.profile === "string" && value.profile.trim() ? value.profile.trim() : null,
+    profile,
+    profileSource,
     packages: [...new Set((value.packages || []).map(entry => entry.trim()).filter(Boolean))],
     extensions: [...new Set((value.extensions || []).map(entry => entry.trim()).filter(Boolean))],
   };
@@ -240,6 +249,23 @@ export function githubConfig(cfg = loadConfig()) {
     clientId: process.env.PI_WEB_GITHUB_CLIENT_ID || configured.clientId || null,
     owner: process.env.PI_WEB_GITHUB_OWNER || configured.owner || null,
   };
+}
+
+function githubAccountLogin() {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(appHome(), "github-auth.json"), "utf8"));
+    return typeof value?.account?.login === "string" ? value.account.login : null;
+  } catch { return null; }
+}
+
+export function effectivePiConfig(cfg = loadConfig()) {
+  const pi = normalizePiConfig(cfg?.pi);
+  if (pi.profileSource === "auto") {
+    const owner = githubConfig(cfg).owner || githubAccountLogin();
+    const safeOwner = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(String(owner || "")) ? owner : null;
+    pi.profile = safeOwner ? `https://github.com/${safeOwner}/dotfiles` : null;
+  }
+  return pi;
 }
 
 export function worktreeRoot(cfg) {

@@ -23,12 +23,15 @@ export function findProjectByWorkspace(wsPath) {
 
 // Close one session. This is archival only and is allowed during a turn;
 // stopping a turn remains an explicit user action.
-export async function closeSession(_sup, hub, sessionId) {
+export async function closeSession(_sup, hub, sessionId, { report = null } = {}) {
+  report?.({ type: "phase", phase: "archive-read", message: "Reading the archived-session marker." });
   const closed = loadClosed();
   closed.add(sessionId);
+  report?.({ type: "phase", phase: "archive-write", message: "Writing the archived-session marker." });
   saveClosed(closed);
+  report?.({ type: "phase", phase: "session-event", message: "Emitting the session-closed event." });
   hub.emit(sessionId, "session_closed", { sessionId });
-  return { closed: true };
+  return { closed: true, archived: true };
 }
 
 function failure(code, extra = {}) {

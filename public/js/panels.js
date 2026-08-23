@@ -142,11 +142,15 @@ class PiSettings extends HTMLElement {
     if (store.state.settings?.defaultRepositorySource?.editable !== false) patch.defaultRepositorySource = this.querySelector("[data-setting='defaultRepositorySource']")?.value;
     if (store.state.settings?.githubOwner?.editable !== false) patch.githubOwner = this.querySelector("[data-setting='githubOwner']")?.value.trim() || null;
     if (!Object.keys(patch).length) return;
+    const autoProfile = patch.githubOwner !== undefined && store.state.piConfiguration?.config?.profileSource === "auto";
+    const operation = autoProfile ? beginOperation("pi-profile", "Load GitHub dotfiles", "", "Request started.") : null;
     try {
-      await api.settingsPatch(patch);
+      const result = await api.settingsPatch({ ...patch, ...(operation ? { operationId: operation.id, activeSessionId: store.activeKey() } : {}) });
+      if (operation) completeOperation(operation, result);
       await refreshState();
       this.setFeedback("Repository settings saved.");
     } catch (err) {
+      if (operation) completeOperation(operation, {}, err);
       const message = err.error === "invalid_github_owner"
         ? "Enter a valid GitHub user or organization name."
         : `Repository settings failed: ${err.error || err.message || err}`;
@@ -156,8 +160,13 @@ class PiSettings extends HTMLElement {
   async savePiConfiguration() {
     const lines = selector => (this.querySelector(selector)?.value || "")
       .split("\n").map(value => value.trim()).filter(Boolean);
+    const current = store.state.piConfiguration?.config || {};
+    const profile = this.querySelector("[data-setting='piProfile']")?.value.trim() || null;
     const pi = {
-      profile: this.querySelector("[data-setting='piProfile']")?.value.trim() || null,
+      profile,
+      profileSource: current.profileSource === "auto" && profile === (current.profile || "")
+        ? "auto"
+        : profile ? "explicit" : "disabled",
       packages: lines("[data-setting='piPackages']"),
       extensions: lines("[data-setting='piExtensions']"),
     };
@@ -169,15 +178,18 @@ class PiSettings extends HTMLElement {
     await this.applyPiConfiguration(pi, "refreshed");
   }
   async applyPiConfiguration(pi, verb) {
+    const operation = beginOperation("pi-profile", verb === "refreshed" ? "Refresh Pi resources" : "Reload Pi resources", "", "Request started.");
     try {
-      const result = await api.settingsPatch({ pi });
-      await refreshState();
+      const result = await api.settingsPatch({ pi, operationId: operation.id, activeSessionId: store.activeKey() });
+      completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh Pi resource state: ${err.message || err}`));
       const profileError = result.piConfiguration?.profile?.error;
       const message = profileError
         ? `Pi configuration ${verb}, but the profile could not be loaded: ${profileError}`
         : `Pi profile ${verb}. Packages and skills reload when a session loads.`;
       this.setFeedback(message, profileError ? "error" : "success");
     } catch (err) {
+      completeOperation(operation, {}, err);
       const message = err.error === "pi_configuration_busy"
         ? "Stop active sessions before changing Pi extensions."
         : `Pi configuration failed: ${err.error || err.message || err}`;
@@ -342,19 +354,32 @@ class PiSettings extends HTMLElement {
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
     const profileStatus = ["loaded", "cached"].includes(piState.profile?.status)
-      ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}`
+      ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}${piState.profile.ref ? ` @ ${piState.profile.ref}` : ""}${piState.profile.commit ? ` · ${piState.profile.commit.slice(0, 12)}` : ""}`
       : piState.profile?.status === "error"
         ? `Profile error: ${piState.profile.error}`
-        : "Using the deployment's Pi settings";
+        : piConfig.profileSource === "auto"
+          ? "Automatic GitHub dotfiles profile"
+          : "Using the deployment's Pi settings";
+    const loadedExtensions = Array.isArray(piState.runtime?.extensions) ? piState.runtime.extensions : [];
     const loadedSkills = Array.isArray(piState.runtime?.skills) ? piState.runtime.skills : [];
-    const skillList = loadedSkills.length
-      ? `<details class="pi-skill-list"><summary>Loaded skills (${loadedSkills.length})</summary><ul>${loadedSkills.map(skill => `<li><strong>${esc(skill.name || "Unnamed skill")}</strong><span>${esc(skill.path || "")}</span></li>`).join("")}</ul></details>`
+    const resourceRows = (items, empty) => items.length
+      ? `<ul>${items.map(item => `<li><strong>${esc(item.name || "Unnamed resource")}</strong><span>${esc(item.path || "")}</span><small>${esc([item.source, item.scope, item.origin].filter(Boolean).join(" · "))}</small></li>`).join("")}</ul>`
+      : `<div class="pi-resource-empty">${esc(empty)}</div>`;
+    const extensionList = piState.runtime
+      ? `<details class="pi-loaded-list"><summary>Loaded extensions (${loadedExtensions.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedExtensions, "No extensions loaded.")}</div></details>`
+      : "";
+    const skillList = piState.runtime
+      ? `<details class="pi-loaded-list"><summary>Loaded skills (${loadedSkills.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedSkills, "No skills loaded.")}</div></details>`
       : "";
     const skillCount = Array.isArray(piState.runtime?.skills) ? loadedSkills.length : (piState.runtime?.skills || 0);
     const runtimeSummary = piState.runtime
-      ? `${piState.runtime.extensions?.length || 0} extension${piState.runtime.extensions?.length === 1 ? "" : "s"}, ${skillCount} skill${skillCount === 1 ? "" : "s"}, and ${piState.runtime.prompts || 0} prompts loaded for the last attached session.`
-      : "Resources load in the background when a session is first opened.";
-    const piProblems = [...(piState.warnings || []), ...(piState.runtime?.errors || []).map(error => `${error.path}: ${error.error}`)];
+      ? `${loadedExtensions.length} extension${loadedExtensions.length === 1 ? "" : "s"}, ${skillCount} skill${skillCount === 1 ? "" : "s"}, and ${piState.runtime.prompts || 0} prompts loaded${piState.runtime.loadedAt ? ` at ${new Date(piState.runtime.loadedAt).toLocaleTimeString()}` : ""}.`
+      : "Resources load when a session runtime is attached.";
+    const piProblems = [
+      ...(piState.warnings || []),
+      ...(piState.runtime?.errors || []).map(error => `${error.path}: ${error.error}`),
+      ...(piState.runtime?.skillDiagnostics || []).map(error => `${error.path || "skill"}: ${error.message}`),
+    ];
     const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     const defaultThinkingLevel = store.state.defaultThinkingLevel || "medium";
     const feedback = this.feedback
@@ -375,7 +400,7 @@ class PiSettings extends HTMLElement {
         <div class="settings-section-title">Pi profile & extensions</div>
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Profile settings</div><div class="sr-sub">Optional profile directory, settings.json path, or HTTPS URL. A GitHub repository URL reads <span class="settings-mono">.pi/agent/settings.json</span>. Credentials and transcripts stay local to this deployment.</div></div>
+            <div class="sr-main"><div class="sr-title">Profile settings</div><div class="sr-sub">Leave this automatic to use the configured GitHub user's <span class="settings-mono">dotfiles</span> repository. Explicit paths and HTTPS URLs override it. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and trusted resources.</div></div>
             <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(piConfig.profile || "")}" placeholder="https://github.com/owner/dotfiles">
           </div>
           <div class="settings-row settings-path-row">
@@ -386,7 +411,7 @@ class PiSettings extends HTMLElement {
             <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">One package source or server-local extension path per line. Relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div>
-          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
+          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${extensionList}${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
           <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div></div>
         </div>
       </section>
@@ -729,15 +754,17 @@ class PiSessionPicker extends HTMLElement {
     const id = this.picker()?.sourceSessionId;
     if (!id || this.busy || this.syncBusy) return;
     this.syncBusy = true;
-    const operation = beginOperation("sync", "Synchronize this conversation", "pi-sync enroll", "Preparing conversation…");
+    const operation = beginOperation("sync", "Synchronize this conversation", "", "Request started.");
     let result = null;
     try {
-      result = await api.syncSession(id);
-      await refreshState();
-      const stdout = result.stdout || (result.created === false
-        ? "Conversation is already synchronized."
-        : "Conversation synchronized successfully.");
-      completeOperation(operation, { ...result, stdout });
+      result = await api.syncSession(id, operation.id);
+      const source = store.findAnySession(id);
+      if (source) {
+        Object.assign(source, { synchronized: result.synchronized, syncState: result.syncState, syncError: result.syncError || null });
+        store.notify("state");
+      }
+      completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh sync state: ${err.message || err}`));
     } catch (err) {
       const displayError = Object.assign(new Error(syncErrorMessage(err)), err);
       completeOperation(operation, result || {}, displayError);
@@ -756,7 +783,7 @@ class PiSessionPicker extends HTMLElement {
       const id = e.target.closest("[data-act]")?.dataset.id;
       if (project && id && !this.busy && !this.syncBusy) {
         store.state.openTree[project.id] = true;
-        selectSession(project.id, id);
+        selectSession(project.id, id, { showOperation: true });
       }
       return;
     }
@@ -827,20 +854,21 @@ class PiSessionPicker extends HTMLElement {
     this.busy = true;
     this.busyLabel = needsPrimaryFetch ? `Fetching ${primary}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Forking…";
     store.set({ sessionPickerError: null });
-    const fetchOperation = needsPrimaryFetch
-      ? beginOperation("fetch-main", `Fetch ${primary}`, "git fetch --prune origin", `Preparing ${primary}…`)
-      : null;
+    const operation = beginOperation(
+      mode === "new" ? "create-session" : mode === "switch" ? "switch-session" : "fork-session",
+      mode === "new" ? "Create session" : mode === "switch" ? "Switch session" : "Fork session",
+      "",
+      needsPrimaryFetch ? `Waiting for ${primary} preparation…` : "Request started.",
+    );
     let result = null;
     try {
-      const body = { branch, baseBranch, ...(mode === "new" || enteredName ? { name: enteredName || null } : {}) };
+      const body = { branch, baseBranch, operationId: operation.id, ...(mode === "new" || enteredName ? { name: enteredName || null } : {}) };
       result = mode === "new"
         ? await api.newProjectSession(project.id, body)
         : await api.branchSession(picker.sourceSessionId, { ...body, mode });
-      await refreshState();
-      const refreshedProject = store.state.projects.find(item => item.id === project.id);
-      if (refreshedProject && result.id && !store.findSession(result.id, refreshedProject.sessions)) {
-        const context = (refreshedProject.contexts || []).find(item => item.branch === branch);
-        refreshedProject.sessions.unshift({ id: result.id, title: body.name || "New session", contextId: context?.id || null, branch, workspacePath: context?.path || null, model: store.state.effectiveDefaultModel, when: "now", updatedAt: new Date().toISOString(), activityAt: new Date().toISOString(), streaming: false, children: [] });
+      if (result?.id && mode === "new" && !store.findSession(result.id, project.sessions)) {
+        const context = (project.contexts || []).find(item => item.branch === (result.branch || branch));
+        project.sessions.unshift({ id: result.id, title: body.name || "New session", contextId: result.contextId || context?.id || null, branch: result.branch || branch, workspacePath: result.workspacePath || context?.path || null, model: store.state.effectiveDefaultModel, when: "now", updatedAt: new Date().toISOString(), activityAt: new Date().toISOString(), streaming: false, children: [] });
         store.notify("state");
       }
       const targetId = result?.id || picker.sourceSessionId;
@@ -848,31 +876,16 @@ class PiSessionPicker extends HTMLElement {
       store.set({ sessionPicker: null, sessionPickerError: null });
       store.state.openTree[project.id] = true;
       selectSession(project.id, targetId);
-      if (fetchOperation) {
-        const fetchOutput = [
-          result.stdout,
-          `${primary} fetched and prepared successfully.`,
-          result.setup?.stdout,
-        ].filter(Boolean).join("\n");
-        completeOperation(fetchOperation, { ...result, stdout: fetchOutput });
-      } else if (result.setup) {
-        showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
-      }
+      completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh session state: ${err.message || err}`));
     } catch (err) {
-      if (fetchOperation) {
-        const messages = {
-          no_such_base_branch: "That base branch no longer exists.",
-          session_streaming: "Wait for the current response to finish before switching.",
-          same_branch: "Choose a different branch.",
-        };
-        const displayError = Object.assign(new Error(messages[err.error] || gitErrorMessage(err)), err);
-        completeOperation(fetchOperation, result || {}, displayError);
-      }
       const messages = {
         no_such_base_branch: "That base branch no longer exists.",
         session_streaming: "Wait for the current response to finish before switching.",
         same_branch: "Choose a different branch.",
       };
+      const displayError = Object.assign(new Error(messages[err.error] || gitErrorMessage(err)), err);
+      completeOperation(operation, result || {}, displayError);
       store.set({ sessionPickerError: messages[err.error] || gitErrorMessage(err) });
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
@@ -882,12 +895,12 @@ class PiSessionPicker extends HTMLElement {
     if (!id || this.busy) return;
     this.busy = true;
     this.busyLabel = "Pushing…";
-    const operation = beginOperation("push", "Push", "git push");
+    const operation = beginOperation("push", "Push", "", "Request started.");
     let result = null;
     try {
-      result = await api.pushBranch(id);
-      await refreshState();
+      result = await api.pushBranch(id, operation.id);
       completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh branch state: ${err.message || err}`));
     } catch (err) {
       completeOperation(operation, result || {}, err);
       store.set({ sessionPickerError: gitErrorMessage(err) });
@@ -899,12 +912,12 @@ class PiSessionPicker extends HTMLElement {
     if (!id || !name || this.hookBusy) return;
     this.hookBusy = true;
     const title = name ? `${name[0].toUpperCase()}${name.slice(1)}` : "Hook";
-    const operation = beginOperation("hook", title, `Configured ${name} hook`);
+    const operation = beginOperation("hook", title, "", "Request started.");
     let result = null;
     try {
-      result = await api.hook(id, name);
-      await refreshState();
+      result = await api.hook(id, name, operation.id);
       completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh hook state: ${err.message || err}`));
     } catch (err) {
       completeOperation(operation, result || {}, err);
     } finally { this.hookBusy = false; this.render(); }
@@ -1078,9 +1091,9 @@ class PiRepoPicker extends HTMLElement {
       store.set({ repoPickerOpen: false, repoPickerSource: null });
       await refreshState();
       store.state.openTree[result.id] = true;
-      selectSession(result.id, result.sessionId);
+      selectSession(result.id, result.sessionId, { showOperation: true });
       store.set({ hookResult: null, workspaceSettingsOpen: result.setup && !result.setup.ok });
-      if (result.setup) showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
+      if (result.setup) showCompletedOperation("hook", "Setup", result.setup);
     } catch (err) {
       this.connecting = false;
       const messages = {
@@ -1179,7 +1192,18 @@ class PiRepoPicker extends HTMLElement {
       this.githubFlow = result.flow;
       if (["complete", "error", "cancelled"].includes(this.githubFlow.state)) {
         if (this.githubFlow.state === "complete") {
+          const accountLogin = this.githubFlow.account?.login;
+          const ownerUnset = !store.state.settings?.githubOwner?.value;
           this.githubFlow = null;
+          if (accountLogin && ownerUnset) {
+            const operation = beginOperation("pi-profile", "Load GitHub dotfiles", "", "Request started.");
+            try {
+              const profileResult = await api.settingsPatch({ githubOwner: accountLogin, operationId: operation.id, activeSessionId: store.activeKey() });
+              completeOperation(operation, profileResult);
+            } catch (error) {
+              completeOperation(operation, {}, error);
+            }
+          }
           await refreshState();
           this.loaded = false;
           this.errorMsg = null;
@@ -1300,6 +1324,10 @@ class PiRepoPicker extends HTMLElement {
 class PiOperation extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.timer = setInterval(() => {
+      if (store.state.operation?.status === "running") this.render();
+      else if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    }, 250);
     this.addEventListener("click", e => {
       const operation = store.state.operation;
       if (!operation || operation.status === "running") return;
@@ -1309,22 +1337,49 @@ class PiOperation extends HTMLElement {
     this.render();
   }
 
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  elapsed(operation) {
+    return ((operation.finishedAt || Date.now()) - operation.startedAt) / 1000;
+  }
+
+  formatEvent(item) {
+    const time = new Date(item.at || Date.now()).toLocaleTimeString([], { hour12: false });
+    const prefix = `[${time}]`;
+    if (item.type === "process_start") return `${prefix} $ ${item.command || "(command unavailable)"}${item.cwd ? `\\n    cwd: ${item.cwd}` : ""}`;
+    if (item.type === "process_output") return `${prefix} ${item.stream === "stderr" ? "stderr: " : ""}${item.output || ""}`;
+    if (item.type === "process_end") return `${prefix} ${item.message || "Process finished."} · exit ${item.exit ?? "unknown"} · ${item.durationMs ?? "?"}ms`;
+    return `${prefix} ${item.message || item.output || item.type || "Progress update."}`;
+  }
 
   render() {
     const operation = store.state.operation;
     if (!operation) { this.innerHTML = ""; return; }
     const running = operation.status === "running";
     const failed = operation.status === "error";
-    const status = running ? "Running…" : failed ? `Failed · exit ${operation.exit ?? 1}` : `Completed · exit ${operation.exit ?? 0}`;
-    const command = operation.command || "configured operation";
-    const terminal = [
-      `$ ${command}`,
-      operation.stdout || "",
-      operation.stderr ? `[stderr]\n${operation.stderr}` : "",
-      running ? "… running" : `\n[exit ${operation.exit ?? (failed ? 1 : 0)}]`,
-    ].filter(Boolean).join("\n");
-    this.innerHTML = `<div class="operation-scrim"><section class="operation-modal" role="dialog" aria-modal="true" aria-label="${esc(operation.title)}"><div class="operation-head"><div><div class="operation-title">${esc(operation.title)}</div><div class="operation-status ${failed ? "failed" : running ? "running" : "success"}" role="status">${esc(status)}</div></div><button class="ghost-btn" data-act="close-operation" aria-label="Close" ${running ? "disabled" : ""}>×</button></div><div class="operation-body"><div class="operation-command-label">Terminal output</div><pre class="operation-terminal" aria-live="polite">${esc(terminal)}</pre></div><div class="operation-actions"><button class="confirm-back" data-act="close-operation" ${running ? "disabled" : ""}>${running ? "Working…" : "Close"}</button></div></section></div>`;
+    const duration = `${this.elapsed(operation).toFixed(1)}s`;
+    const last = operation.events?.at(-1)?.message || (running ? "Waiting for the next progress update…" : "Finished.");
+    const status = running
+      ? `Running · ${duration} · ${last}`
+      : failed
+        ? `Failed · ${duration}${operation.httpStatus ? ` · HTTP ${operation.httpStatus}` : ""}`
+        : `Completed · ${duration}${operation.httpStatus ? ` · HTTP ${operation.httpStatus}` : ""}`;
+    const events = Array.isArray(operation.events) ? operation.events.map(item => this.formatEvent(item)) : [];
+    if (operation.command) events.unshift(`$ ${operation.command}`);
+    const hasProcessOutput = (operation.events || []).some(item => item.type === "process_output" || item.type === "process_end");
+    if (operation.stdout && !hasProcessOutput) events.push(operation.stdout);
+    if (operation.stderr && !hasProcessOutput) events.push(`stderr: ${operation.stderr}`);
+    const log = events.length ? events.join("\\n") : "No progress events were reported.";
+    const previous = this.querySelector(".operation-terminal");
+    const stickToBottom = !previous || previous.scrollHeight - previous.scrollTop - previous.clientHeight < 32;
+    const previousTop = previous?.scrollTop || 0;
+    this.innerHTML = `<div class="operation-scrim"><section class="operation-modal" role="dialog" aria-modal="true" aria-label="${esc(operation.title)}"><div class="operation-head"><div><div class="operation-title">${esc(operation.title)}</div><div class="operation-status ${failed ? "failed" : running ? "running" : "success"}" role="status">${esc(status)}</div></div><button class="ghost-btn" data-act="close-operation" aria-label="Close" ${running ? "disabled" : ""}>×</button></div><div class="operation-body"><div class="operation-command-label">Operation log</div><pre class="operation-terminal" aria-live="polite">${esc(log)}</pre></div><div class="operation-actions"><button class="confirm-back" data-act="close-operation" ${running ? "disabled" : ""}>${running ? "Working…" : "Close"}</button></div></section></div>`;
+    const next = this.querySelector(".operation-terminal");
+    if (next) next.scrollTop = stickToBottom ? next.scrollHeight : previousTop;
   }
 }
 
@@ -1354,7 +1409,7 @@ class PiConfirm extends HTMLElement {
     this.busy = true;
     this.busyLabel = c.type === "merge" ? `Fetching ${primary} and merging…` : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
     const operation = c.type === "merge" || c.type === "deleteBranch"
-      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, c.type === "merge" ? `git merge --no-ff --no-edit ${c.branch}${c.deleteAfter ? `\ngit branch -D ${c.branch}` : ""}` : `git branch -D ${c.branch}`)
+      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
       : null;
     let result = null;
     let followup = null;

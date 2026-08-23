@@ -40,6 +40,7 @@ test("Pi resource config normalizes a profile and unique package/extension sourc
     extensions: [" ./extensions/test.ts "],
   }), {
     profile: "https://github.com/bry-guy/dotfiles",
+    profileSource: "explicit",
     packages: ["npm:context-mode"],
     extensions: ["./extensions/test.ts"],
   });

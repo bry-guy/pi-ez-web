@@ -91,7 +91,14 @@ async function boot() {
       if (url === "/api/sessions/s1/sync" && options.method === "POST") {
         state.projects[0].sessions[0].synchronized = true;
         state.projects[0].sessions[0].syncState = "available";
-        return json({ ok: true, sessionId: "s1", created: true, synchronized: true, syncState: "available" });
+        state.projects[0].contexts[0].sessions[0].synchronized = true;
+        state.projects[0].contexts[0].sessions[0].syncState = "available";
+        const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-op";
+        return json({ ok: true, sessionId: "s1", created: true, synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Conversation synchronized successfully." }] } });
+      }
+      if (url.includes("/api/sessions/") && url.endsWith("/close") && options.method === "POST") {
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-close";
+        return json({ ok: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Session closed." }] } });
       }
       if (url === "/api/sessions/s1/commands") return json({ commands: [
         { name: "settings", description: "Open settings", source: "pi" },
@@ -102,7 +109,10 @@ async function boot() {
       if (url === "/api/sessions/s1/hooks/check" && options.method === "POST") return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "" });
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
-      if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
+      if (url.includes("/api/projects/") && url.endsWith("/sessions")) {
+        state.projects[0].sessions.unshift({ id: "s2", title: "Chat Name", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", model: "mock/fast", when: "now", streaming: false, children: [] });
+        return json({ id: "s2", projectId: "p1", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", operation: { id: options.headers?.["x-pi-operation-id"] || "test-create", status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Created session s2 on feature/from-picker." }] } });
+      }
       if (url === "/api/projects") return json({ id: "p2", sessionId: "s2" });
       if (url.includes("/api/projects/") && url.includes("/file?")) {
         const params = new URL(url, "http://pi-web.test").searchParams;
@@ -259,8 +269,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
-  assert.match(root.querySelector(".operation-title").textContent, /Fetch main/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /main fetched and prepared/);
+  assert.match(root.querySelector(".operation-title").textContent, /Create session/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /Created session s2/);
   root.querySelector("[data-act='close-operation']").click();
 
   root.querySelector("[data-act='repo-picker']").click();
@@ -303,6 +313,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.equal(root.querySelectorAll("pi-settings .pi-loaded-list").length, 2);
+  assert.match(root.querySelector("pi-settings .pi-resource-scroll").textContent, /context-mode|todo-discipline/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
   assert.match(root.querySelector("[data-setting='piPackages']").value, /npm:context-mode/);
   const refreshProfile = root.querySelector("pi-settings [data-act='refresh-pi-configuration']");
@@ -580,6 +592,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".confirm-modal"), null);
   assert.match(root.querySelector(".operation-title").textContent, /Close session/);
   assert.match(root.querySelector(".operation-terminal").textContent, /Session closed/);
+  assert.doesNotMatch(root.querySelector(".operation-terminal").textContent, /pi close/);
   root.querySelector("[data-act='close-operation']")?.click();
 
   dom.window.close();

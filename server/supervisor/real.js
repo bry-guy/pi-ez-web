@@ -218,7 +218,7 @@ export class RealSupervisor {
           error: error.error,
         }),
       });
-      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult);
+      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult, result.session.sessionId, cwd);
       return result;
     } catch (error) {
       const detail = errorDetails(error);
@@ -748,12 +748,23 @@ export class RealSupervisor {
     }
   }
 
-  async reloadPiConfiguration() {
+  async reloadPiConfiguration({ report = null, sessionId = null } = {}) {
     this.assertPiConfigurationReloadable();
+    report?.({ type: "phase", phase: "runtime-dispose", message: `Releasing ${this.live.size} idle Pi session runtime${this.live.size === 1 ? "" : "s"}.` });
     for (const st of this.live.values()) await this._disposeLiveState(st, "reload");
     this.live.clear();
     this.piConfiguration.invalidate();
-    return this.piConfiguration.state({ force: true });
+    report?.({ type: "phase", phase: "runtime-load", message: "Reloading Pi profile settings and resources." });
+    await this.piConfiguration.state({ force: true, report });
+    if (sessionId) {
+      try {
+        report?.({ type: "phase", phase: "runtime-attach", message: `Attaching the refreshed resource runtime for ${sessionId}.` });
+        await this._attachById(sessionId);
+      } catch (error) {
+        report?.({ type: "warning", phase: "runtime-attach", message: `The selected session was not reattached: ${publicError(error)}` });
+      }
+    }
+    return this.piConfiguration.state({ report });
   }
 
   piConfigurationState() { return this.piConfiguration.state(); }
