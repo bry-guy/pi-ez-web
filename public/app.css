@@ -703,7 +703,9 @@ aside.files.file-viewer {
 .session-picker-empty { padding: 18px 8px; color: var(--muted); font-size: 12px; text-align: center; }
 .session-picker-error { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font: 11px var(--mono); line-height: 1.45; }
 .session-picker .hook-result { position: static; width: auto; max-height: 260px; margin-top: 10px; }
-.session-picker-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 16px 16px; background: var(--surface-2); }
+.session-picker-actions { padding: 13px 16px 16px; background: var(--surface-2); }
+.session-picker-actions-heading { margin: 0 0 7px; }
+.session-picker-action-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ---------- modal ---------- */
 .scrim {

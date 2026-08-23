@@ -159,6 +159,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
   assert.equal(root.querySelector("[data-session-name]").value, "New session");
+  assert.match(root.querySelector(".session-picker-actions").textContent, /Session/);
+  assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")));
+  assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));
+  assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
+  assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='push-branch']"));
   root.querySelector("[data-act='toggle-branch-menu']").click();
   root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
