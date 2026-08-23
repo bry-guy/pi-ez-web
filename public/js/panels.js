@@ -768,9 +768,9 @@ class PiSessionPicker extends HTMLElement {
     if (!branch) { store.set({ sessionPickerError: "Enter a branch name." }); return; }
     if (mode !== "new" && branch === picker.currentBranch) return;
     const knownBranches = new Set([...(project.branches || []), ...(project.contexts || []).map(context => context.branch).filter(Boolean)]);
-    const needsPrimaryFetch = mode === "new" && !knownBranches.has(branch) && (picker.baseBranch || primary) === primary;
+    const preparesBranch = mode === "new" && !knownBranches.has(branch);
     this.busy = true;
-    this.busyLabel = needsPrimaryFetch ? `Fetching ${primary}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Forking…";
+    this.busyLabel = preparesBranch ? `Preparing ${branch}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Forking…";
     store.set({ sessionPickerError: null });
     try {
       const enteredName = String(picker.name || "").trim();
