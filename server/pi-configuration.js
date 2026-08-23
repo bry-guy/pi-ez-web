@@ -17,7 +17,7 @@ const MAX_PROFILE_SKILL_TOTAL = 512 * 1024;
 const MAX_PROFILE_SKILLS = 128;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
-const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--omit=dev"];
+const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--include=dev"];
 export const WEB_SUBAGENT_EXTENSION = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "extensions",
@@ -491,8 +491,9 @@ export class PiConfiguration {
       overlay.skills = unique([...(overlay.skills || []), ...materializeProfileSkills(location, profileSkills)]);
     }
     // Package setup runs in managed Git checkouts that may contain mise.toml.
-    // Use the image's system npm and avoid auto-installing peer dependency trees;
-    // an explicitly supplied profile npmCommand remains authoritative.
+    // Include dev tools because Git packages may build runtime files in prepare;
+    // legacy peer resolution avoids auto-installing Pi's host dependencies.
+    // An explicitly supplied profile npmCommand remains authoritative.
     if (!Object.hasOwn(overlay, "npmCommand")) overlay.npmCommand = [...DEFAULT_NPM_COMMAND];
     return { piConfig: clone(piConfig), profile, settings: overlay, inline, warnings };
   }
