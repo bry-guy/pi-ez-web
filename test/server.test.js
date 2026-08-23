@@ -399,6 +399,7 @@ test("project creation: first session on the checkout branch", async () => {
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.equal(p.branch, "main");
+  assert.equal(p.defaultBranch, "main");
   assert.deepEqual(p.workspaceStatus.main.sessions.map(session => session.id), [firstSessionId]);
   assert.equal(p.occupied, undefined);
   assert.equal(p.mode, undefined);

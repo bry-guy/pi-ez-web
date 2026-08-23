@@ -27,8 +27,28 @@ test("repo detection and branch listing", () => {
   assert.equal(ws.isGitRepo(repo), true);
   assert.equal(ws.isGitRepo(tmp), false);
   assert.equal(ws.currentBranch(repo), "main");
+  assert.equal(ws.defaultBranch(repo), "main");
   assert.deepEqual(ws.listBranches(repo), ["main"]);
   assert.deepEqual(ws.listRemoteBranches(repo), []);
+});
+
+test("master repositories use master as the primary checkout branch", () => {
+  const masterRepo = path.join(tmp, "master-repo");
+  const masterWorktrees = path.join(tmp, "master-worktrees");
+  fs.mkdirSync(masterRepo);
+  git(masterRepo, "init", "-b", "master");
+  git(masterRepo, "config", "user.email", "t@t");
+  git(masterRepo, "config", "user.name", "t");
+  fs.writeFileSync(path.join(masterRepo, "README.md"), "master\n");
+  git(masterRepo, "add", "-A");
+  git(masterRepo, "commit", "-m", "init");
+
+  assert.equal(ws.defaultBranch(masterRepo), "master");
+  assert.throws(() => ws.ensureWorkspace({ repoPath: masterRepo, worktreeRoot: masterWorktrees, projectId: "p-master", branch: "master" }), err => err?.code === "main_worktree_forbidden");
+  const feature = ws.ensureWorkspace({ repoPath: masterRepo, worktreeRoot: masterWorktrees, projectId: "p-master", branch: "feature/change" });
+  assert.equal(ws.currentBranch(masterRepo), "master");
+  assert.equal(ws.currentBranch(feature), "feature/change");
+  assert.equal(ws.contextStatus({ repoPath: masterRepo, workspacePath: masterRepo }).primaryBranch, "master");
 });
 
 test("remote branch listing preserves remote names and supports local mapping", () => {

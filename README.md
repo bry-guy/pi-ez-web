@@ -161,10 +161,12 @@ leaving the repository dialog open.
 
 The default local repository root is `$HOME/src`. The picker also accepts an
 absolute or `~/...` repository path directly. Existing Git worktrees are
-discovered in place. App-created non-main branches use worktrees; `main`
-normally uses the repository checkout. Creating a branch from main fetches and
-fast-forwards local main when possible; merging locally into main performs the
-same freshness and cleanliness checks. Push is explicit and never forced.
+discovered in place. The repository's primary branch (detected from
+`origin/HEAD`, the current `main`/`master` branch, or the available local
+branches) uses the repository checkout; app-created non-primary branches use
+worktrees. Creating a branch from the primary branch fetches and fast-forwards
+it when possible; merging locally into it performs the same freshness and
+cleanliness checks. Push is explicit and never forced.
 Project hooks are inherited from `projectHooks` and may be overridden per
 project with a `hooks` object, for example
 `"hooks": { "setup": "./script/install", "check": "./script/check" }`.

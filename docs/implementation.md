@@ -82,27 +82,29 @@ use locally served `marked` GFM parsing followed by DOMPurify sanitization;
 raw model HTML is not rendered. The composer discovers Pi slash commands and passes them to the web adapter,
 with `/settings`, `/name`, and same-branch `/fork` handled as first-class web
 actions. Transcript SSE remains contract version 1; REST state is contract
-version 5 and includes a capability marker so stale server processes produce a
-restart prompt.
+version 5 and includes capability markers for workspace and branch features.
 
 ## Invariants
 
-- A project is a configured repository. `main` normally uses the repository
-  checkout; app-created non-main branches use linked worktrees. Existing
-  externally-created contexts are discovered and remain usable.
+- A project is a configured repository. Its detected primary branch (normally
+  `main`, or `master` when that is the repository's important branch) uses the
+  repository checkout; app-created non-primary branches use linked worktrees.
+  Existing externally-created contexts are discovered and remain usable.
 - A session has one execution directory at a time. Switching moves only that
   session; the session-picker Fork action creates a child conversation in the
   selected branch. Pi's `/fork` command creates a child on the current branch.
   Multiple sessions may share a context and the UI shows them without occupancy
   locks.
 - New branches are created from a selected committed local base, defaulting to
-  `main`. Creating from main fetches and fast-forwards local main when possible.
-- Merge to main is local, confirmed, and requires a clean source plus a clean,
-  up-to-date main checkout. It never pushes or deletes automatically. Push is a
-  separate explicit, non-force operation.
+  the detected primary branch. Creating from it fetches and fast-forwards the
+  local primary branch when possible.
+- Merge to the primary branch is local, confirmed, and requires a clean source
+  plus a clean, up-to-date primary checkout. It never pushes or deletes
+  automatically. Push is a separate explicit, non-force operation.
 - Delete is a separate confirmed local branch/worktree operation. Affected
-  sessions move to main, or active/affected sessions may be closed from the
-  confirmation dialog. Ordinary session close archives one conversation only.
+  sessions move to the primary branch, or active/affected sessions may be
+  closed from the confirmation dialog. Ordinary session close archives one
+  conversation only.
 - Branch, checkout/worktree kind, clean/dirty state, ahead/behind, and sharing
   sessions are observed live. The file tree always displays working-tree impact
   relative to `HEAD`; an explicit diff target controls file comparison separately.

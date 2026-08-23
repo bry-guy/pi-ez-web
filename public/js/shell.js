@@ -27,15 +27,17 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   if (!project) return;
   const source = sourceSessionId || (mode !== "new" ? store.state.sessionId : null);
   const active = source ? store.findSession(source, project.sessions) : null;
-  const currentBranch = active ? (active.branch || null) : (project.branch || "main");
+  const defaultBranch = project.defaultBranch || project.primaryBranch || "main";
+  const currentBranch = active ? (active.branch || defaultBranch) : (project.branch || defaultBranch);
   store.set({
     sessionPicker: {
       projectId,
       mode: ["switch", "fork"].includes(mode) ? mode : "new",
       sourceSessionId: source,
-      branch: branch || (mode === "new" ? "main" : currentBranch),
-      baseBranch: "main",
-      name: name ?? (mode === "new" ? "" : active?.name || ""),
+      branch: branch || (mode === "new" ? defaultBranch : currentBranch),
+      baseBranch: defaultBranch,
+      name: name ?? (mode === "new" ? "" : active?.name || active?.title || ""),
+      branchMenuOpen: false,
       currentBranch,
     },
     sessionPickerError: null,

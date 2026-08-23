@@ -173,6 +173,7 @@ export async function projectState(project, sup, sync = null) {
     name: project.name,
     repoPath: project.repoPath,
     source: project.source || { type: "local" },
+    defaultBranch: ws.defaultBranch(project.repoPath),
     branch: ws.currentBranch(project.repoPath),
     branches: ws.listBranches(project.repoPath),
     remoteBranches: ws.listRemoteBranches(project.repoPath),

@@ -42,32 +42,47 @@ export function validateBranchName(value) {
   return branch;
 }
 
-export function branchUpstream(repoPath, branch = MAIN_BRANCH) {
+export function defaultBranch(repoPath) {
+  const localBranches = listBranches(repoPath);
+  const current = currentBranch(repoPath);
+  let remoteHead = null;
+  try {
+    const symbolic = git(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").trim();
+    remoteHead = symbolic.replace(/^origin\//, "") || null;
+  } catch { /* origin/HEAD is optional */ }
+  const candidates = [remoteHead, current === "main" || current === "master" ? current : null, "main", "master", current];
+  return candidates.find(branch => branch && localBranches.includes(branch)) || current || MAIN_BRANCH;
+}
+
+export function branchUpstream(repoPath, branch = null) {
+  branch ||= defaultBranch(repoPath);
   try {
     return git(repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branch}@{upstream}`).trim() || null;
   } catch { return null; }
 }
 
-export function mainExternalWorktree(repoPath) {
-  return listContexts(repoPath).find(context => context.branch === MAIN_BRANCH && context.kind === "worktree") || null;
+export function mainExternalWorktree(repoPath, primaryBranch = defaultBranch(repoPath)) {
+  return listContexts(repoPath).find(context => context.branch === primaryBranch && context.kind === "worktree") || null;
 }
 
-// Put the primary checkout on main and, when it has an upstream, fast-forward it
-// after fetching. Callers use this at branch-creation and merge boundaries,
-// never as an implicit session-open side effect.
-export function prepareMain(repoPath, { fetch = true } = {}) {
-  const external = mainExternalWorktree(repoPath);
+// Put the primary checkout on the repository's default branch and, when it has
+// an upstream, fast-forward it after fetching. Callers use this at
+// branch-creation and merge boundaries, never as an implicit session-open side
+// effect.
+export function prepareMain(repoPath, { fetch = true, primaryBranch = null } = {}) {
+  primaryBranch ||= defaultBranch(repoPath);
+  const external = mainExternalWorktree(repoPath, primaryBranch);
   if (external) throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external", workspacePath: external.path });
   const branch = currentBranch(repoPath);
   const mainStatus = dirtyState(repoPath);
   if (mainStatus.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: mainStatus.error });
   if (mainStatus.dirty) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
-  if (branch !== MAIN_BRANCH) {
-    try { execFileSync("git", ["switch", MAIN_BRANCH], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  if (branch !== primaryBranch) {
+    try { execFileSync("git", ["switch", primaryBranch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
     catch (error) { throw gitFailure("git_switch_failed", error); }
   }
-  const upstream = branchUpstream(repoPath, MAIN_BRANCH);
-  if (!upstream || !fetch) return { upstream, fetched: false, fastForwarded: false };
+  const upstream = branchUpstream(repoPath, primaryBranch);
+  if (!upstream || !fetch) return { branch: primaryBranch, upstream, fetched: false, fastForwarded: false };
   const remote = upstream.split("/")[0];
   try {
     execFileSync("git", ["fetch", "--prune", remote], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -75,7 +90,7 @@ export function prepareMain(repoPath, { fetch = true } = {}) {
   try {
     const before = currentHead(repoPath);
     execFileSync("git", ["merge", "--ff-only", upstream], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return { upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
+    return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
   } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
 }
 
@@ -99,9 +114,9 @@ export function mergeBranch(repoPath, branch) {
   }
 }
 
-export function deleteLocalBranch(repoPath, branch) {
+export function deleteLocalBranch(repoPath, branch, primaryBranch = defaultBranch(repoPath)) {
   validateBranchName(branch);
-  if (branch === MAIN_BRANCH) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
+  if (branch === primaryBranch) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
   try { return execFileSync("git", ["branch", "-D", branch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
   catch (error) { throw gitFailure("branch_delete_failed", error); }
 }
@@ -118,7 +133,7 @@ function dirtyState(dir) {
   }
 }
 
-export function workspaceStatus({ repoPath, branch, workspacePath }) {
+export function workspaceStatus({ repoPath, branch, workspacePath, primaryBranch = defaultBranch(repoPath) }) {
   let upstream = null;
   let ahead = 0;
   let behind = 0;
@@ -132,7 +147,7 @@ export function workspaceStatus({ repoPath, branch, workspacePath }) {
   } catch { /* a branch without an upstream has no ahead/behind counts */ }
   const kind = path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree";
   branch ||= currentBranch(workspacePath);
-  const externalMain = branch === MAIN_BRANCH && kind === "worktree";
+  const externalMain = branch === primaryBranch && kind === "worktree";
   const state = dirtyState(workspacePath);
   return {
     branch: branch || null,
@@ -180,17 +195,19 @@ export function listWorktreeRecords(repoPath) {
   return records;
 }
 
-export function contextStatus({ repoPath, workspacePath, record = null }) {
+export function contextStatus({ repoPath, workspacePath, record = null, primaryBranch = defaultBranch(repoPath) }) {
   const status = workspaceStatus({
     repoPath,
     workspacePath,
     branch: currentBranch(workspacePath) || record?.branch || null,
+    primaryBranch,
   });
   return {
     ...status,
     id: contextId(repoPath, workspacePath),
     head: currentHead(workspacePath) || record?.head || null,
     detached: !status.branch,
+    primaryBranch,
     status: status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean",
     statusError: dirtyState(workspacePath).error,
   };
@@ -225,8 +242,8 @@ export function pullWorkspace(workspacePath) {
   }
 }
 
-export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = null }) {
-  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = null, primaryBranch = defaultBranch(repoPath) }) {
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
     throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
   }
   const args = ["switch"];
@@ -327,9 +344,9 @@ function worktreePathFor(root, projectId, branch) {
 // Ensure a workspace (worktree) exists for `branch`; create a new branch from
 // `fromRef` when it does not exist. The main branch remains checkout-only.
 // Existing branch-only checkouts are observed and reused rather than moved.
-export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef }) {
+export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fromRef, primaryBranch = defaultBranch(repoPath) }) {
   branch = validateBranchName(branch);
-  if (branch === MAIN_BRANCH) {
+  if (branch === primaryBranch) {
     throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
   }
   const existing = listWorktrees(repoPath);
@@ -345,9 +362,9 @@ export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fro
   return wt;
 }
 
-export function removeWorkspace({ repoPath, workspacePath, force = false }) {
+export function removeWorkspace({ repoPath, workspacePath, force = false, primaryBranch = defaultBranch(repoPath) }) {
   const branch = currentBranch(workspacePath);
-  if (branch === MAIN_BRANCH && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
     throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external" });
   }
   if (!force && isDirty(workspacePath)) {
@@ -365,11 +382,11 @@ export function removeWorkspace({ repoPath, workspacePath, force = false }) {
 // Fork: new branch + worktree from the parent workspace's HEAD. Dirty state
 // may be transferred from an app-owned worktree, but the user's checkout is
 // sacred and is rejected before any stash mutation.
-export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch }) {
+export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch, primaryBranch = defaultBranch(repoPath) }) {
   const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
   let n = 1, branch = String(requestedBranch || "").trim();
   if (branch) {
-    if (branch === MAIN_BRANCH) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+    if (branch === primaryBranch) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
     if (existingBranches.includes(branch)) throw Object.assign(new Error("branch_exists"), { code: "branch_exists" });
   } else if (forkBranchBase) {
     do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));

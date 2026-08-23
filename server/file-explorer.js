@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import hljs from "highlight.js/lib/common";
-import { fileTree } from "./workspaces.js";
+import { defaultBranch, fileTree } from "./workspaces.js";
 
 const MAX_FILE_BYTES = 1 * 1024 * 1024;
 const MAX_HIGHLIGHT_BYTES = 512 * 1024;
@@ -96,7 +96,8 @@ function hasRef(repoPath, ref) {
 }
 
 function targetsFor(repoPath) {
-  return [NO_DIFF_TARGET, ...(hasRef(repoPath, "HEAD") ? ["HEAD"] : []), ...(hasRef(repoPath, "refs/heads/main") ? ["main"] : [])];
+  const primary = defaultBranch(repoPath);
+  return [...new Set([NO_DIFF_TARGET, ...(hasRef(repoPath, "HEAD") ? ["HEAD"] : []), ...(hasRef(repoPath, `refs/heads/${primary}`) ? [primary] : [])])];
 }
 
 function visiblePath(relative) {
