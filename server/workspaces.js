@@ -100,7 +100,7 @@ export function pushWorkspace(workspacePath) {
   try {
     const upstream = branchUpstream(workspacePath, branch);
     const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
-    return { branch, upstream: upstream || `origin/${branch}`, stdout: execFileSync("git", args, { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: execFileSync("git", args, { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
   } catch (error) { throw gitFailure("git_push_failed", error); }
 }
 

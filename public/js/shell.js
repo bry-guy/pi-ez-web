@@ -51,7 +51,7 @@ export function selectSession(projectId, sessionId) {
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
     workspaceSettingsOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
@@ -63,7 +63,7 @@ export function selectChat(chatId) {
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     workspaceSettingsOpen: false, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "chat", id: chatId });

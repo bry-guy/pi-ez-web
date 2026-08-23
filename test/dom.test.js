@@ -17,7 +17,7 @@ const state = {
   ],
   projects: [{
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
-    branches: ["main", "develop"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" },
+    branches: ["main", "develop", "feature/alpha", "feature/beta", "feature/gamma", "feature/delta", "feature/epsilon"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" },
     contexts: [
       { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, sessions: [
         { id: "s1", title: "New session", when: "now", streaming: false },
@@ -93,6 +93,7 @@ async function boot() {
         { name: "name", description: "Set the session display name", source: "pi" },
       ] });
       if (url === "/api/sessions/s1/command") return json({ ok: true, action: "session_meta" });
+      if (url === "/api/sessions/s1/hooks/check" && options.method === "POST") return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "" });
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) return json({ id: "s2", projectId: "p1" });
@@ -165,7 +166,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='push-branch']"));
+  root.querySelector("[data-act='run-hook']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector(".operation-title").textContent, /Check/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /npm test/);
+  assert.match(root.querySelector(".operation-terminal").textContent, /check ok/);
+  root.querySelector("[data-act='close-operation']").click();
+  assert.equal(store.state.operation, null);
   root.querySelector("[data-act='toggle-branch-menu']").click();
+  assert.equal(root.querySelectorAll(".branch-picker-pinned .branch-option").length, 4);
+  assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 4);
+  assert.ok(root.querySelector("[data-act='select-session-branch'][data-branch='__new__']"));
   root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false);
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, false);

@@ -19,6 +19,42 @@ const gitErrorMessage = error => ({
   branch_delete_failed: "Git could not delete this branch.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
+function beginOperation(kind, title, command = "") {
+  const operation = { kind, title, command, status: "running", stdout: "", stderr: "", exit: null, startedAt: Date.now() };
+  store.set({ operation });
+  return operation;
+}
+
+function completeOperation(operation, result = {}, error = null) {
+  const failed = !!error || result.ok === false;
+  const stderr = result.stderr || (error ? error.detail || error.message || String(error) : "");
+  store.set({ operation: {
+    ...operation,
+    status: failed ? "error" : "success",
+    command: result.command || operation.command,
+    stdout: result.stdout || "",
+    stderr,
+    exit: Number.isFinite(result.exit) ? result.exit : failed ? 1 : 0,
+    finishedAt: Date.now(),
+  } });
+}
+
+function showCompletedOperation(kind, title, result, command = "") {
+  const operation = { kind, title, command, status: "running", stdout: "", stderr: "", exit: null, startedAt: Date.now() };
+  completeOperation(operation, result);
+}
+
+function combineOperationResults(...results) {
+  const values = results.filter(Boolean);
+  return {
+    ok: values.every(result => result.ok !== false),
+    command: values.map(result => result.command).filter(Boolean).join("\n"),
+    stdout: values.map(result => result.stdout).filter(Boolean).join("\n"),
+    stderr: values.map(result => result.stderr).filter(Boolean).join("\n"),
+    exit: values.at(-1)?.exit,
+  };
+}
+
 /* ---------------- settings ---------------- */
 class PiSettings extends HTMLElement {
   connectedCallback() {
@@ -754,7 +790,7 @@ class PiSessionPicker extends HTMLElement {
       store.set({ sessionPicker: null, sessionPickerError: null });
       store.state.openTree[project.id] = true;
       selectSession(project.id, targetId);
-      store.set({ hookResult: result.setup || null });
+      if (result.setup) showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
     } catch (err) {
       const messages = {
         no_such_base_branch: "That base branch no longer exists.",
@@ -770,21 +806,31 @@ class PiSessionPicker extends HTMLElement {
     if (!id || this.busy) return;
     this.busy = true;
     this.busyLabel = "Pushing…";
-    try { await api.pushBranch(id); await refreshState(); store.setError("Pushed successfully."); }
-    catch (err) { store.set({ sessionPickerError: gitErrorMessage(err) }); }
-    finally { this.busy = false; this.busyLabel = null; this.render(); }
+    const operation = beginOperation("push", "Push", "git push");
+    let result = null;
+    try {
+      result = await api.pushBranch(id);
+      await refreshState();
+      completeOperation(operation, result);
+    } catch (err) {
+      completeOperation(operation, result || {}, err);
+      store.set({ sessionPickerError: gitErrorMessage(err) });
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
   async runHook(name) {
     const id = this.picker()?.sourceSessionId;
     if (!id || !name || this.hookBusy) return;
     this.hookBusy = true;
+    const title = name ? `${name[0].toUpperCase()}${name.slice(1)}` : "Hook";
+    const operation = beginOperation("hook", title, `Configured ${name} hook`);
+    let result = null;
     try {
-      const result = await api.hook(id, name);
-      store.set({ hookResult: result });
+      result = await api.hook(id, name);
       await refreshState();
+      completeOperation(operation, result);
     } catch (err) {
-      store.set({ hookResult: { hook: name, ok: false, exit: err.status || 1, stdout: "", stderr: err.detail || err.message || err.error || "Hook failed." } });
+      completeOperation(operation, result || {}, err);
     } finally { this.hookBusy = false; this.render(); }
   }
 
@@ -819,7 +865,9 @@ class PiSessionPicker extends HTMLElement {
     };
     const branchButton = branch => `<button type="button" class="branch-option" data-act="select-session-branch" data-branch="${esc(branch)}" role="option" aria-selected="${selected === branch}"><span class="branch-option-name">${esc(branch)}</span><span class="branch-option-meta">${esc(branchMeta(branch))}</span></button>`;
     const selectedBranchLabel = isNew ? "＋ New branch…" : selected;
-    const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>Scroll for more</span></div><div class="branch-picker-scroll">${branches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button></div>` : "";
+    const pinnedBranches = branches.slice(0, 4);
+    const additionalBranches = branches.slice(4);
+    const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>First 4 pinned</span></div><div class="branch-picker-pinned">${pinnedBranches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button>${additionalBranches.length ? `<div class="branch-picker-scroll" aria-label="More branches">${additionalBranches.map(branchButton).join("")}</div>` : ""}</div>` : "";
     const branchField = `<div class="branch-picker"><button type="button" class="branch-picker-trigger" data-act="toggle-branch-menu" aria-expanded="${!!picker.branchMenuOpen}" aria-haspopup="listbox"><span>${esc(selectedBranchLabel)}</span><span class="branch-picker-caret">${picker.branchMenuOpen ? "⌃" : "⌄"}</span></button>${branchMenu}</div>`;
     const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
     const existing = mode !== "new";
@@ -833,8 +881,7 @@ class PiSessionPicker extends HTMLElement {
     const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
     const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
     const hookButtons = hookNames.map(name => `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${this.hookBusy ? "disabled" : ""}>${esc(hookLabel(name))}</button>`).join("");
-    const hookResult = store.state.hookResult ? `<div class="hook-result ${store.state.hookResult.ok ? "ok" : "failed"}"><div class="hook-result-head"><strong>${esc(store.state.hookResult.hook || "hook")}</strong><span>exit ${esc(store.state.hookResult.exit ?? "?")}</span><button class="ghost-btn" data-act="close-hook-result" title="Close">×</button></div>${store.state.hookResult.stdout ? `<pre>${esc(store.state.hookResult.stdout)}</pre>` : ""}${store.state.hookResult.stderr ? `<pre class="hook-stderr">${esc(store.state.hookResult.stderr)}</pre>` : ""}</div>` : "";
-    const hookSection = hookButtons || hookResult ? `${hookButtons ? `<div class="workspace-actions">${hookButtons}</div>` : ""}${hookResult}` : "";
+    const hookSection = hookButtons ? `<div class="workspace-actions">${hookButtons}</div>` : "";
     const error = store.state.sessionPickerError ? `<div class="session-picker-error">${esc(store.state.sessionPickerError)}</div>` : "";
     const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
     const subtitle = existing ? `${esc(project.name)} · switch or fork this conversation` : `${esc(project.name)} · choose a branch for this conversation`;
@@ -944,7 +991,8 @@ class PiRepoPicker extends HTMLElement {
       await refreshState();
       store.state.openTree[result.id] = true;
       selectSession(result.id, result.sessionId);
-      store.set({ hookResult: result.setup || null, workspaceSettingsOpen: result.setup && !result.setup.ok });
+      store.set({ hookResult: null, workspaceSettingsOpen: result.setup && !result.setup.ok });
+      if (result.setup) showCompletedOperation("hook", "Setup", result.setup, "Configured setup hook");
     } catch (err) {
       this.connecting = false;
       const messages = {
@@ -1160,6 +1208,38 @@ class PiRepoPicker extends HTMLElement {
   }
 }
 
+/* ---------------- operation modal ---------------- */
+class PiOperation extends HTMLElement {
+  connectedCallback() {
+    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.addEventListener("click", e => {
+      const operation = store.state.operation;
+      if (!operation || operation.status === "running") return;
+      const scrim = this.querySelector(".operation-scrim");
+      if (e.target === scrim || e.target.closest("[data-act='close-operation']")) store.set({ operation: null });
+    });
+    this.render();
+  }
+
+  disconnectedCallback() { this.unsub?.(); }
+
+  render() {
+    const operation = store.state.operation;
+    if (!operation) { this.innerHTML = ""; return; }
+    const running = operation.status === "running";
+    const failed = operation.status === "error";
+    const status = running ? "Running…" : failed ? `Failed · exit ${operation.exit ?? 1}` : `Completed · exit ${operation.exit ?? 0}`;
+    const command = operation.command || "configured operation";
+    const terminal = [
+      `$ ${command}`,
+      operation.stdout || "",
+      operation.stderr ? `[stderr]\n${operation.stderr}` : "",
+      running ? "… running" : `\n[exit ${operation.exit ?? (failed ? 1 : 0)}]`,
+    ].filter(Boolean).join("\n");
+    this.innerHTML = `<div class="operation-scrim"><section class="operation-modal" role="dialog" aria-modal="true" aria-label="${esc(operation.title)}"><div class="operation-head"><div><div class="operation-title">${esc(operation.title)}</div><div class="operation-status ${failed ? "failed" : running ? "running" : "success"}" role="status">${esc(status)}</div></div><button class="ghost-btn" data-act="close-operation" aria-label="Close" ${running ? "disabled" : ""}>×</button></div><div class="operation-body"><div class="operation-command-label">Terminal output</div><pre class="operation-terminal" aria-live="polite">${esc(terminal)}</pre></div><div class="operation-actions"><button class="confirm-back" data-act="close-operation" ${running ? "disabled" : ""}>${running ? "Working…" : "Close"}</button></div></section></div>`;
+  }
+}
+
 /* ---------------- confirmation modal ---------------- */
 class PiConfirm extends HTMLElement {
   connectedCallback() {
@@ -1185,16 +1265,22 @@ class PiConfirm extends HTMLElement {
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     this.busy = true;
     this.busyLabel = c.type === "merge" ? `Fetching ${primary} and merging…` : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
+    const operation = c.type === "merge" || c.type === "deleteBranch"
+      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, c.type === "merge" ? `git merge --no-ff --no-edit ${c.branch}${c.deleteAfter ? `\ngit branch -D ${c.branch}` : ""}` : `git branch -D ${c.branch}`)
+      : null;
+    let result = null;
+    let followup = null;
     try {
       if (c.type === "close") {
         await api.close(c.id);
       } else if (c.type === "merge") {
-        await api.mergeBranch(c.id);
-        if (c.deleteAfter) await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+        result = await api.mergeBranch(c.id);
+        if (c.deleteAfter) followup = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
       } else if (c.type === "deleteBranch") {
-        await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+        result = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
       }
       await refreshState();
+      if (operation) completeOperation(operation, combineOperationResults(result, followup));
       store.set({ confirm: null });
       const active = store.state.sessionId;
       if (active && !store.findAnySession(active)) {
@@ -1204,6 +1290,10 @@ class PiConfirm extends HTMLElement {
         if (first) selectSession(c.projectId, first.id);
       }
     } catch (err) {
+      if (operation) {
+        const prior = combineOperationResults(result, followup);
+        completeOperation(operation, { ...prior, stderr: [prior.stderr, err.detail || err.message || String(err)].filter(Boolean).join("\n") }, err);
+      }
       store.set(s => ({ confirm: { ...s.confirm, error: gitErrorMessage(err) } }));
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
@@ -1263,6 +1353,7 @@ class PiApp extends HTMLElement {
         </div>
         <pi-repo-picker></pi-repo-picker>
         <pi-session-picker></pi-session-picker>
+        <pi-operation></pi-operation>
         <pi-confirm></pi-confirm>
         <div class="reload-prompt hidden" data-reload-prompt>
           <div class="reload-card"><div class="screen-title">Reload required</div><div class="proj-sub" data-reload-message></div><button class="primary-btn" data-act="reload">Reload</button></div>
@@ -1371,6 +1462,7 @@ class PiApp extends HTMLElement {
   }
 }
 
+customElements.define("pi-operation", PiOperation);
 customElements.define("pi-confirm", PiConfirm);
 customElements.define("pi-session-picker", PiSessionPicker);
 customElements.define("pi-settings", PiSettings);

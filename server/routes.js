@@ -946,7 +946,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       ws.prepareMain(found.project.repoPath, { fetch: true, primaryBranch: mainBranch });
       const output = ws.mergeBranch(found.project.repoPath, branch);
       hub.emit(id, "git_merge", { branch, into: mainBranch });
-      return c.json({ ok: true, merged: branch, into: mainBranch, stdout: output, workspacePath: found.project.repoPath });
+      return c.json({ ok: true, merged: branch, into: mainBranch, command: `git merge --no-ff --no-edit ${branch}`, stdout: output, stderr: "", workspacePath: found.project.repoPath });
     } catch (e) {
       const statuses = { checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409, merge_conflict: 409 };
       if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.detail ? { detail: e.detail } : {});
@@ -1071,9 +1071,9 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       }
       saveBindings(bindings);
       if (wsPath && path.resolve(wsPath) !== path.resolve(p.repoPath)) ws.removeWorkspace({ repoPath: p.repoPath, workspacePath: wsPath, force });
-      ws.deleteLocalBranch(p.repoPath, branch, mainBranch);
+      const stdout = ws.deleteLocalBranch(p.repoPath, branch, mainBranch);
       hub.emit(null, "git_branch_deleted", { projectId: p.id, branch });
-      return c.json({ ok: true, branch, movedSessionIds: closeSessions ? [] : affected.map(session => session.id), closedSessionIds: closeSessions ? affected.map(session => session.id) : [] });
+      return c.json({ ok: true, branch, command: `git branch -D ${branch}`, stdout, stderr: "", movedSessionIds: closeSessions ? [] : affected.map(session => session.id), closedSessionIds: closeSessions ? affected.map(session => session.id) : [] });
     } catch (e) {
       const statuses = { cannot_delete_main: 400, no_such_context: 404, no_such_branch: 404, git_status_unavailable: 409, workspace_dirty: 409, checkout_dirty: 409, main_worktree_external: 409, git_switch_failed: 409, branch_delete_failed: 409 };
       if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.detail ? { detail: e.detail } : {});
