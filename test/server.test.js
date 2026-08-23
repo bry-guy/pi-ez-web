@@ -921,7 +921,8 @@ test("external main worktrees block return without being removed", async () => {
   git(externalRepo, "switch", "main");
 });
 
-test("blank Worktree names use the session slug and avoid collisions", async () => {
+test("blank Worktree names use concise feat slugs and avoid collisions", async () => {
+  assert.equal(sessionSlug("one two three four five six"), "feat/one-two-three-four-five");
   const namedRepo = makeRepo("named-worktree-repo");
   const created = await (await post("/api/projects", { repoPath: namedRepo })).json();
   const message = "Create the manual session workspace";

@@ -222,9 +222,10 @@ export function titleOf(s) {
   return s.name || truncateSessionStart(s.firstMessage);
 }
 
-export function truncateSessionStart(value, max = 48) {
+export function truncateSessionStart(value, max = 48, maxWords = 5) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  return text ? text.slice(0, max) : "New session";
+  if (!text) return "New session";
+  return text.split(" ").slice(0, maxWords).join(" ").slice(0, max).trimEnd();
 }
 
 export function timestampValue(value) {

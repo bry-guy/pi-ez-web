@@ -271,13 +271,14 @@ export function saveBindings(b) {
 }
 
 export function sessionSlug(firstMessage) {
-  const slug = String(firstMessage || "")
+  const name = String(firstMessage || "").trim().split(/\s+/).slice(0, 5).join(" ");
+  const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32)
     .replace(/-+$/g, "");
-  return `session/${slug || "chat"}`;
+  return `feat/${slug || "chat"}`;
 }
 
 export function slug(s) {

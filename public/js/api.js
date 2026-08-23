@@ -464,7 +464,7 @@ export function applyEvent(evt, replay = false) {
 }
 
 function updateFirstTitle(id, text) {
-  const title = String(text || "").replace(/\s+/g, " ").trim().slice(0, 48);
+  const title = String(text || "").replace(/\s+/g, " ").trim().split(" ").slice(0, 5).join(" ").slice(0, 48).trimEnd();
   if (!title) return;
   for (const p of store.state.projects) {
     const node = findNode(p.sessions, id);

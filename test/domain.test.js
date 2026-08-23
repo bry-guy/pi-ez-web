@@ -11,6 +11,8 @@ test("session timestamps sort Date objects and ISO strings chronologically", () 
 
 test("unnamed sessions use a compact start-of-session fallback", () => {
   assert.equal(truncateSessionStart("  A\n\n  long session prompt with details  ", 12), "A long sessi");
+  assert.equal(truncateSessionStart("Keep generated conversation titles below six words please"), "Keep generated conversation titles below");
+  assert.equal(truncateSessionStart("A-supercalifragilisticexpialidocious-word-that-is-too-long"), "A-supercalifragilisticexpialidocious-word-that-i");
   assert.equal(titleOf({ name: "Named session", firstMessage: "ignored" }), "Named session");
   assert.equal(titleOf({ name: null, firstMessage: "first prompt" }), "first prompt");
   assert.equal(titleOf({ name: null, firstMessage: "" }), "New session");
