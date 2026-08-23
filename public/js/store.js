@@ -62,7 +62,7 @@ export const store = {
     openActivity: {},
     openDirs: {},
     workspaceSettingsOpen: false,
-    confirm: null,          // close | merge | deleteBranch confirmation payload
+    confirm: null,          // merge | deleteBranch confirmation payload
     operation: null,         // running/completed terminal operation modal
     filesOpen: false,
     repoPickerOpen: false,

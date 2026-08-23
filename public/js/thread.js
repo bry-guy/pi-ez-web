@@ -1,7 +1,7 @@
 import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
-import { esc, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
+import { closeConversation, esc, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -734,18 +734,13 @@ class PiComposer extends HTMLElement {
       this.chooseCommand();
     });
     this.ta.addEventListener("keydown", e => {
-      if (this.commandOpen && this.commandQuery() !== null && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
+      if (this.commandOpen && this.commandQuery() !== null && ["ArrowDown", "ArrowUp", "Tab", "Escape"].includes(e.key)) {
         if (e.key === "Escape") { e.preventDefault(); this.closeCommands(); return; }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
-        const query = this.commandQuery();
-        const exact = query && this.commands.some(command => command.name.toLowerCase() === query) && this.ta.value === `/${query}`;
-        if (e.key === "Enter" && exact) { e.preventDefault(); this.closeCommands(); this.send(e.altKey ? "followUp" : undefined); return; }
-        if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); this.chooseCommand(); return; }
+        if (e.key === "Tab") { e.preventDefault(); this.chooseCommand(); return; }
       }
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        this.send(e.altKey ? "followUp" : undefined);
-      }
+      // Enter is intentionally left to the textarea so it inserts a newline.
+      // Messages are sent only with the explicit Send control below.
     });
     this.sendBtn.addEventListener("pointerdown", e => {
       if (!store.transcript().streaming) return;
@@ -911,7 +906,7 @@ class PiComposer extends HTMLElement {
       return;
     }
     if (action === "quit") {
-      await api.close(id);
+      await closeConversation(id, store.state.chatId ? "chat" : "session");
       return;
     }
     if (action) store.set({ commandNotice: { sessionId: id, title: "Pi", message: result.message || action } });

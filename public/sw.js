@@ -7,6 +7,7 @@ const SHELL = [
   "/js/api.js",
   "/js/markdown.js",
   "/js/panels.js",
+  "/js/operations.js",
   "/js/shell.js",
   "/js/store.js",
   "/js/thread.js",

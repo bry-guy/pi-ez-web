@@ -1,4 +1,5 @@
 import { api, openTranscript, refreshState } from "./api.js";
+import { beginOperation, completeOperation } from "./operations.js";
 import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -35,8 +36,11 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
       mode: ["switch", "fork"].includes(mode) ? mode : "new",
       sourceSessionId: source,
       branch: branch || (mode === "new" ? defaultBranch : currentBranch),
+      branchExplicit: mode === "new" ? !!branch : true,
       baseBranch: defaultBranch,
       name: name ?? (mode === "new" ? "" : active?.name || active?.title || ""),
+      newBranch: "",
+      newBranchAuto: false,
       branchMenuOpen: false,
       currentBranch,
     },
@@ -101,6 +105,30 @@ export async function newProjectSession(projectId) {
   openSessionPicker(projectId, { mode: "new" });
 }
 
+let closeOperationInFlight = false;
+const closeErrorMessage = error => ({
+  session_streaming: "Stop the current response before closing this conversation.",
+  sync_lease_uncertain: "The synchronized lease could not be verified. Try again after the service recovers.",
+}[error?.error] || error?.detail || error?.message || error?.error || "Could not close this conversation.");
+
+export async function closeConversation(id, kind = "session") {
+  if (!id || closeOperationInFlight) return;
+  closeOperationInFlight = true;
+  const label = kind === "chat" ? "Close chat" : "Close session";
+  const operation = beginOperation("close", label, "pi close", `${label}…`);
+  let result = null;
+  try {
+    result = await api.close(id);
+    await refreshState();
+    completeOperation(operation, { ...result, stdout: result.stdout || (kind === "chat" ? "Chat closed." : "Session closed.") });
+  } catch (error) {
+    const displayError = Object.assign(new Error(closeErrorMessage(error)), error);
+    completeOperation(operation, result || {}, displayError);
+  } finally {
+    closeOperationInFlight = false;
+  }
+}
+
 function findNode(nodes, id) {
   for (const n of nodes || []) {
     if (n.id === id) return n;
@@ -155,9 +183,7 @@ class PiSidebar extends HTMLElement {
     const act = t.dataset.act;
     if (act === "close-row") {
       e.stopPropagation();
-      const project = t.dataset.pid ? store.state.projects.find(item => item.id === t.dataset.pid) : null;
-      const branch = t.dataset.branch || "";
-      store.set({ confirm: { type: "close", kind: t.dataset.kind, id: t.dataset.id, label: t.dataset.label, branch, externalMain: !!project?.workspaceStatus?.[branch]?.externalMain } });
+      void closeConversation(t.dataset.id, t.dataset.kind);
       return;
     }
     if (act === "collapse") {
@@ -339,8 +365,6 @@ class PiHeader extends HTMLElement {
         : { railOpen: !store.state.railOpen });
     } else if (act === "settings") {
       store.set({ view: "settings", workspaceSettingsOpen: false });
-    } else if (act === "sync-session") {
-      await this.syncSession();
     } else if (act === "workspace-settings") {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
@@ -349,36 +373,6 @@ class PiHeader extends HTMLElement {
       store.set({ workspaceSettingsOpen: false });
     } else if (act === "files") {
       this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
-    }
-  }
-
-  async syncSession() {
-    const id = store.state.chatId || store.state.sessionId;
-    if (!id || this.syncBusy) return;
-    this.syncBusy = true;
-    this.render();
-    try {
-      await api.syncSession(id);
-      await refreshState();
-      store.setError("Conversation synchronized.", 2200);
-    } catch (err) {
-      const messages = {
-        sync_not_configured: "Configure a sync server in Settings first.",
-        sync_client_unavailable: "The pi-sync client is not installed on this server yet.",
-        sync_unavailable: "The synchronization service is temporarily unavailable.",
-        sync_duplicate: "This conversation already has a canonical synchronized copy.",
-        active_lease: err.details?.holder ? `This conversation is in use by ${err.details.holder}.` : "This conversation is in use by another client.",
-        sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
-        sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
-        sync_session_not_found: "The sync server no longer has this conversation.",
-        sync_workspace_setup_required: err.message || "Prepare the recorded Git workspace before continuing.",
-        session_streaming: "Stop the current response before synchronizing this conversation.",
-        session_compacting: "Wait for compaction to finish before synchronizing this conversation.",
-      };
-      store.setError(messages[err.error] || err.message || err.error || "Could not synchronize this conversation.");
-    } finally {
-      this.syncBusy = false;
-      this.render();
     }
   }
 
@@ -411,14 +405,11 @@ class PiHeader extends HTMLElement {
     const title = s.view === "settings" ? "Settings"
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const activeSession = node || chat;
-    const activeStreaming = !!activeSession && (activeSession.streaming || store.transcript(activeSession.id).streaming);
-    const syncControl = activeSession?.synchronized && activeSession.syncState === "in_use"
+    const syncStatus = activeSession?.synchronized && activeSession.syncState === "in_use"
       ? `<span class="sync-badge" title="In use by ${esc(activeSession.leaseHolder || "another client")}">IN USE</span>`
       : activeSession?.synchronized && activeSession.syncState !== "error"
         ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
-        : s.sync?.configured && s.sync.connection === "available" && activeSession && !activeStreaming
-          ? `<button class="settings-action sync-header-action" data-act="sync-session" ${this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "Synchronizing…" : "Synchronize this conversation"}</button>`
-          : "";
+        : "";
     const workspace = inProject ? this.sessionContext() : null;
     const branch = workspace ? this.contextLabel(workspace) : null;
     const workspaceArea = inProject && workspace ? `
@@ -438,7 +429,7 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}</div>
-      ${syncControl}${filesBtn}
+      ${syncStatus}${filesBtn}
     </header>`;
   }
 
