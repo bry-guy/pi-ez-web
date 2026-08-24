@@ -34,7 +34,7 @@
    sidebar collapses to content height, its footer floats mid-screen, and
    .rail-scroll / .files-scroll never scroll. */
 pi-app, pi-sidebar, pi-header, pi-thread, pi-composer, pi-files,
-pi-projects, pi-settings, pi-repo-picker, pi-session-picker, pi-operation, pi-confirm { display: contents; }
+pi-projects, pi-settings, pi-repo-picker, pi-session-picker, pi-logs, pi-confirm { display: contents; }
 html, body { height: 100%; }
 html { overflow-x: hidden; }
 body {
@@ -885,30 +885,55 @@ body.modal-open .scrollable { overflow: hidden; }
 .workspace-error { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: var(--del-bg); color: var(--red); font: 11px var(--mono); }
 .workspace-section .hook-result { position: static; width: auto; max-height: 260px; margin-top: 10px; }
 
-/* truthful operation log modal */
-.operation-scrim {
+.operation-hint {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 34ch; color: var(--muted);
+  font: 10.5px var(--mono); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.operation-hint.success { color: var(--green); }
+.operation-hint.error { color: var(--red); }
+.operation-dot, .operation-state-dot {
+  width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--orange);
+}
+.operation-dot { animation: piBlink 1.2s steps(1) infinite; }
+.operation-state-dot { background: currentColor; }
+.operation-row-hint { display: inline-flex; align-items: center; gap: 4px; max-width: 20ch; overflow: hidden; color: var(--muted); font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.operation-row-hint.success { color: var(--green); }
+.operation-row-hint.error { color: var(--red); }
+.screen-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* central server and client diagnostics */
+.logs-scrim {
   position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
   overflow-y: auto; overscroll-behavior: contain; padding: 22px; background: oklch(0.15 0.02 255 / .68);
 }
-.operation-modal {
-  width: min(700px, 100%); max-height: min(78vh, 640px); display: flex; flex-direction: column;
+.logs-modal {
+  width: min(760px, 100%); max-height: min(84vh, 720px); display: flex; flex-direction: column;
   overflow: hidden; border-radius: 14px; background: var(--surface); box-shadow: var(--elevation-2);
 }
-.operation-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px; background: var(--surface-2); }
-.operation-head > div { flex: 1; min-width: 0; }
-.operation-title { font-size: 15px; font-weight: 500; }
-.operation-status { margin-top: 4px; font: 11px var(--mono); }
-.operation-status.running { color: var(--accent); }
-.operation-status.success { color: var(--green); }
-.operation-status.failed { color: var(--red); }
-.operation-body { min-height: 0; padding: 14px 18px 4px; }
-.operation-command-label { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
-.operation-terminal {
-  max-height: min(48vh, 420px); overflow: auto; margin: 8px 0 0; padding: 12px 13px;
-  border-radius: 8px; background: #080808; color: #c4c4c4; font: 12px/1.55 var(--mono);
-  white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-gutter: stable;
-}
-.operation-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }
+.logs-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px; background: var(--surface-2); }
+.logs-head > div { flex: 1; min-width: 0; }
+.logs-title { font-size: 15px; font-weight: 500; }
+.logs-subtitle { margin-top: 4px; color: var(--muted); font: 11px var(--mono); }
+.logs-body { min-height: 0; overflow: auto; padding: 14px 18px 4px; }
+.logs-section + .logs-section { margin-top: 18px; }
+.logs-section-title { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.logs-operation { margin-top: 8px; padding: 9px 10px; border-radius: 8px; background: var(--surface-2); }
+.logs-operation-head { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font: 11px var(--mono); }
+.logs-operation-head strong { color: var(--text); font-family: inherit; font-weight: 500; }
+.logs-operation.success .logs-operation-head span { color: var(--green); }
+.logs-operation.error .logs-operation-head span { color: var(--red); }
+.logs-operation.running .logs-operation-head span { color: var(--muted); }
+.logs-event { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 8px; margin-top: 5px; color: var(--muted); font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.logs-event time { color: var(--faint); }
+.logs-event small { grid-column: 2; color: var(--faint); font-size: 9px; }
+.logs-event > span { grid-column: 2; min-width: 0; }
+.logs-event.error { color: var(--red); }
+.logs-event.success { color: var(--green); }
+.logs-detail { grid-column: 2; color: inherit; opacity: .82; }
+.logs-server-list { max-height: 36vh; overflow: auto; margin-top: 8px; padding: 9px 10px; border-radius: 8px; background: #080808; }
+.logs-empty, .logs-error { margin-top: 8px; color: var(--muted); font: 11px/1.45 var(--mono); }
+.logs-error { color: var(--red); }
+.logs-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }
 
 /* confirmation modal (merge / close) */
 .confirm-scrim {
@@ -976,13 +1001,13 @@ body.modal-open .scrollable { overflow: hidden; }
 .pi-resource-scroll { border: 1px solid var(--border) !important; }
 .session-picker .settings-action, .session-picker .settings-save,
 .session-picker .branch-picker-trigger, .session-picker .branch-option, .session-picker .branch-new-option,
-.operation-modal .confirm-back, .confirm-modal .confirm-back, .confirm-modal .confirm-cta,
+.confirm-modal .confirm-back, .confirm-modal .confirm-cta,
 .update-btn { border: 1px solid var(--border) !important; }
 .session-picker .danger-outline, .confirm-modal .confirm-cta.danger { border-color: var(--red) !important; }
 .session-picker .branch-new-option, .session-picker .branch-option:hover, .session-picker .branch-option:focus-visible, .session-picker .branch-option[aria-selected="true"],
 .session-picker .settings-action:not(:disabled):hover, .session-picker .settings-action:not(:disabled):focus-visible,
 .session-picker .settings-save:not(:disabled):hover, .session-picker .settings-save:not(:disabled):focus-visible { border-color: var(--accent) !important; }
-.confirm-modal .confirm-cta.accent, .operation-modal .confirm-back { border-color: var(--accent) !important; }
+.confirm-modal .confirm-cta.accent { border-color: var(--accent) !important; }
 .rail-foot, .settings-row, .modal-head, .model-popover-head,
 .model-group + .model-group, .model-unavailable, .diff-body,
 .file-error { box-shadow: none; }

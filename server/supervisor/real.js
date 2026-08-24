@@ -25,6 +25,10 @@ function errorDetails(error) {
   return publicError(parts.join("\nCaused by: "));
 }
 
+export function isPackageSetupFailure(error) {
+  return /\b(?:npm|pnpm|bun|git)\b[\s\S]*\b(?:failed with (?:code|signal)|ENOENT)\b/i.test(errorDetails(error));
+}
+
 let sdk = null;
 async function SDK() {
   if (!sdk) sdk = await import("@earendil-works/pi-coding-agent");
@@ -73,6 +77,7 @@ export class RealSupervisor {
     this.sessionCreateTail = Promise.resolve(); // serialize SDK resource setup
     this.models = null;
     this.modelError = null;
+    this.packageSetupError = null;
     this.piConfiguration = new PiConfiguration();
   }
 
@@ -177,25 +182,43 @@ export class RealSupervisor {
     const SDKModule = await SDK();
     const runtime = modelRuntime || await this._modelRuntime();
     try {
-      const { settingsManager } = await this.piConfiguration.createSettingsManager(
-        cwd,
-        SDKModule.getAgentDir(),
-        SDKModule.SettingsManager,
-      );
-      // The bridge is a no-op without pi-subagents, but loading it for every
-      // headless session lets deployments opt into the package without having
-      // to edit a profile or expose extension internals to the web server.
+      const agentDir = SDKModule.getAgentDir();
       const syncSkillPaths = await this.syncCoordinator?.skillPaths?.() || [];
       const syncContext = syncSessionId ? await this.syncCoordinator?.contextForSession?.(syncSessionId) : null;
-      const resourceLoader = new SDKModule.DefaultResourceLoader({
-        cwd,
-        agentDir: SDKModule.getAgentDir(),
-        settingsManager,
-        additionalExtensionPaths: [WEB_SUBAGENT_EXTENSION],
-        ...(syncSkillPaths.length ? { additionalSkillPaths: syncSkillPaths } : {}),
-        ...(syncContext ? { appendSystemPrompt: [syncContext] } : {}),
-      });
-      await resourceLoader.reload();
+      const loadResources = async loadPackages => {
+        const { settingsManager } = await this.piConfiguration.createSettingsManager(
+          cwd,
+          agentDir,
+          SDKModule.SettingsManager,
+          { loadPackages },
+        );
+        const resourceLoader = new SDKModule.DefaultResourceLoader({
+          cwd,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: [WEB_SUBAGENT_EXTENSION],
+          ...(syncSkillPaths.length ? { additionalSkillPaths: syncSkillPaths } : {}),
+          ...(syncContext ? { appendSystemPrompt: [syncContext] } : {}),
+        });
+        await resourceLoader.reload();
+        return { settingsManager, resourceLoader };
+      };
+
+      let resources;
+      if (this.packageSetupError) {
+        resources = await loadResources(false);
+      } else {
+        try {
+          resources = await loadResources(true);
+        } catch (error) {
+          if (!isPackageSetupFailure(error)) throw error;
+          // A broken optional package must not take the core session runtime offline.
+          this.packageSetupError = errorDetails(error);
+          console.error("pi-ez-web Pi package setup failed; continuing without packages", this.packageSetupError);
+          resources = await loadResources(false);
+        }
+      }
+      const { settingsManager, resourceLoader } = resources;
       const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
       const result = await SDKModule.createAgentSession({
         cwd,
@@ -218,7 +241,10 @@ export class RealSupervisor {
           error: error.error,
         }),
       });
-      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult, result.session.sessionId, cwd);
+      const packageErrors = this.packageSetupError
+        ? [{ path: "<pi-packages>", error: this.packageSetupError }]
+        : [];
+      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult, result.session.sessionId, cwd, packageErrors);
       return result;
     } catch (error) {
       const detail = errorDetails(error);
@@ -753,6 +779,7 @@ export class RealSupervisor {
     report?.({ type: "phase", phase: "runtime-dispose", message: `Releasing ${this.live.size} idle Pi session runtime${this.live.size === 1 ? "" : "s"}.` });
     for (const st of this.live.values()) await this._disposeLiveState(st, "reload");
     this.live.clear();
+    this.packageSetupError = null;
     this.piConfiguration.invalidate();
     report?.({ type: "phase", phase: "runtime-load", message: "Reloading Pi profile settings and resources." });
     await this.piConfiguration.state({ force: true, report });

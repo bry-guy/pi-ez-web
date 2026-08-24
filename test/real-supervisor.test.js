@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { RealSupervisor } from "../server/supervisor/real.js";
+import { RealSupervisor, isPackageSetupFailure } from "../server/supervisor/real.js";
 
 const script = `
   import { startServer } from './server/index.js';
@@ -22,6 +22,12 @@ const script = `
   console.log(JSON.stringify({providersStatus: providersResponse.status, providers, created, commandsStatus: commandsResponse.status, commands, messageStatus: message.status, message: await message.json(), transcript}));
   server.closeAllConnections?.(); server.close();
 `;
+
+test("package command failures are eligible for package-free runtime fallback", () => {
+  assert.equal(isPackageSetupFailure(new Error("/usr/local/bin/npm --include=dev install failed with code 1")), true);
+  assert.equal(isPackageSetupFailure(new Error("git clone failed with signal SIGTERM")), true);
+  assert.equal(isPackageSetupFailure(new Error("Extension path does not exist")), false);
+});
 
 test("model-less session attachment resolves the configured default before creating Pi's session", async () => {
   const supervisor = new RealSupervisor({});
@@ -174,6 +180,52 @@ test("configured extensions load commands and session_start tools", () => {
     assert.ok(result.tools.includes("startup_tool"));
     assert.ok(result.pi.runtime.extensions.some(item => item.path === extension));
     assert.ok(result.pi.runtime.extensions.some(item => item.path.endsWith("server/extensions/subagent-telemetry.js")));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a failed Pi package install falls back to the core session runtime", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-package-fallback-"));
+  try {
+    const webHome = path.join(tmp, "web");
+    const agentDir = path.join(tmp, "pi");
+    const cwd = path.join(tmp, "cwd");
+    const profile = path.join(tmp, "profile");
+    fs.mkdirSync(webHome, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(path.join(profile, "settings.json"), JSON.stringify({
+      packages: ["npm:package-that-must-not-install"],
+      npmCommand: ["/missing/npm"],
+    }));
+    fs.writeFileSync(path.join(webHome, "config.json"), JSON.stringify({
+      pi: { profile, packages: [], extensions: [] },
+    }));
+    const fallbackScript = `
+      import { EventHub } from './server/events.js';
+      import { RealSupervisor } from './server/supervisor/real.js';
+      const supervisor = new RealSupervisor(new EventHub());
+      const created = await supervisor.createSession({ cwd: process.env.TEST_CWD });
+      const commands = await supervisor.commands(created.id);
+      console.log(JSON.stringify({ commands: commands.map(command => command.name), pi: await supervisor.piConfigurationState() }));
+    `;
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", fallbackScript], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        PI_WEB_HOME: webHome,
+        PI_CODING_AGENT_DIR: agentDir,
+        TEST_CWD: cwd,
+        OPENAI_API_KEY: "",
+        ANTHROPIC_API_KEY: "",
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const result = JSON.parse(output.trim().split("\n").at(-1));
+    assert.ok(result.commands.includes("settings"));
+    assert.match(result.pi.runtime.errors.find(error => error.path === "<pi-packages>")?.error || "", /ENOENT/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

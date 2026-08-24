@@ -1,7 +1,7 @@
 import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { store } from "./store.js";
-import { closeConversation, esc, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
+import { closeConversation, esc, mobile, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -739,8 +739,10 @@ class PiComposer extends HTMLElement {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
         if (e.key === "Tab") { e.preventDefault(); this.chooseCommand(); return; }
       }
-      // Enter is intentionally left to the textarea so it inserts a newline.
-      // Messages are sent only with the explicit Send control below.
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !mobile()) {
+        e.preventDefault();
+        void this.send(e.altKey ? "followUp" : undefined);
+      }
     });
     this.sendBtn.addEventListener("pointerdown", e => {
       if (!store.transcript().streaming) return;

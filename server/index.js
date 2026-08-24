@@ -10,6 +10,7 @@ import { buildApi } from "./routes.js";
 import { createSupervisor } from "./supervisor/index.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { publicError } from "./pi-configuration.js";
+import { writeLog } from "./logging.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ONLY_CONFIG = Object.freeze({
@@ -49,12 +50,10 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
   let sup = null;
   app.onError((error, c) => {
     const requestId = c.get("requestId") || randomUUID();
-    console.error("pi-ez-web request failed", {
-      requestId,
-      method: c.req.method,
-      path: c.req.path,
-      stack: publicError(error instanceof Error ? error.stack : String(error)),
-    });
+    const stack = publicError(error instanceof Error ? error.stack : String(error));
+    const details = { requestId, method: c.req.method, path: c.req.path, stack };
+    writeLog("error", "Request failed", { source: "request", ...details });
+    console.error("pi-ez-web request failed", details);
     c.header("x-request-id", requestId);
     const code = typeof error?.code === "string" ? error.code : "";
     const status = Number(error?.status);

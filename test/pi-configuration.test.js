@@ -63,6 +63,8 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
     quietStartup: false,
   }));
   fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({
+    packages: ["npm:project-package"],
+    extensions: ["./project-extension.ts"],
     compaction: { reserveTokens: 333 },
   }));
   fs.writeFileSync(path.join(profileDir, "settings.json"), JSON.stringify({
@@ -96,6 +98,20 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
     keepRecentTokens: 111,
   });
   assert.equal(settingsManager.getSessionDir(), undefined);
+
+  const packageFree = await configuration.createSettingsManager(cwd, agentDir, SettingsManager, { loadPackages: false });
+  assert.deepEqual(packageFree.settingsManager.getGlobalSettings().packages, []);
+  assert.deepEqual(packageFree.settingsManager.getProjectSettings().packages, []);
+  assert.deepEqual(packageFree.settingsManager.getProjectSettings().extensions, ["./project-extension.ts"]);
+  assert.deepEqual(packageFree.settingsManager.getCompactionSettings(), {
+    enabled: true,
+    reserveTokens: 333,
+    keepRecentTokens: 111,
+  });
+  assert.deepEqual(packageFree.settingsManager.getGlobalSettings().extensions, [
+    path.join(profileDir, "extension.ts"),
+    path.join(process.env.PI_WEB_HOME, "web-extension.ts"),
+  ]);
 
   const state = await configuration.state();
   assert.equal(state.profile.status, "loaded");

@@ -213,6 +213,16 @@ test("plain chats use isolated scratch workspaces and retain legacy discovery", 
   assert.ok(!state.chats.some(chat => chat.id === a.id));
 });
 
+test("operation diagnostics are persisted and exposed through the logs endpoint", async () => {
+  const { id } = await (await post("/api/chats")).json();
+  const close = await post(`/api/sessions/${id}/close`, { operationId: "log-test" });
+  assert.equal(close.status, 200, await close.clone().text());
+  const result = await (await get("/api/logs?limit=100")).json();
+  assert.equal(result.file, "logs/pi-ez-web.log");
+  assert.ok(result.logs.some(entry => entry.operationId === "log-test" && /archived|close/i.test(entry.message)));
+  assert.ok(fs.existsSync(path.join(home, "logs", "pi-ez-web.log")));
+});
+
 test("plain chat: full turn lifecycle over SSE (thinking -> deltas -> done)", async () => {
   const sse = new SSE(base + "/api/events");
   const { id } = await (await post("/api/chats")).json();
@@ -658,6 +668,28 @@ test("project session creation starts a new session on the project", async () =>
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.ok(p.sessions.some(s => s.id === body.id));
+});
+
+test("session creation and current branch switching allow a dirty primary checkout", async () => {
+  const repo = makeRepo("dirty-primary-session-repo");
+  const created = await (await post("/api/projects", { repoPath: repo })).json();
+  const branchResponse = await post(`/api/projects/${created.id}/sessions`, {
+    branch: "feature/dirty-primary", baseBranch: "main",
+  });
+  assert.equal(branchResponse.status, 200, await branchResponse.clone().text());
+  const branchSession = await branchResponse.json();
+
+  fs.writeFileSync(path.join(repo, "dirty.txt"), "keep me\n");
+  const createResponse = await post(`/api/projects/${created.id}/sessions`, {});
+  assert.equal(createResponse.status, 200, await createResponse.clone().text());
+
+  const switchResponse = await post(`/api/sessions/${branchSession.id}/branch-context`, {
+    branch: "main", baseBranch: "main", mode: "switch",
+  });
+  assert.equal(switchResponse.status, 200, await switchResponse.clone().text());
+  assert.equal((await switchResponse.json()).branch, "main");
+  assert.equal(loadBindings()[branchSession.id].workspacePath, repo);
+  assert.equal(fs.readFileSync(path.join(repo, "dirty.txt"), "utf8"), "keep me\n");
 });
 
 test("settings can persist a custom local repositories root", async () => {
