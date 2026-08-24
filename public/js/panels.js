@@ -1454,7 +1454,7 @@ class PiConfirm extends HTMLElement {
     const project = store.state.projects.find(item => item.id === c.projectId);
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     this.busy = true;
-    this.busyLabel = c.type === "merge" ? `Fetching ${primary}, merging, and cleaning up…` : c.type === "push" ? "Pushing commits…" : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
+    this.busyLabel = c.type === "merge" ? `Fetching ${primary}…` : c.type === "push" ? "Pushing commits…" : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
     const operation = ["merge", "push", "deleteBranch"].includes(c.type)
       ? beginOperation(c.type === "merge" ? "merge" : c.type === "push" ? "push" : "delete", c.type === "merge" ? `Merge ${c.branch}` : c.type === "push" ? `Push ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
       : null;
@@ -1486,7 +1486,9 @@ class PiConfirm extends HTMLElement {
         const prior = combineOperationResults(result, followup);
         completeOperation(operation, { ...prior, stderr: [prior.stderr, err.detail || err.message || String(err)].filter(Boolean).join("\n") }, err);
       }
-      store.set(s => ({ confirm: { ...s.confirm, error: gitErrorMessage(err) } }));
+      const activeConfirm = store.state.confirm;
+      if (activeConfirm?.id === c.id && activeConfirm.type === c.type) store.set({ confirm: { ...activeConfirm, error: gitErrorMessage(err) } });
+      else store.setError(`Could not complete ${c.type || "operation"}: ${gitErrorMessage(err)}`);
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
@@ -1524,7 +1526,11 @@ class PiConfirm extends HTMLElement {
       action = "Delete branch";
     }
     const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount);
-    this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Working…") : action}</button></div></div></div>`;
+    const progressOperation = c.type === "deleteBranch" ? operationFor("delete") : ["merge", "push"].includes(c.type) ? operationFor(c.type) : null;
+    const progress = this.busy
+      ? `<div class="confirm-progress" role="status" aria-live="polite"><i class="operation-dot" aria-hidden="true"></i><span>${esc(operationHint(progressOperation, this.busyLabel || "Working…"))}</span></div>`
+      : "";
+    this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal" role="dialog" aria-modal="true" aria-busy="${this.busy}"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><div class="confirm-action-main"><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? "Working…" : action}</button>${progress}</div></div></div></div>`;
   }
 }
 

@@ -97,6 +97,11 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-push";
         return json({ ok: true, branch: "main", upstream: "origin/main", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Pushed main to origin/main." }] } });
       }
+      if (url === "/api/sessions/s1/merge-local" && options.method === "POST") {
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-merge";
+        if (dom.window.__holdMerge) return new Promise(resolve => { dom.window.__resolveMerge = () => resolve(dom.window.__mergeFails ? json({ error: "http_502" }, false, 502) : json({ ok: true, merged: "feat/ship", into: "main", deleted: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Merged feat/ship into main." }] } })); });
+        return json({ ok: true, merged: "feat/ship", into: "main", deleted: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Merged feat/ship into main." }] } });
+      }
       if (url === "/api/sessions/s1/sync" && options.method === "POST") {
         state.projects[0].sessions[0].synchronized = true;
         state.projects[0].sessions[0].syncState = "available";
@@ -631,6 +636,24 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector(".session-picker"));
   assert.ok(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"));
   root.querySelector("[data-act='close-session-picker']")?.click();
+
+  dom.window.__holdMerge = true;
+  store.set({ view: "chat", projectId: "p1", sessionId: "s1", chatId: null, sessionPicker: null, confirm: null });
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
+  root.querySelector("[data-act='merge-branch']").click();
+  root.querySelector(".confirm-modal [data-act='go']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(root.querySelector(".confirm-progress .operation-dot"));
+  assert.match(root.querySelector(".confirm-progress").textContent, /Fetching main|Running git/);
+  dom.window.__mergeFails = true;
+  root.querySelector(".confirm-modal [data-act='cancel']").click();
+  assert.equal(root.querySelector(".confirm-modal"), null);
+  dom.window.__resolveMerge();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(root.querySelector(".confirm-modal"), null, "a dismissed merge does not resurrect its error modal");
+  assert.match(store.state.error, /http_502/);
+  dom.window.__holdMerge = false;
+  dom.window.__mergeFails = false;
 
   const closeButton = root.querySelector("[data-id='sibling'] .row-close");
   assert.ok(closeButton);
