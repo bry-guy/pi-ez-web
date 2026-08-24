@@ -440,12 +440,13 @@ export function publicError(error) {
 }
 
 class OverlaySettingsStorage {
-  constructor(cwd, agentDir, overlay) {
+  constructor(cwd, agentDir, overlay, suppressPackages = false) {
     this.paths = {
       global: path.join(agentDir, "settings.json"),
       project: path.join(cwd, ".pi", "settings.json"),
     };
     this.overlay = overlay;
+    this.suppressPackages = suppressPackages;
   }
 
   withLock(scope, fn) {
@@ -456,12 +457,13 @@ class OverlaySettingsStorage {
     let presented = original;
     let baseValue = {};
     let presentedValue;
-    if (scope === "global") {
+    if (scope === "global" || this.suppressPackages) {
       // Preserve malformed JSON so SettingsManager can report the parse error
       // instead of silently replacing it with the imported profile.
       try {
         baseValue = original ? JSON.parse(original) : {};
-        presentedValue = this.overlay(baseValue);
+        presentedValue = scope === "global" ? this.overlay(baseValue) : clone(baseValue);
+        if (this.suppressPackages) presentedValue.packages = [];
         presented = JSON.stringify(presentedValue, null, 2);
       } catch { /* SettingsManager owns parse diagnostics */ }
     }
@@ -480,6 +482,15 @@ class OverlaySettingsStorage {
           if (!same(nextValue[key], presentedValue[key])) continue;
           if (Object.hasOwn(baseValue, key)) nextValue[key] = baseValue[key];
           else delete nextValue[key];
+        }
+        output = JSON.stringify(nextValue, null, 2);
+      } catch { /* persist the SDK-provided value and let future reads diagnose it */ }
+    } else if (this.suppressPackages && presentedValue) {
+      try {
+        const nextValue = JSON.parse(next);
+        if (same(nextValue.packages, presentedValue.packages)) {
+          if (Object.hasOwn(baseValue, "packages")) nextValue.packages = baseValue.packages;
+          else delete nextValue.packages;
         }
         output = JSON.stringify(nextValue, null, 2);
       } catch { /* persist the SDK-provided value and let future reads diagnose it */ }
@@ -625,19 +636,22 @@ export class PiConfiguration {
     return { piConfig: clone(piConfig), profile, settings: overlay, inline, warnings };
   }
 
-  async createSettingsManager(cwd, agentDir, SettingsManager) {
+  async createSettingsManager(cwd, agentDir, SettingsManager, { loadPackages = true } = {}) {
     const resolved = await this.resolve();
-    recoverIncompleteGitPackages(agentDir, resolved.settings);
+    if (loadPackages) recoverIncompleteGitPackages(agentDir, resolved.settings);
     const storage = new OverlaySettingsStorage(cwd, agentDir, base => ["loaded", "cached"].includes(resolved.profile.status)
       ? mergeSettings(base, resolved.settings)
-      : addInlineResources(base, resolved.inline));
+      : addInlineResources(base, resolved.inline), !loadPackages);
     return { settingsManager: SettingsManager.fromStorage(storage), resolved };
   }
 
-  recordRuntime(resourceLoader, extensionsResult, sessionId = null, cwd = null) {
+  recordRuntime(resourceLoader, extensionsResult, sessionId = null, cwd = null, errors = []) {
     const skillState = resourceLoader.getSkills();
     const extensionState = extensionsResult || resourceLoader.getExtensions();
-    const extensionErrors = (extensionState.errors || []).map(error => ({ path: error.path, error: publicError(error.error) }));
+    const extensionErrors = [
+      ...errors.map(error => ({ path: error.path, error: publicError(error.error) })),
+      ...(extensionState.errors || []).map(error => ({ path: error.path, error: publicError(error.error) })),
+    ];
     const skillDiagnostics = (skillState.diagnostics || []).map(diagnostic => ({
       path: diagnostic.path || null,
       message: publicError(diagnostic.message || diagnostic.error || diagnostic),

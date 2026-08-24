@@ -57,6 +57,8 @@ async function boot() {
     url: "http://pi-web.test/",
     pretendToBeVisual: true,
   });
+  let narrowViewport = false;
+  dom.setNarrowViewport = value => { narrowViewport = value; };
   const realSetInterval = globalThis.setInterval;
   globalThis.setInterval = (fn, ms, ...args) => {
     const timer = realSetInterval(fn, ms, ...args);
@@ -73,7 +75,8 @@ async function boot() {
     KeyboardEvent: dom.window.KeyboardEvent,
     MouseEvent: dom.window.MouseEvent,
     CustomEvent: dom.window.CustomEvent,
-    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    matchMedia: () => ({ matches: narrowViewport, addEventListener() {}, removeEventListener() {} }),
     EventSource: class { close() {} },
     marked,
     DOMPurify: createDOMPurify(dom.window),
@@ -81,6 +84,7 @@ async function boot() {
       const url = String(input);
       if (url === "/api/state") return json(state);
       if (url === "/api/models") return json({ models: state.models });
+      if (url.startsWith("/api/logs")) return json({ file: "logs/pi-ez-web.log", logs: [{ at: Date.now(), level: "info", source: "operation", message: "Server is ready." }] });
       if (url === "/api/events") return new Response(": connected v1\n\n", { headers: { "content-type": "text/event-stream" } });
       if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
       if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
@@ -88,6 +92,11 @@ async function boot() {
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
+      if (url === "/api/sessions/s1/push-preview") return json({ ok: true, branch: "main", upstream: "origin/main", head: "head-2", baseHead: "head-1", commitCount: 2, commits: [{ hash: "head-2", shortHash: "head-2", subject: "second commit" }, { hash: "head-1", shortHash: "head-1", subject: "first commit" }] });
+      if (url === "/api/sessions/s1/push" && options.method === "POST") {
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-push";
+        return json({ ok: true, branch: "main", upstream: "origin/main", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Pushed main to origin/main." }] } });
+      }
       if (url === "/api/sessions/s1/sync" && options.method === "POST") {
         state.projects[0].sessions[0].synchronized = true;
         state.projects[0].sessions[0].syncState = "available";
@@ -106,6 +115,15 @@ async function boot() {
         { name: "name", description: "Set the session display name", source: "pi" },
       ] });
       if (url === "/api/sessions/s1/command") return json({ ok: true, action: "session_meta" });
+      if (url === "/api/sessions/s1/branch-context" && options.method === "POST") {
+        const project = state.projects[0];
+        const session = project.sessions.find(item => item.id === "s1");
+        Object.assign(session, { branch: "develop", contextId: "ctx-develop", workspacePath: "/tmp/demo-develop" });
+        project.contexts.find(context => context.id === "ctx-main").sessions = project.contexts.find(context => context.id === "ctx-main").sessions.filter(item => item.id !== "s1");
+        project.contexts.push({ id: "ctx-develop", branch: "develop", path: "/tmp/demo-develop", kind: "worktree", dirty: false, status: "clean", ahead: 0, behind: 0, sessions: [session] });
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-switch";
+        return json({ ok: true, id: "s1", branch: "develop", contextId: "ctx-develop", workspacePath: "/tmp/demo-develop", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Switched session s1 to develop." }] } });
+      }
       if (url === "/api/sessions/s1/hooks/check" && options.method === "POST") return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "" });
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
@@ -183,21 +201,24 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".session-picker [data-act='sync-session']").textContent, "sync");
   root.querySelector(".session-picker [data-act='sync-session']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match(root.querySelector(".operation-title").textContent, /Synchronize this conversation/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /Conversation synchronized/);
-  root.querySelector("[data-act='close-operation']").click();
-  assert.equal(root.querySelector(".operation-modal"), null);
+  assert.equal(root.querySelector(".operation-modal"), null, "operations no longer open a terminal modal");
+  assert.match(root.querySelector("[data-operation-hint='sync']").textContent, /Conversation synchronized/);
   assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Enrolled sessions do not offer sync again");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='push-branch']"));
+  root.querySelector("[data-act='push-branch']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector(".confirm-modal").textContent, /second commit/);
+  assert.match(root.querySelector(".confirm-modal").textContent, /first commit/);
+  root.querySelector(".confirm-modal [data-act='go']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(root.querySelector(".confirm-modal"), null);
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
   root.querySelector("[data-act='run-hook']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match(root.querySelector(".operation-title").textContent, /Check/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /npm test/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /check ok/);
-  root.querySelector("[data-act='close-operation']").click();
-  assert.equal(store.state.operation, null);
+  assert.equal(root.querySelector(".operation-modal"), null, "hook output stays out of a terminal modal");
+  assert.match(root.querySelector("[data-operation-hint='hook']").textContent, /check ok/);
   root.querySelector("[data-act='toggle-branch-menu']").click();
   assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 8);
   assert.deepEqual([...root.querySelectorAll(".branch-picker-scroll .branch-option")].map(button => button.dataset.branch), [
@@ -208,7 +229,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false);
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, false);
-  root.querySelector("[data-act='close-session-picker']").click();
+  root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(store.findSession("s1", store.state.projects[0].sessions).branch, "develop");
+  assert.match(root.querySelector("pi-header .workspace-branch").textContent, /develop/);
+  assert.match(store.state.operations.find(operation => operation.kind === "switch-session").events.at(-1).message, /Switched session s1 to develop/);
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");
 
@@ -255,6 +280,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const newSessionName = root.querySelector("[data-session-name]");
   newSessionName.value = "Chat Name";
   newSessionName.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.match(root.querySelector(".branch-picker-trigger").textContent, /main/, "naming a session keeps the visible branch selection");
   root.querySelector("[data-act='toggle-branch-menu']").click();
   root.querySelector("[data-act='select-session-branch'][data-branch='__new__']").click();
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -269,9 +295,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
-  assert.match(root.querySelector(".operation-title").textContent, /Create session/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /Created session s2/);
-  root.querySelector("[data-act='close-operation']").click();
+  assert.equal(root.querySelector(".operation-modal"), null, "session creation stays non-blocking");
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -441,10 +465,34 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(textarea.value, "", "a different session starts with its own draft");
   root.querySelector("[data-id='s1']").click();
   assert.equal(textarea.value, "foo", "returning to a session restores its draft");
-  const enter = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-  textarea.dispatchEvent(enter);
-  assert.equal(enter.defaultPrevented, false, "Return leaves newline insertion to the textarea");
-  assert.equal(store.transcript("s1").records.some(record => record.pending), false, "Return does not send a message");
+  const shiftEnter = new dom.window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+  textarea.dispatchEvent(shiftEnter);
+  assert.equal(shiftEnter.defaultPrevented, false, "desktop Shift+Enter inserts a newline");
+  assert.equal(store.transcript("s1").records.some(record => record.pending), false);
+  const composingEnter = new dom.window.KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true });
+  textarea.dispatchEvent(composingEnter);
+  assert.equal(composingEnter.defaultPrevented, false, "IME Enter confirms composition without sending");
+
+  dom.setNarrowViewport(true);
+  const mobileEnter = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  textarea.dispatchEvent(mobileEnter);
+  assert.equal(mobileEnter.defaultPrevented, false, "mobile Enter inserts a newline");
+  assert.equal(store.transcript("s1").records.some(record => record.pending), false, "mobile Enter does not send");
+
+  dom.setNarrowViewport(false);
+  const desktopEnter = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  textarea.dispatchEvent(desktopEnter);
+  assert.equal(desktopEnter.defaultPrevented, true, "desktop Enter sends");
+  assert.equal(store.transcript("s1").records.some(record => record.pending), true);
+
+  dom.setNarrowViewport(true);
+  const pendingBeforeButton = store.transcript("s1").records.filter(record => record.pending).length;
+  textarea.value = "mobile button send";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  composer.querySelector(".send-btn").click();
+  assert.equal(store.transcript("s1").records.filter(record => record.pending).length, pendingBeforeButton + 1);
+  dom.setNarrowViewport(false);
+
   textarea.value = "/";
   textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -590,10 +638,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.confirm, null, "Closing a session does not open a warning modal");
   assert.equal(root.querySelector(".confirm-modal"), null);
-  assert.match(root.querySelector(".operation-title").textContent, /Close session/);
-  assert.match(root.querySelector(".operation-terminal").textContent, /Session closed/);
-  assert.doesNotMatch(root.querySelector(".operation-terminal").textContent, /pi close/);
-  root.querySelector("[data-act='close-operation']")?.click();
+  assert.equal(root.querySelector(".operation-modal"), null, "closing a session does not open a terminal modal");
+  root.querySelector("pi-settings [data-act='open-logs']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector(".logs-modal").textContent, /Session closed/);
+  assert.doesNotMatch(root.querySelector(".logs-modal").textContent, /pi close/);
+  root.querySelector("[data-act='close-logs']").click();
 
   dom.window.close();
 });

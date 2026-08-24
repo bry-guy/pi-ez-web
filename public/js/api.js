@@ -29,6 +29,7 @@ const j = async (r) => {
 export const api = {
   state: () => fetch("/api/state", { cache: "no-store" }).then(j),
   health: () => fetch(`/api/health?probe=${Date.now()}`, { cache: "no-store" }).then(j),
+  logs: (limit = 500) => fetch(`/api/logs?limit=${encodeURIComponent(limit)}`, { cache: "no-store" }).then(j),
   models: () => fetch("/api/models").then(j),
   providers: () => fetch("/api/providers").then(j),
   authStart: (providerId, type) => fetch(`/api/providers/${encodeURIComponent(providerId)}/login`, { method: "POST", headers: JH, body: JSON.stringify({ type }) }).then(j),
@@ -46,9 +47,13 @@ export const api = {
   newProjectSession: (projectId, options = {}) => fetch(`/api/projects/${projectId}/sessions`, { method: "POST", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
   forkSession: (id, name = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ name }) }).then(j),
   branchSession: (id, options = {}) => fetch(`/api/sessions/${encodeURIComponent(id)}/branch-context`, { method: "POST", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
-  mergeBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/merge-local`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
-  pushBranch: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
-  deleteBranch: (projectId, branch, options = {}) => fetch(`/api/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: JH, body: JSON.stringify(options || {}) }).then(j),
+  mergeBranch: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/merge-local`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
+  pushPreview: id => fetch(`/api/sessions/${encodeURIComponent(id)}/push-preview`, { cache: "no-store" }).then(j),
+  pushBranch: (id, operationId = null, expected = {}) => {
+    const body = { ...(operationId ? { operationId } : {}), ...(expected?.head ? { expectedHead: expected.head } : {}), ...(Object.prototype.hasOwnProperty.call(expected || {}, "baseHead") ? { expectedBaseHead: expected.baseHead } : {}) };
+    return fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(body) }).then(j);
+  },
+  deleteBranch: (projectId, branch, options = {}) => fetch(`/api/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
   repos: () => fetch("/api/repos").then(j),
   repositorySources: () => fetch("/api/repository-sources").then(j),
   githubRepos: (query = "", page = 1) => fetch(`/api/github/repos?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),

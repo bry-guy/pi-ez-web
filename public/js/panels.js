@@ -1,5 +1,5 @@
 import { api, refreshState } from "./api.js";
-import { beginOperation, combineOperationResults, completeOperation, showCompletedOperation } from "./operations.js";
+import { beginOperation, combineOperationResults, completeOperation, operationFor, operationHint, showCompletedOperation } from "./operations.js";
 import { store } from "./store.js";
 import { esc, mobile, openSessionPicker, selectSession } from "./shell.js";
 
@@ -16,9 +16,23 @@ const gitErrorMessage = error => ({
   git_switch_failed: "Git could not switch the checkout.",
   merge_conflict: "Git reported a merge conflict; the merge was aborted.",
   git_push_failed: "Git could not push this branch.",
+  push_preview_failed: "The commits to push could not be listed.",
+  push_preview_stale: "The branch changed; review the commits to push again.",
   detached_head: "This workspace is detached and has no branch to push.",
   branch_delete_failed: "Git could not delete this branch.",
+  sessions_active: "Stop active sessions before changing this branch.",
+  sync_workspace_in_use: "A synchronized conversation is using this branch.",
+  merge_rehome_failed: "The merge landed, but sessions could not return to the primary branch.",
+  merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
+
+function operationFeedback(kinds, fallback = "Working…") {
+  const operation = operationFor(kinds);
+  if (!operation) return "";
+  const status = operation.status === "error" ? "error" : operation.status === "success" ? "success" : "running";
+  const dot = status === "running" ? `<i class="operation-dot" aria-hidden="true"></i>` : `<i class="operation-state-dot" aria-hidden="true"></i>`;
+  return `<span class="operation-hint ${status}" data-operation-hint="${esc(operation.kind)}">${dot}<span>${esc(operationHint(operation, fallback))}</span></span>`;
+}
 
 const syncErrorMessage = error => ({
   sync_not_configured: "Configure a sync server in Settings first.",
@@ -79,6 +93,7 @@ class PiSettings extends HTMLElement {
     this.render();
   }
   async onClick(e) {
+    if (e.target.closest("[data-act='open-logs']")) { store.set({ logsOpen: true, logsError: null }); return; }
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
     if (e.target.closest("[data-act='save-sync-settings']")) return this.saveSyncSettings();
@@ -143,7 +158,7 @@ class PiSettings extends HTMLElement {
     if (store.state.settings?.githubOwner?.editable !== false) patch.githubOwner = this.querySelector("[data-setting='githubOwner']")?.value.trim() || null;
     if (!Object.keys(patch).length) return;
     const autoProfile = patch.githubOwner !== undefined && store.state.piConfiguration?.config?.profileSource === "auto";
-    const operation = autoProfile ? beginOperation("pi-profile", "Load GitHub dotfiles", "", "Request started.") : null;
+    const operation = autoProfile ? beginOperation("repository-settings", "Load GitHub dotfiles", "", "Request started.") : null;
     try {
       const result = await api.settingsPatch({ ...patch, ...(operation ? { operationId: operation.id, activeSessionId: store.activeKey() } : {}) });
       if (operation) completeOperation(operation, result);
@@ -385,11 +400,13 @@ class PiSettings extends HTMLElement {
     const feedback = this.feedback
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
+    const piOperation = operationFeedback("pi-profile", "Reloading Pi resources…");
+    const repositoryOperation = operationFeedback("repository-settings", "Saving repository settings…");
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
     this.innerHTML = `<div class="col-pad">
-      <div class="screen-title">Settings</div>
+      <div class="screen-title-row"><div class="screen-title">Settings</div><button class="settings-action quiet" data-act="open-logs">Logs</button></div>
       ${feedback}
       <section class="settings-section">
         <div class="settings-section-title">AI providers</div>
@@ -412,7 +429,7 @@ class PiSettings extends HTMLElement {
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div>
           <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${extensionList}${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button></div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button>${piOperation}</div></div>
         </div>
       </section>
       <section class="settings-section">
@@ -444,7 +461,7 @@ class PiSettings extends HTMLElement {
             <input class="settings-inline-input" data-setting="githubOwner" value="${esc(owner)}" placeholder="bry-guy" ${ownerEditable ? "" : "disabled"}>
           </div>
           <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div><div class="provider-actions"><button class="settings-action" data-act="open-github-picker">${githubStatus?.authenticated ? "Manage repositories" : "Sign in with GitHub"}</button>${githubStatus?.authenticated && githubStatus.credentialSource === "stored" ? `<button class="settings-action quiet" data-github-logout>Sign out</button>` : ""}</div></div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button>${repositoryOperation}</div></div>
         </div>
       </section>
       <div class="settings-card">
@@ -720,7 +737,6 @@ class PiSessionPicker extends HTMLElement {
     const picker = this.picker();
     if (!picker) return;
     picker.branch = branch;
-    picker.branchExplicit = true;
     picker.branchMenuOpen = false;
     if (branch === "__new__" && !String(picker.newBranch || "").trim()) {
       picker.newBranch = featureBranchForName(picker.name);
@@ -744,10 +760,15 @@ class PiSessionPicker extends HTMLElement {
     if (this.busy) return;
     this.busy = true;
     this.busyLabel = "Refreshing branches…";
+    const operation = beginOperation("refresh-contexts", "Refresh Git contexts", "", "Request started.", this.picker()?.sourceSessionId);
     store.set({ sessionPickerError: null });
-    try { await refreshState(); }
-    catch (err) { store.set({ sessionPickerError: `Could not refresh branches: ${err.error || err.message || err}` }); }
-    finally { this.busy = false; this.busyLabel = null; this.render(); }
+    try {
+      await refreshState();
+      completeOperation(operation, { ok: true, httpStatus: 200, stdout: "Git contexts refreshed." });
+    } catch (err) {
+      completeOperation(operation, {}, err);
+      store.set({ sessionPickerError: `Could not refresh branches: ${err.error || err.message || err}` });
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
   async syncConversation() {
@@ -814,7 +835,7 @@ class PiSessionPicker extends HTMLElement {
       if (!picker || !project) return;
       const context = (project.contexts || []).find(item => item.branch === picker.currentBranch);
       const primaryBranch = project.defaultBranch || project.primaryBranch || "main";
-      const confirm = { type: "merge", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, error: null, deleteAfter: false, closeSessions: false, sessions: context?.sessions || [], dirty: context?.dirty ?? false, status: context?.status || "unknown" };
+      const confirm = { type: "merge", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, error: null, sessions: context?.sessions || [], dirty: context?.dirty ?? false, status: context?.status || "unknown" };
       this.close(); store.set({ confirm }); return;
     }
     if (act === "delete-branch") {
@@ -835,13 +856,7 @@ class PiSessionPicker extends HTMLElement {
     const primary = project.defaultBranch || project.primaryBranch || "main";
     const enteredName = String(picker.name || "").trim();
     let branch = picker.branch === "__new__" ? String(picker.newBranch || "").trim() : String(picker.branch || "").trim();
-    const implicitPrimary = mode === "new" && !picker.branchExplicit && branch === primary && enteredName;
-    if (implicitPrimary) {
-      branch = featureBranchForName(enteredName);
-      picker.branch = "__new__";
-      picker.newBranch = branch;
-      picker.newBranchAuto = !!branch;
-    } else if (!branch && enteredName && (picker.branch === "__new__" || !picker.branch)) {
+    if (!branch && enteredName && (picker.branch === "__new__" || !picker.branch)) {
       branch = featureBranchForName(enteredName);
       picker.newBranch = branch;
       picker.newBranchAuto = !!branch;
@@ -877,7 +892,9 @@ class PiSessionPicker extends HTMLElement {
       store.state.openTree[project.id] = true;
       selectSession(project.id, targetId);
       completeOperation(operation, result);
-      void refreshState().catch(err => store.setError(`Could not refresh session state: ${err.message || err}`));
+      const refresh = refreshState().catch(err => store.setError(`Could not refresh session state: ${err.message || err}`));
+      if (mode === "switch") await refresh;
+      else void refresh;
     } catch (err) {
       const messages = {
         no_such_base_branch: "That base branch no longer exists.",
@@ -892,17 +909,18 @@ class PiSessionPicker extends HTMLElement {
 
   async push() {
     const id = this.picker()?.sourceSessionId;
-    if (!id || this.busy) return;
+    const project = this.project();
+    if (!id || !project || this.busy) return;
     this.busy = true;
-    this.busyLabel = "Pushing…";
-    const operation = beginOperation("push", "Push", "", "Request started.");
-    let result = null;
+    this.busyLabel = "Checking commits to push…";
+    const operation = beginOperation("push-preview", "Review push", "", "Checking commits to push…");
     try {
-      result = await api.pushBranch(id, operation.id);
-      completeOperation(operation, result);
-      void refreshState().catch(err => store.setError(`Could not refresh branch state: ${err.message || err}`));
+      const preview = await api.pushPreview(id);
+      completeOperation(operation, { ok: true, httpStatus: 200, stdout: `${preview.commitCount} commit${preview.commitCount === 1 ? "" : "s"} ready to push.` });
+      this.close();
+      store.set({ confirm: { type: "push", projectId: project.id, id, branch: preview.branch, upstream: preview.upstream, commits: preview.commits || [], commitCount: preview.commitCount || 0, head: preview.head, baseHead: preview.baseHead, error: null } });
     } catch (err) {
-      completeOperation(operation, result || {}, err);
+      completeOperation(operation, {}, err);
       store.set({ sessionPickerError: gitErrorMessage(err) });
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
@@ -972,7 +990,7 @@ class PiSessionPicker extends HTMLElement {
       ? `<button class="settings-action" data-act="apply-session-branch" data-mode="switch" ${this.busy || !different ? "disabled" : ""}>Switch</button><button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Fork</button>`
       : `<button class="settings-save" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button>`;
     const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
-    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>Push</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
+    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
     const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
     const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
     const hookButtons = hookNames.map(name => `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${this.hookBusy ? "disabled" : ""}>${esc(hookLabel(name))}</button>`).join("");
@@ -985,8 +1003,15 @@ class PiSessionPicker extends HTMLElement {
     const historySection = mode === "new" ? `<section class="session-history"><div class="session-context-heading session-history-heading"><span>History</span><span>${historySessions.length} session${historySessions.length === 1 ? "" : "s"}</span></div><div class="session-history-scroll">${historyRows || `<div class="session-history-empty">No previous sessions yet.</div>`}</div></section>` : "";
     const error = store.state.sessionPickerError ? `<div class="session-picker-error">${esc(store.state.sessionPickerError)}</div>` : "";
     const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
+    const operationProgress = [
+      operationFeedback("sync", "Synchronizing conversation…"),
+      operationFeedback("refresh-contexts", "Refreshing Git contexts…"),
+      operationFeedback("push-preview", "Checking commits to push…"),
+      operationFeedback(["create-session", "switch-session", "fork-session"], "Updating session workspace…"),
+      operationFeedback(["push", "hook", "merge", "delete"], "Running Git operation…"),
+    ].filter(Boolean).join("");
     const subtitle = existing ? `${esc(project.name)} · switch or fork this conversation` : `${esc(project.name)} · choose a branch for this conversation`;
-    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${historySection}<div class="session-context-heading"><span>Workspace</span><div class="session-context-heading-actions">${syncButton}<button class="settings-action quiet" data-act="refresh-session-contexts" ${this.busy || this.syncBusy ? "disabled" : ""}>${this.busy && this.busyLabel === "Refreshing branches…" ? "Refreshing…" : "Refresh"}</button></div></div>${progress}<div class="session-context-users branch-user-list">${userText}</div>${error}${hookSection}${branchActions}</div><div class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker" ${this.busy ? "disabled" : ""}>Cancel</button>${actionButtons}</div></div></section></div>`;
+    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${historySection}<div class="session-context-heading"><span>Workspace</span><div class="session-context-heading-actions">${syncButton}<button class="settings-action quiet" data-act="refresh-session-contexts" ${this.busy || this.syncBusy ? "disabled" : ""}>${this.busy && this.busyLabel === "Refreshing branches…" ? "Refreshing…" : "Refresh"}</button></div></div>${progress}${operationProgress}<div class="session-context-users branch-user-list">${userText}</div>${error}${hookSection}${branchActions}</div><div class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker" ${this.busy ? "disabled" : ""}>Cancel</button>${actionButtons}</div></div></section></div>`;
     if (focusSelector) {
       const next = this.querySelector(focusSelector);
       if (next) {
@@ -1320,66 +1345,88 @@ class PiRepoPicker extends HTMLElement {
   }
 }
 
-/* ---------------- operation modal ---------------- */
-class PiOperation extends HTMLElement {
+/* ---------------- logs modal ---------------- */
+class PiLogs extends HTMLElement {
   connectedCallback() {
+    this.loaded = false;
+    this.loading = false;
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
-    this.timer = setInterval(() => {
-      if (store.state.operation?.status === "running") this.render();
-      else if (this.timer) { clearInterval(this.timer); this.timer = null; }
-    }, 250);
-    this.addEventListener("click", e => {
-      const operation = store.state.operation;
-      if (!operation || operation.status === "running") return;
-      const scrim = this.querySelector(".operation-scrim");
-      if (e.target === scrim || e.target.closest("[data-act='close-operation']")) store.set({ operation: null });
-    });
+    this.onDocumentKeydown = e => {
+      if (e.key === "Escape" && store.state.logsOpen) {
+        e.preventDefault();
+        store.set({ logsOpen: false });
+      }
+    };
+    document.addEventListener("keydown", this.onDocumentKeydown);
+    this.addEventListener("click", e => this.onClick(e));
     this.render();
   }
 
   disconnectedCallback() {
     this.unsub?.();
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    document.removeEventListener("keydown", this.onDocumentKeydown);
   }
 
-  elapsed(operation) {
-    return ((operation.finishedAt || Date.now()) - operation.startedAt) / 1000;
+  async onClick(e) {
+    const scrim = this.querySelector(".logs-scrim");
+    if (e.target === scrim || e.target.closest("[data-act='close-logs']")) {
+      store.set({ logsOpen: false });
+      return;
+    }
+    if (e.target.closest("[data-act='refresh-logs']")) await this.load();
   }
 
-  formatEvent(item) {
-    const time = new Date(item.at || Date.now()).toLocaleTimeString([], { hour12: false });
-    const prefix = `[${time}]`;
-    if (item.type === "process_start") return `${prefix} $ ${item.command || "(command unavailable)"}${item.cwd ? `\\n    cwd: ${item.cwd}` : ""}`;
-    if (item.type === "process_output") return `${prefix} ${item.stream === "stderr" ? "stderr: " : ""}${item.output || ""}`;
-    if (item.type === "process_end") return `${prefix} ${item.message || "Process finished."} · exit ${item.exit ?? "unknown"} · ${item.durationMs ?? "?"}ms`;
-    return `${prefix} ${item.message || item.output || item.type || "Progress update."}`;
+  async load() {
+    if (this.loading) return;
+    this.loading = true;
+    store.set({ logsLoading: true, logsError: null });
+    try {
+      const result = await api.logs(800);
+      store.set({ logs: Array.isArray(result.logs) ? result.logs : [], logsFile: result.file || "logs/pi-ez-web.log", logsLoading: false, logsError: null });
+    } catch (error) {
+      store.set({ logsLoading: false, logsError: error.error || error.message || String(error) });
+    } finally {
+      this.loading = false;
+      this.render();
+    }
+  }
+
+  time(value) {
+    const date = new Date(value || Date.now());
+    return Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString([], { hour12: false });
+  }
+
+  localOperation(operation) {
+    const status = operation.status === "error" ? "error" : operation.status === "success" ? "success" : "running";
+    const events = (operation.events || []).map(item => {
+      const message = item.message || item.output || item.type || "Progress update.";
+      return `<div class="logs-event ${item.type === "error" || item.stream === "stderr" ? "error" : item.type === "result" ? "success" : "info"}"><time>${this.time(item.at)}</time><span>${esc(message)}</span></div>`;
+    }).join("");
+    return `<section class="logs-operation ${status}"><div class="logs-operation-head"><strong>${esc(operation.title)}</strong><span>${status}</span></div>${events || `<div class="logs-event info"><span>${esc(operationHint(operation))}</span></div>`}</section>`;
+  }
+
+  serverEntry(entry) {
+    const status = entry.level === "error" || entry.type === "error" ? "error" : entry.type === "result" ? "success" : "info";
+    const source = [entry.source, entry.kind, entry.phase].filter(Boolean).join(" · ");
+    const detail = entry.output && entry.output !== entry.message ? `<div class="logs-detail">${esc(entry.output)}</div>` : "";
+    return `<div class="logs-event ${status}"><time>${this.time(entry.at)}</time>${source ? `<small>${esc(source)}</small>` : ""}<span>${esc(entry.message || entry.type || "Log entry")}</span>${detail}</div>`;
   }
 
   render() {
-    const operation = store.state.operation;
-    if (!operation) { this.innerHTML = ""; return; }
-    const running = operation.status === "running";
-    const failed = operation.status === "error";
-    const duration = `${this.elapsed(operation).toFixed(1)}s`;
-    const last = operation.events?.at(-1)?.message || (running ? "Waiting for the next progress update…" : "Finished.");
-    const status = running
-      ? `Running · ${duration} · ${last}`
-      : failed
-        ? `Failed · ${duration}${operation.httpStatus ? ` · HTTP ${operation.httpStatus}` : ""}`
-        : `Completed · ${duration}${operation.httpStatus ? ` · HTTP ${operation.httpStatus}` : ""}`;
-    const events = Array.isArray(operation.events) ? operation.events.map(item => this.formatEvent(item)) : [];
-    if (operation.command) events.unshift(`$ ${operation.command}`);
-    const hasProcessOutput = (operation.events || []).some(item => item.type === "process_output" || item.type === "process_end");
-    if (operation.stdout && !hasProcessOutput) events.push(operation.stdout);
-    if (operation.stderr && !hasProcessOutput) events.push(`stderr: ${operation.stderr}`);
-    const log = events.length ? events.join("\\n") : "No progress events were reported.";
-    const previous = this.querySelector(".operation-terminal");
-    const stickToBottom = !previous || previous.scrollHeight - previous.scrollTop - previous.clientHeight < 32;
-    const previousTop = previous?.scrollTop || 0;
-    this.innerHTML = `<div class="operation-scrim"><section class="operation-modal" role="dialog" aria-modal="true" aria-label="${esc(operation.title)}"><div class="operation-head"><div><div class="operation-title">${esc(operation.title)}</div><div class="operation-status ${failed ? "failed" : running ? "running" : "success"}" role="status">${esc(status)}</div></div><button class="ghost-btn" data-act="close-operation" aria-label="Close" ${running ? "disabled" : ""}>×</button></div><div class="operation-body"><div class="operation-command-label">Operation log</div><pre class="operation-terminal" aria-live="polite">${esc(log)}</pre></div><div class="operation-actions"><button class="confirm-back" data-act="close-operation" ${running ? "disabled" : ""}>${running ? "Working…" : "Close"}</button></div></section></div>`;
-    const next = this.querySelector(".operation-terminal");
-    if (next) next.scrollTop = stickToBottom ? next.scrollHeight : previousTop;
+    if (!store.state.logsOpen) {
+      this.loaded = false;
+      this.innerHTML = "";
+      return;
+    }
+    if (!this.loaded) {
+      this.loaded = true;
+      queueMicrotask(() => void this.load());
+    }
+    const operations = (store.state.operations || []).map(operation => this.localOperation(operation)).join("");
+    const serverLogs = (store.state.logs || []).map(entry => this.serverEntry(entry)).join("");
+    const loading = store.state.logsLoading ? `<div class="logs-empty">Loading server logs…</div>` : "";
+    const error = store.state.logsError ? `<div class="logs-error">Could not load the server log: ${esc(store.state.logsError)}</div>` : "";
+    this.innerHTML = `<div class="logs-scrim"><section class="logs-modal" role="dialog" aria-modal="true" aria-label="Logs"><div class="logs-head"><div><div class="logs-title">Logs</div><div class="logs-subtitle">Live actions in this tab and the server log file.</div></div><button class="ghost-btn" data-act="close-logs" aria-label="Close">×</button></div><div class="logs-body">${error}${loading}<section class="logs-section"><div class="logs-section-title">Recent actions</div>${operations || `<div class="logs-empty">No actions have run in this tab.</div>`}</section><section class="logs-section"><div class="logs-section-title">Server log · ${esc(store.state.logsFile || "logs/pi-ez-web.log")}</div><div class="logs-server-list">${serverLogs || `<div class="logs-empty">No server log entries yet.</div>`}</div></section></div><div class="logs-actions"><button class="settings-action quiet" data-act="refresh-logs" ${store.state.logsLoading ? "disabled" : ""}>Refresh</button><button class="settings-save" data-act="close-logs">Close</button></div></section></div>`;
   }
 }
 
@@ -1407,9 +1454,9 @@ class PiConfirm extends HTMLElement {
     const project = store.state.projects.find(item => item.id === c.projectId);
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     this.busy = true;
-    this.busyLabel = c.type === "merge" ? `Fetching ${primary} and merging…` : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
-    const operation = c.type === "merge" || c.type === "deleteBranch"
-      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
+    this.busyLabel = c.type === "merge" ? `Fetching ${primary}, merging, and cleaning up…` : c.type === "push" ? "Pushing commits…" : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
+    const operation = ["merge", "push", "deleteBranch"].includes(c.type)
+      ? beginOperation(c.type === "merge" ? "merge" : c.type === "push" ? "push" : "delete", c.type === "merge" ? `Merge ${c.branch}` : c.type === "push" ? `Push ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
       : null;
     let result = null;
     let followup = null;
@@ -1417,15 +1464,17 @@ class PiConfirm extends HTMLElement {
       if (c.type === "close") {
         await api.close(c.id);
       } else if (c.type === "merge") {
-        result = await api.mergeBranch(c.id);
-        if (c.deleteAfter) followup = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+        result = await api.mergeBranch(c.id, operation?.id);
+      } else if (c.type === "push") {
+        result = await api.pushBranch(c.id, operation?.id, { head: c.head, baseHead: c.baseHead });
       } else if (c.type === "deleteBranch") {
-        result = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions });
+        result = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions, operationId: operation?.id });
       }
       await refreshState();
       if (operation) completeOperation(operation, combineOperationResults(result, followup));
       store.set({ confirm: null });
       const active = store.state.sessionId;
+      if (c.type === "merge" && active && store.findAnySession(active)) openSessionPicker(c.projectId, { mode: "switch", sourceSessionId: active });
       if (active && !store.findAnySession(active)) {
         const project = store.state.projects.find(item => item.id === c.projectId);
         const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
@@ -1458,16 +1507,23 @@ class PiConfirm extends HTMLElement {
       action = c.kind === "chat" ? "Close chat" : "Close session";
     } else if (c.type === "merge") {
       title = `Merge ${esc(c.branch)} to ${esc(primary)}?`;
-      body = `This performs a local merge after checking that ${esc(primary)} is clean and current. It does not push.`;
-      options = `<label class="confirm-check"><input type="checkbox" data-confirm-delete-after ${c.deleteAfter ? "checked" : ""}><span>Delete branch and worktree after merge</span></label>${c.deleteAfter && activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}`;
+      body = `This merges into the local ${esc(primary)} checkout, returns affected sessions to it, and deletes the local branch and worktree. It does not push.`;
+      options = sessions.length ? `<div class="confirm-warn">${sessions.length} session${sessions.length === 1 ? "" : "s"} will return to ${esc(primary)} after the merge.</div>` : "";
       action = "Merge locally";
+    } else if (c.type === "push") {
+      title = `Push ${esc(c.branch)}?`;
+      body = `Push ${c.commitCount} commit${c.commitCount === 1 ? "" : "s"} from ${esc(c.branch)} to ${esc(c.upstream)}.`;
+      options = c.commits?.length
+        ? `<div class="confirm-commits"><strong>Commits to push</strong>${c.commits.map(commit => `<div><code>${esc(commit.shortHash || commit.hash?.slice(0, 7) || "commit")}</code><span>${esc(commit.subject || "(no subject)")}</span></div>`).join("")}${c.commitCount > c.commits.length ? `<small>Showing ${c.commits.length} of ${c.commitCount} commits.</small>` : ""}</div>`
+        : `<div class="confirm-warn">No new commits are ahead of ${esc(c.upstream)}.</div>`;
+      action = "Push commits";
     } else {
       title = `Delete ${esc(c.branch)}?`;
       body = `The local branch and worktree will be deleted. Remote branches are not affected.${activeSessions.length ? " Working sessions will be interrupted." : ""}`;
       options = `${sessions.length ? `<div class="confirm-warn">Affected sessions will move to ${esc(primary)} unless you choose to close them.</div>` : ""}${activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}${c.dirty ? `<label class="confirm-check"><input type="checkbox" data-confirm-force ${c.force ? "checked" : ""}><span>I understand uncommitted changes will be deleted</span></label>` : ""}`;
       action = "Delete branch";
     }
-    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force);
+    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount);
     this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Working…") : action}</button></div></div></div>`;
   }
 }
@@ -1496,7 +1552,7 @@ class PiApp extends HTMLElement {
         </div>
         <pi-repo-picker></pi-repo-picker>
         <pi-session-picker></pi-session-picker>
-        <pi-operation></pi-operation>
+        <pi-logs></pi-logs>
         <pi-confirm></pi-confirm>
         <div class="reload-prompt hidden" data-reload-prompt>
           <div class="reload-card"><div class="screen-title">Reload required</div><div class="proj-sub" data-reload-message></div><button class="primary-btn" data-act="reload">Reload</button></div>
@@ -1583,7 +1639,7 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
-    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.operation || store.state.confirm || store.state.workspaceSettingsOpen);
+    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.workspaceSettingsOpen);
     document.body?.classList.toggle("modal-open", modalOpen);
     const previewBanner = this.querySelector("[data-preview-banner]");
     const preview = store.state.uiConfig?.preview === true;
@@ -1608,7 +1664,7 @@ class PiApp extends HTMLElement {
   }
 }
 
-customElements.define("pi-operation", PiOperation);
+customElements.define("pi-logs", PiLogs);
 customElements.define("pi-confirm", PiConfirm);
 customElements.define("pi-session-picker", PiSessionPicker);
 customElements.define("pi-settings", PiSettings);

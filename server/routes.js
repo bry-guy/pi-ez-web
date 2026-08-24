@@ -19,6 +19,7 @@ import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { markSyncEnrolled, markSyncPending } from "./sync/enrollment.js";
 import { createOperationReporter, operationRequestId } from "./operations.js";
+import { readLogs, logFileName } from "./logging.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
@@ -180,6 +181,11 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     buildId: BUILD_ID,
     capabilities: API_CAPABILITIES,
     sync: sync.state(),
+  }));
+
+  api.get("/logs", c => c.json({
+    logs: readLogs(c.req.query("limit")),
+    file: logFileName(),
   }));
 
   api.get("/state", async c => {
@@ -551,7 +557,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       if (hasName) await sup.setName(id, name);
       hub.emit(id, "session_meta", { branch: context.branch, workspacePath: context.path });
       const operation = reporter.finish({ httpStatus: 200, message: `Switched session ${id} to ${context.branch}.` });
-      return c.json({ ok: true, id, branch: context.branch, contextId: context.id, workspacePath: context.path, name: source?.name || null, operation });
+      return c.json({ ok: true, id, branch: context.branch, contextId: context.id, workspacePath: context.path, name: hasName ? name : source?.name || null, operation });
     } catch (e) {
       const statuses = { bad_branch: 400, no_such_base_branch: 404, checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409, session_streaming: 409, same_branch: 409 };
       if (statuses[e.code]) {
@@ -964,6 +970,19 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     });
   });
 
+  api.get("/sessions/:id/push-preview", async c => {
+    const id = c.req.param("id");
+    const cwd = await sessionWorkspace(id, sup);
+    const found = cwd && findProjectByWorkspace(cwd);
+    if (!found) return err(c, 404, "no_project_for_session");
+    try { return c.json({ ok: true, workspacePath: cwd, ...ws.pushPreview(cwd) }); }
+    catch (e) {
+      const statuses = { detached_head: 409, push_preview_failed: 409 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, { detail: e.detail });
+      throw e;
+    }
+  });
+
   api.post("/sessions/:id/push", async c => {
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
@@ -973,12 +992,21 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const found = cwd && findProjectByWorkspace(cwd);
     if (!found) return err(c, 404, "no_project_for_session");
     try {
+      const preview = ws.pushPreview(cwd);
+      if (body.expectedHead && body.expectedHead !== preview.head) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The branch changed after the push preview." });
+        return err(c, 409, "push_preview_stale", { operation });
+      }
+      if (body.expectedBaseHead !== undefined && body.expectedBaseHead !== preview.baseHead) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The remote branch changed after the push preview." });
+        return err(c, 409, "push_preview_stale", { operation });
+      }
       const result = ws.pushWorkspace(cwd, { report: reporter.log });
       hub.emit(id, "session_meta", { branch: ws.currentBranch(cwd) });
       const operation = reporter.finish({ httpStatus: 200, message: `Pushed ${result.branch} to ${result.upstream}.` });
       return c.json({ ok: true, branch: ws.currentBranch(cwd), workspacePath: cwd, ...result, operation });
     } catch (e) {
-      const statuses = { detached_head: 409, git_push_failed: 409 };
+      const statuses = { detached_head: 409, git_push_failed: 409, push_preview_failed: 409 };
       if (statuses[e.code]) {
         const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.detail || e.message || e.code });
         return err(c, statuses[e.code], e.code, { detail: e.detail, operation });
@@ -990,29 +1018,95 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
 
   api.post("/sessions/:id/merge-local", async c => {
     const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: "merge", title: "Merge branch" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/merge-local` });
     const cwd = await sessionWorkspace(id, sup);
     const found = cwd && findProjectByWorkspace(cwd);
-    if (!found) return err(c, 404, "no_project_for_session");
+    if (!found) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The session is not attached to a project." });
+      return err(c, 404, "no_project_for_session", { operation });
+    }
     const branch = ws.currentBranch(cwd);
     const mainBranch = primaryBranch(found.project);
-    if (!branch || branch === mainBranch) return err(c, 400, "nothing_to_merge");
+    if (!branch || branch === mainBranch) {
+      const operation = reporter.finish({ status: "error", httpStatus: 400, message: "There is no branch to merge." });
+      return err(c, 400, "nothing_to_merge", { operation });
+    }
     try {
       const sourceStatus = ws.contextStatus({ repoPath: found.project.repoPath, workspacePath: cwd, primaryBranch: mainBranch });
-      if (sourceStatus.dirty == null) return err(c, 409, "git_status_unavailable");
-      if (sourceStatus.dirty) return err(c, 409, "workspace_dirty");
-      ws.prepareMain(found.project.repoPath, { fetch: true, primaryBranch: mainBranch });
-      const output = ws.mergeBranch(found.project.repoPath, branch);
-      hub.emit(id, "git_merge", { branch, into: mainBranch });
-      return c.json({ ok: true, merged: branch, into: mainBranch, command: `git merge --no-ff --no-edit ${branch}`, stdout: output, stderr: "", workspacePath: found.project.repoPath });
+      if (sourceStatus.dirty == null) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Git status is unavailable." });
+        return err(c, 409, "git_status_unavailable", { operation });
+      }
+      if (sourceStatus.dirty) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The source workspace has uncommitted changes." });
+        return err(c, 409, "workspace_dirty", { operation });
+      }
+      const affected = await sessionsUsingWorkspace(found.project, cwd, sup);
+      if (affected.some(session => sup.isStreaming(session.id))) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Stop active sessions before merging this branch." });
+        return err(c, 409, "sessions_active", { operation });
+      }
+      for (const session of affected) {
+        if ((await sync.status(session.id)).synchronized) {
+          const operation = reporter.finish({ status: "error", httpStatus: 409, message: "A synchronized conversation is using this branch." });
+          return err(c, 409, "sync_workspace_in_use", { operation });
+        }
+      }
+      const checkoutSessions = await sessionsUsingWorkspace(found.project, found.project.repoPath, sup);
+      if (checkoutSessions.some(session => sup.isStreaming(session.id))) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Stop active sessions in the primary checkout before merging." });
+        return err(c, 409, "sessions_active", { operation });
+      }
+      const checkoutBranch = ws.currentBranch(found.project.repoPath);
+      await ws.prepareMainAsync(found.project.repoPath, { fetch: true, primaryBranch: mainBranch, report: reporter.log });
+      const bindings = loadBindings();
+      if (checkoutBranch !== mainBranch) {
+        for (const session of checkoutSessions) {
+          bindings[session.id] = { projectId: found.project.id, workspacePath: found.project.repoPath };
+          hub.emit(session.id, "session_meta", { branch: mainBranch, workspacePath: found.project.repoPath });
+        }
+        saveBindings(bindings);
+      }
+      reporter.log({ type: "phase", phase: "merge", message: `Merging ${branch} into ${mainBranch}.` });
+      const output = ws.mergeBranch(found.project.repoPath, branch, { report: reporter.log });
+      reporter.log({ type: "result", phase: "merge", output, message: `Merged ${branch} into ${mainBranch}.` });
+      const main = branchContext(found.project, mainBranch) || ws.contextStatus({ repoPath: found.project.repoPath, workspacePath: found.project.repoPath, primaryBranch: mainBranch });
+      try {
+        for (const session of affected) {
+          await sup.rehome(session.id, main.path);
+          bindings[session.id] = { projectId: found.project.id, workspacePath: main.path };
+          hub.emit(session.id, "session_meta", { branch: mainBranch, workspacePath: main.path });
+          hub.emit(session.id, "session_merged", { sessionId: session.id, branch, into: mainBranch });
+        }
+        saveBindings(bindings);
+      } catch (e) {
+        throw Object.assign(new Error("merge_rehome_failed"), { code: "merge_rehome_failed", detail: String(e.message || e).slice(0, 400) });
+      }
+      reporter.log({ type: "phase", phase: "cleanup", message: `Removing ${branch} worktree and local branch.` });
+      let cleanupOutput = "";
+      if (path.resolve(cwd) !== path.resolve(found.project.repoPath)) {
+        ws.removeWorkspace({ repoPath: found.project.repoPath, workspacePath: cwd, force: false, primaryBranch: mainBranch });
+      }
+      cleanupOutput = ws.deleteLocalBranch(found.project.repoPath, branch, mainBranch);
+      reporter.log({ type: "result", phase: "cleanup", output: cleanupOutput, message: `Deleted ${branch}.` });
+      hub.emit(null, "git_branch_deleted", { projectId: found.project.id, branch });
+      const mergedOutput = [output, cleanupOutput].filter(Boolean).join("\n");
+      const operation = reporter.finish({ httpStatus: 200, message: `Merged ${branch} into ${mainBranch} and returned sessions to ${mainBranch}.` });
+      return c.json({ ok: true, merged: branch, into: mainBranch, deleted: true, sessionIds: affected.map(session => session.id), command: `git merge --no-ff --no-edit ${branch} && git branch -D ${branch}`, stdout: mergedOutput, stderr: "", workspacePath: found.project.repoPath, operation });
     } catch (e) {
-      const statuses = { checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409, merge_conflict: 409 };
-      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.detail ? { detail: e.detail } : {});
+      const statuses = { checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409, merge_conflict: 409, sessions_active: 409, sync_workspace_in_use: 409, merge_rehome_failed: 409, workspace_dirty: 409, branch_delete_failed: 409 };
+      if (statuses[e.code]) {
+        const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.detail || e.message || e.code });
+        return err(c, statuses[e.code], e.code, { ...(e.detail ? { detail: e.detail } : {}), operation });
+      }
+      reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
       throw e;
     }
   });
 
-  // Compatibility endpoint for older clients. The current UI uses merge-local,
-  // whose semantics are local-only and do not clean up sessions or branches.
+  // Compatibility endpoint for older clients; merge-local also cleans up the source branch.
   api.post("/sessions/:id/merge", async c => {
     const id = c.req.param("id");
     const cwd = await sessionWorkspace(id, sup);
@@ -1099,11 +1193,19 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
   // ---------- workspace cleanup ----------
   api.delete("/projects/:id/branches/:branch", async c => {
     const p = loadConfig().projects.find(x => x.id === c.req.param("id"));
-    if (!p) return err(c, 404, "no_such_project");
+    const body = await c.req.json().catch(() => ({}));
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), kind: "delete", title: "Delete branch" });
+    reporter.log({ type: "request", phase: "request", message: `DELETE /api/projects/${c.req.param("id")}/branches/${c.req.param("branch")}` });
+    if (!p) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The project does not exist." });
+      return err(c, 404, "no_such_project", { operation });
+    }
     const branch = decodeURIComponent(c.req.param("branch"));
     const mainBranch = primaryBranch(p);
-    if (branch === mainBranch) return err(c, 400, "cannot_delete_main");
-    const body = await c.req.json().catch(() => ({}));
+    if (branch === mainBranch) {
+      const operation = reporter.finish({ status: "error", httpStatus: 400, message: `The primary branch ${mainBranch} cannot be deleted.` });
+      return err(c, 400, "cannot_delete_main", { operation });
+    }
     const force = body.force === true || c.req.query("force") === "1";
     const closeSessions = body.closeSessions === true;
     const context = branchContext(p, branch);
@@ -1111,19 +1213,33 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const bindings = loadBindings();
     const boundSessions = wsPath ? await sessionsUsingWorkspace(p, wsPath, sup) : [];
     for (const session of boundSessions) {
-      if ((await sync.status(session.id)).synchronized) return err(c, 409, "sync_workspace_in_use");
+      if ((await sync.status(session.id)).synchronized) {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: "A synchronized conversation is using this branch." });
+        return err(c, 409, "sync_workspace_in_use", { operation });
+      }
     }
     try {
       const affected = wsPath ? await sessionsUsingWorkspace(p, wsPath, sup) : [];
       if (wsPath) {
         const branchStatus = ws.contextStatus({ repoPath: p.repoPath, workspacePath: wsPath, primaryBranch: mainBranch });
-        if (branchStatus.dirty == null) return err(c, 409, "git_status_unavailable");
-        if (branchStatus.dirty && !force) return err(c, 409, "workspace_dirty");
-        if (path.resolve(wsPath) === path.resolve(p.repoPath) && branchStatus.dirty) return err(c, 409, "checkout_dirty");
+        if (branchStatus.dirty == null) {
+          const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Git status is unavailable." });
+          return err(c, 409, "git_status_unavailable", { operation });
+        }
+        if (branchStatus.dirty && !force) {
+          const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The branch has uncommitted changes." });
+          return err(c, 409, "workspace_dirty", { operation });
+        }
+        if (path.resolve(wsPath) === path.resolve(p.repoPath) && branchStatus.dirty) {
+          const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The primary checkout has uncommitted changes." });
+          return err(c, 409, "checkout_dirty", { operation });
+        }
       }
+      reporter.log({ type: "phase", phase: "prepare-main", message: `Preparing ${mainBranch} before deleting ${branch}.` });
       ws.prepareMain(p.repoPath, { fetch: false, primaryBranch: mainBranch });
       const main = branchContext(p, mainBranch) || ws.contextStatus({ repoPath: p.repoPath, workspacePath: p.repoPath, primaryBranch: mainBranch });
       for (const session of affected) {
+        reporter.log({ type: "phase", phase: "rehome-session", message: `${closeSessions ? "Closing" : "Moving"} session ${session.id} to ${mainBranch}.` });
         if (sup.isStreaming(session.id)) await sup.stop(session.id);
         if (!closeSessions) {
           await sup.rehome(session.id, main.path);
@@ -1138,11 +1254,17 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       saveBindings(bindings);
       if (wsPath && path.resolve(wsPath) !== path.resolve(p.repoPath)) ws.removeWorkspace({ repoPath: p.repoPath, workspacePath: wsPath, force });
       const stdout = ws.deleteLocalBranch(p.repoPath, branch, mainBranch);
+      reporter.log({ type: "result", phase: "delete", output: stdout, message: `Deleted ${branch}.` });
       hub.emit(null, "git_branch_deleted", { projectId: p.id, branch });
-      return c.json({ ok: true, branch, command: `git branch -D ${branch}`, stdout, stderr: "", movedSessionIds: closeSessions ? [] : affected.map(session => session.id), closedSessionIds: closeSessions ? affected.map(session => session.id) : [] });
+      const operation = reporter.finish({ httpStatus: 200, message: `Deleted ${branch}.` });
+      return c.json({ ok: true, branch, command: `git branch -D ${branch}`, stdout, stderr: "", movedSessionIds: closeSessions ? [] : affected.map(session => session.id), closedSessionIds: closeSessions ? affected.map(session => session.id) : [], operation });
     } catch (e) {
       const statuses = { cannot_delete_main: 400, no_such_context: 404, no_such_branch: 404, git_status_unavailable: 409, workspace_dirty: 409, checkout_dirty: 409, main_worktree_external: 409, git_switch_failed: 409, branch_delete_failed: 409 };
-      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.detail ? { detail: e.detail } : {});
+      if (statuses[e.code]) {
+        const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.detail || e.message || e.code });
+        return err(c, statuses[e.code], e.code, { ...(e.detail ? { detail: e.detail } : {}), operation });
+      }
+      reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
       throw e;
     }
   });

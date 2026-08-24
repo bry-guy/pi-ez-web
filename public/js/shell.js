@@ -1,5 +1,5 @@
 import { api, openTranscript, refreshState, transcriptLoading } from "./api.js";
-import { beginOperation, completeOperation } from "./operations.js";
+import { beginOperation, completeOperation, operationFor, operationHint } from "./operations.js";
 import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -36,7 +36,6 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
       mode: ["switch", "fork"].includes(mode) ? mode : "new",
       sourceSessionId: source,
       branch: branch || (mode === "new" ? defaultBranch : currentBranch),
-      branchExplicit: mode === "new" ? !!branch : true,
       baseBranch: defaultBranch,
       name: name ?? (mode === "new" ? "" : active?.name || active?.title || ""),
       newBranch: "",
@@ -55,13 +54,13 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
     workspaceSettingsOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
   const operation = showOperation && !transcriptLoading(sessionId)
-    ? beginOperation("open-session", "Open session", "", "Request started.")
+    ? beginOperation("open-session", "Open session", "", "Request started.", sessionId)
     : null;
   openTranscript(sessionId, { operation });
 }
@@ -70,7 +69,7 @@ export function selectChat(chatId) {
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     workspaceSettingsOpen: false, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null, operation: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null, hookResult: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "chat", id: chatId });
@@ -118,7 +117,7 @@ export async function closeConversation(id, kind = "session") {
   if (!id || closeOperationInFlight) return;
   closeOperationInFlight = true;
   const label = kind === "chat" ? "Close chat" : "Close session";
-  const operation = beginOperation("close", label, "", "Request started.");
+  const operation = beginOperation("close", label, "", "Request started.", id);
   let result = null;
   try {
     result = await api.close(id, operation.id, kind);
@@ -235,11 +234,16 @@ class PiSidebar extends HTMLElement {
       const sel = store.state.sessionId === n.id && !store.state.chatId && store.state.view === "chat";
       const streaming = store.transcript(n.id).streaming;
       const unread = !!store.state.unread[n.id];
+      const operation = [operationFor("open-session"), operationFor("close")].find(item => item?.sessionId === n.id);
+      const operationStatus = operation?.status === "error" ? "error" : operation?.status === "success" ? "success" : "running";
+      const operationHintMarkup = operation
+        ? `<span class="operation-row-hint ${operationStatus}"><i class="${operation.status === "running" ? "operation-dot" : "operation-state-dot"}" aria-hidden="true"></i>${esc(operationHint(operation))}</span>`
+        : "";
       out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
         <div class="row ${sel ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
           <span class="caret" ${kids ? `data-act="toggle-tree" data-tree-id="${esc(n.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(n.title)}"` : ""}>${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
-          <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>
+          <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>${operationHintMarkup}
           <button class="row-close" data-act="close-row" data-kind="session" data-pid="${esc(p.id)}" data-id="${esc(n.id)}"
             data-label="${esc(n.title)}" data-branch="${esc(n.branch || "")}" title="Close session">×</button>
         </div></div>`);
@@ -318,8 +322,13 @@ class PiSidebar extends HTMLElement {
       .map(cRow => {
         const streaming = cRow.streaming || store.transcript(cRow.id).streaming;
         const unread = !!s.unread[cRow.id];
-        return `<div class="row ${s.chatId === cRow.id ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
-        <span class="lbl">${esc(cRow.title)}</span><span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span><span class="when">${esc(cRow.when)}</span>
+        const operation = operationFor("close")?.sessionId === cRow.id ? operationFor("close") : null;
+        const operationStatus = operation?.status === "error" ? "error" : operation?.status === "success" ? "success" : "running";
+        const operationHintMarkup = operation
+          ? `<span class="operation-row-hint ${operationStatus}"><i class="${operation.status === "running" ? "operation-dot" : "operation-state-dot"}" aria-hidden="true"></i>${esc(operationHint(operation))}</span>`
+          : "";
+        return `<div class="row ${s.chatId === cRow.id ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread " : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
+        <span class="lbl">${esc(cRow.title)}</span><span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>${operationHintMarkup}<span class="when">${esc(cRow.when)}</span>
         <button class="row-close" data-act="close-row" data-kind="chat" data-id="${esc(cRow.id)}"
           data-label="${esc(cRow.title)}" data-branch="" title="Close chat">×</button>
       </div>`;

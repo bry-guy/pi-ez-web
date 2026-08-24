@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hub } from "./events.js";
+import { writeLog } from "./logging.js";
 
 const MAX_EVENTS = 600;
 const MAX_TEXT = 12_000;
@@ -53,6 +54,18 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     };
     operation.events.push(event);
     if (operation.events.length > MAX_EVENTS) operation.events.splice(0, operation.events.length - MAX_EVENTS);
+    writeLog(event.type === "error" ? "error" : "info", event.message || event.output || event.type, {
+      source: "operation",
+      operationId: operation.id,
+      sessionId: operation.sessionId,
+      kind: operation.kind,
+      title: operation.title,
+      type: event.type,
+      phase: event.phase,
+      command: event.command,
+      output: event.output,
+      exit: event.exit,
+    });
     publish(operation.sessionId, "operation_log", { operationId: operation.id, event });
     return event;
   };

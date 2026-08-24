@@ -62,8 +62,14 @@ export const store = {
     openActivity: {},
     openDirs: {},
     workspaceSettingsOpen: false,
-    confirm: null,          // merge | deleteBranch confirmation payload
-    operation: null,         // running/completed truthful operation log modal
+    confirm: null,          // merge | push | deleteBranch confirmation payload
+    operation: null,         // most recent operation status
+    operations: [],           // recent client-visible operations for Logs
+    logsOpen: false,
+    logs: [],
+    logsFile: "logs/pi-ez-web.log",
+    logsLoading: false,
+    logsError: null,
     filesOpen: false,
     repoPickerOpen: false,
     repoPickerSource: null,
