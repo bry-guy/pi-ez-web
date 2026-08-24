@@ -62,7 +62,7 @@ export const store = {
     openActivity: {},
     openDirs: {},
     workspaceSettingsOpen: false,
-    confirm: null,          // merge | deleteBranch confirmation payload
+    confirm: null,          // merge | push | deleteBranch confirmation payload
     operation: null,         // most recent operation status
     operations: [],           // recent client-visible operations for Logs
     logsOpen: false,

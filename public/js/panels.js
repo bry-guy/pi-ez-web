@@ -16,8 +16,14 @@ const gitErrorMessage = error => ({
   git_switch_failed: "Git could not switch the checkout.",
   merge_conflict: "Git reported a merge conflict; the merge was aborted.",
   git_push_failed: "Git could not push this branch.",
+  push_preview_failed: "The commits to push could not be listed.",
+  push_preview_stale: "The branch changed; review the commits to push again.",
   detached_head: "This workspace is detached and has no branch to push.",
   branch_delete_failed: "Git could not delete this branch.",
+  sessions_active: "Stop active sessions before changing this branch.",
+  sync_workspace_in_use: "A synchronized conversation is using this branch.",
+  merge_rehome_failed: "The merge landed, but sessions could not return to the primary branch.",
+  merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
 function operationFeedback(kinds, fallback = "Working…") {
@@ -829,7 +835,7 @@ class PiSessionPicker extends HTMLElement {
       if (!picker || !project) return;
       const context = (project.contexts || []).find(item => item.branch === picker.currentBranch);
       const primaryBranch = project.defaultBranch || project.primaryBranch || "main";
-      const confirm = { type: "merge", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, error: null, deleteAfter: false, closeSessions: false, sessions: context?.sessions || [], dirty: context?.dirty ?? false, status: context?.status || "unknown" };
+      const confirm = { type: "merge", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, error: null, sessions: context?.sessions || [], dirty: context?.dirty ?? false, status: context?.status || "unknown" };
       this.close(); store.set({ confirm }); return;
     }
     if (act === "delete-branch") {
@@ -903,17 +909,18 @@ class PiSessionPicker extends HTMLElement {
 
   async push() {
     const id = this.picker()?.sourceSessionId;
-    if (!id || this.busy) return;
+    const project = this.project();
+    if (!id || !project || this.busy) return;
     this.busy = true;
-    this.busyLabel = "Pushing…";
-    const operation = beginOperation("push", "Push", "", "Request started.");
-    let result = null;
+    this.busyLabel = "Checking commits to push…";
+    const operation = beginOperation("push-preview", "Review push", "", "Checking commits to push…");
     try {
-      result = await api.pushBranch(id, operation.id);
-      completeOperation(operation, result);
-      void refreshState().catch(err => store.setError(`Could not refresh branch state: ${err.message || err}`));
+      const preview = await api.pushPreview(id);
+      completeOperation(operation, { ok: true, httpStatus: 200, stdout: `${preview.commitCount} commit${preview.commitCount === 1 ? "" : "s"} ready to push.` });
+      this.close();
+      store.set({ confirm: { type: "push", projectId: project.id, id, branch: preview.branch, upstream: preview.upstream, commits: preview.commits || [], commitCount: preview.commitCount || 0, head: preview.head, baseHead: preview.baseHead, error: null } });
     } catch (err) {
-      completeOperation(operation, result || {}, err);
+      completeOperation(operation, {}, err);
       store.set({ sessionPickerError: gitErrorMessage(err) });
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
@@ -983,7 +990,7 @@ class PiSessionPicker extends HTMLElement {
       ? `<button class="settings-action" data-act="apply-session-branch" data-mode="switch" ${this.busy || !different ? "disabled" : ""}>Switch</button><button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Fork</button>`
       : `<button class="settings-save" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button>`;
     const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
-    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>Push</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
+    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
     const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
     const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
     const hookButtons = hookNames.map(name => `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${this.hookBusy ? "disabled" : ""}>${esc(hookLabel(name))}</button>`).join("");
@@ -999,6 +1006,7 @@ class PiSessionPicker extends HTMLElement {
     const operationProgress = [
       operationFeedback("sync", "Synchronizing conversation…"),
       operationFeedback("refresh-contexts", "Refreshing Git contexts…"),
+      operationFeedback("push-preview", "Checking commits to push…"),
       operationFeedback(["create-session", "switch-session", "fork-session"], "Updating session workspace…"),
       operationFeedback(["push", "hook", "merge", "delete"], "Running Git operation…"),
     ].filter(Boolean).join("");
@@ -1446,9 +1454,9 @@ class PiConfirm extends HTMLElement {
     const project = store.state.projects.find(item => item.id === c.projectId);
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     this.busy = true;
-    this.busyLabel = c.type === "merge" ? `Fetching ${primary} and merging…` : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
-    const operation = c.type === "merge" || c.type === "deleteBranch"
-      ? beginOperation(c.type === "merge" ? "merge" : "delete", c.type === "merge" ? `Merge ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
+    this.busyLabel = c.type === "merge" ? `Fetching ${primary}, merging, and cleaning up…` : c.type === "push" ? "Pushing commits…" : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
+    const operation = ["merge", "push", "deleteBranch"].includes(c.type)
+      ? beginOperation(c.type === "merge" ? "merge" : c.type === "push" ? "push" : "delete", c.type === "merge" ? `Merge ${c.branch}` : c.type === "push" ? `Push ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
       : null;
     let result = null;
     let followup = null;
@@ -1457,7 +1465,8 @@ class PiConfirm extends HTMLElement {
         await api.close(c.id);
       } else if (c.type === "merge") {
         result = await api.mergeBranch(c.id, operation?.id);
-        if (c.deleteAfter) followup = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions, operationId: operation?.id });
+      } else if (c.type === "push") {
+        result = await api.pushBranch(c.id, operation?.id, { head: c.head, baseHead: c.baseHead });
       } else if (c.type === "deleteBranch") {
         result = await api.deleteBranch(c.projectId, c.branch, { force: !!c.force, closeSessions: !!c.closeSessions, operationId: operation?.id });
       }
@@ -1465,6 +1474,7 @@ class PiConfirm extends HTMLElement {
       if (operation) completeOperation(operation, combineOperationResults(result, followup));
       store.set({ confirm: null });
       const active = store.state.sessionId;
+      if (c.type === "merge" && active && store.findAnySession(active)) openSessionPicker(c.projectId, { mode: "switch", sourceSessionId: active });
       if (active && !store.findAnySession(active)) {
         const project = store.state.projects.find(item => item.id === c.projectId);
         const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
@@ -1497,16 +1507,23 @@ class PiConfirm extends HTMLElement {
       action = c.kind === "chat" ? "Close chat" : "Close session";
     } else if (c.type === "merge") {
       title = `Merge ${esc(c.branch)} to ${esc(primary)}?`;
-      body = `This performs a local merge after checking that ${esc(primary)} is clean and current. It does not push.`;
-      options = `<label class="confirm-check"><input type="checkbox" data-confirm-delete-after ${c.deleteAfter ? "checked" : ""}><span>Delete branch and worktree after merge</span></label>${c.deleteAfter && activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}`;
+      body = `This merges into the local ${esc(primary)} checkout, returns affected sessions to it, and deletes the local branch and worktree. It does not push.`;
+      options = sessions.length ? `<div class="confirm-warn">${sessions.length} session${sessions.length === 1 ? "" : "s"} will return to ${esc(primary)} after the merge.</div>` : "";
       action = "Merge locally";
+    } else if (c.type === "push") {
+      title = `Push ${esc(c.branch)}?`;
+      body = `Push ${c.commitCount} commit${c.commitCount === 1 ? "" : "s"} from ${esc(c.branch)} to ${esc(c.upstream)}.`;
+      options = c.commits?.length
+        ? `<div class="confirm-commits"><strong>Commits to push</strong>${c.commits.map(commit => `<div><code>${esc(commit.shortHash || commit.hash?.slice(0, 7) || "commit")}</code><span>${esc(commit.subject || "(no subject)")}</span></div>`).join("")}${c.commitCount > c.commits.length ? `<small>Showing ${c.commits.length} of ${c.commitCount} commits.</small>` : ""}</div>`
+        : `<div class="confirm-warn">No new commits are ahead of ${esc(c.upstream)}.</div>`;
+      action = "Push commits";
     } else {
       title = `Delete ${esc(c.branch)}?`;
       body = `The local branch and worktree will be deleted. Remote branches are not affected.${activeSessions.length ? " Working sessions will be interrupted." : ""}`;
       options = `${sessions.length ? `<div class="confirm-warn">Affected sessions will move to ${esc(primary)} unless you choose to close them.</div>` : ""}${activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}${c.dirty ? `<label class="confirm-check"><input type="checkbox" data-confirm-force ${c.force ? "checked" : ""}><span>I understand uncommitted changes will be deleted</span></label>` : ""}`;
       action = "Delete branch";
     }
-    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force);
+    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount);
     this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Working…") : action}</button></div></div></div>`;
   }
 }

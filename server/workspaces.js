@@ -139,6 +139,37 @@ export function prepareMain(repoPath, { fetch = true, primaryBranch = null, repo
   } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
 }
 
+function refHead(workspacePath, ref) {
+  try { return git(workspacePath, "rev-parse", "--verify", ref).trim() || null; } catch { return null; }
+}
+
+export function pushPreview(workspacePath, { limit = 100 } = {}) {
+  const branch = currentBranch(workspacePath);
+  if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
+  const configuredUpstream = branchUpstream(workspacePath, branch);
+  const upstream = configuredUpstream || `origin/${branch}`;
+  const remote = upstream.split("/", 1)[0];
+  const baseRef = [
+    configuredUpstream,
+    remoteBranchForLocal(workspacePath, branch),
+    `${remote}/${defaultBranch(workspacePath)}`,
+  ].find(ref => ref && refHead(workspacePath, ref));
+  const head = refHead(workspacePath, "HEAD");
+  if (!head) throw Object.assign(new Error("push_preview_failed"), { code: "push_preview_failed" });
+  const range = baseRef ? `${baseRef}..HEAD` : "HEAD";
+  try {
+    const commitCount = Number(git(workspacePath, "rev-list", "--count", range).trim()) || 0;
+    const commits = commitCount
+      ? git(workspacePath, "log", "--no-decorate", `--format=%H%x00%h%x00%s`, "-n", String(Math.max(1, limit)), range)
+        .split("\n").filter(Boolean).map(line => {
+          const [hash, shortHash, ...subject] = line.split("\0");
+          return { hash, shortHash, subject: subject.join("\0") };
+        })
+      : [];
+    return { branch, upstream, remote, head, baseRef, baseHead: baseRef ? refHead(workspacePath, baseRef) : null, commitCount, commits, dirty: isDirty(workspacePath) };
+  } catch (error) { throw gitFailure("push_preview_failed", error); }
+}
+
 export function pushWorkspace(workspacePath, { report = null } = {}) {
   const branch = currentBranch(workspacePath);
   if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
@@ -149,10 +180,10 @@ export function pushWorkspace(workspacePath, { report = null } = {}) {
   } catch (error) { throw gitFailure("git_push_failed", error); }
 }
 
-export function mergeBranch(repoPath, branch) {
+export function mergeBranch(repoPath, branch, { report = null } = {}) {
   validateBranchName(branch);
   try {
-    return execFileSync("git", ["merge", "--no-ff", "--no-edit", branch], { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return gitLogged(repoPath, ["merge", "--no-ff", "--no-edit", branch], report);
   } catch (error) {
     try { execFileSync("git", ["merge", "--abort"], { cwd: repoPath, stdio: ["ignore", "pipe", "pipe"] }); } catch { /* no merge to abort */ }
     throw gitFailure("merge_conflict", error);

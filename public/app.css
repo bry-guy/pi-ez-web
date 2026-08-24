@@ -935,7 +935,7 @@ body.modal-open .scrollable { overflow: hidden; }
 .logs-error { color: var(--red); }
 .logs-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }
 
-/* confirmation modal (merge / close) */
+/* confirmation modal (merge / push / delete / close) */
 .confirm-scrim {
   position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
   background: oklch(0.15 0.02 255 / 0.6); z-index: 40;
@@ -951,6 +951,12 @@ body.modal-open .scrollable { overflow: hidden; }
 .confirm-sessions strong { color: var(--orange); font: 11px var(--mono); }
 .confirm-sessions button { padding: 5px 7px; border-radius: 6px; background: var(--surface-2); color: var(--accent); text-align: left; font: 11px var(--mono); cursor: pointer; }
 .confirm-sessions button:hover, .confirm-sessions button:focus-visible { color: var(--text); outline: 0; }
+.confirm-commits { display: grid; gap: 6px; max-height: 240px; overflow-y: auto; margin-top: 12px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.confirm-commits strong { color: var(--text); font: 11px var(--mono); }
+.confirm-commits div { display: flex; gap: 8px; min-width: 0; font: 11px var(--mono); line-height: 1.35; }
+.confirm-commits code { flex: 0 0 auto; color: var(--accent); }
+.confirm-commits span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.confirm-commits small { color: var(--faint); font: 10px var(--mono); }
 .confirm-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; color: var(--text); font-size: 12px; line-height: 1.4; }
 .confirm-check input { margin-top: 2px; accent-color: var(--accent); }
 .confirm-warn {
