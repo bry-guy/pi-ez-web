@@ -1073,8 +1073,10 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       const output = ws.mergeBranch(found.project.repoPath, branch, { report: reporter.log });
       reporter.log({ type: "result", phase: "merge", output, message: `Merged ${branch} into ${mainBranch}.` });
       const main = branchContext(found.project, mainBranch) || ws.contextStatus({ repoPath: found.project.repoPath, workspacePath: found.project.repoPath, primaryBranch: mainBranch });
+      reporter.log({ type: "phase", phase: "rehome", message: `Returning ${affected.length} session${affected.length === 1 ? "" : "s"} to ${mainBranch}.` });
       try {
         for (const session of affected) {
+          reporter.log({ type: "phase", phase: "rehome-session", message: `Returning session ${session.id} to ${mainBranch}.` });
           await sup.rehome(session.id, main.path);
           bindings[session.id] = { projectId: found.project.id, workspacePath: main.path };
           hub.emit(session.id, "session_meta", { branch: mainBranch, workspacePath: main.path });

@@ -762,10 +762,16 @@ export class RealSupervisor {
   }
 
   async _disposeLiveState(st, reason = "quit") {
-    try { await st.session.extensionRunner?.emit?.({ type: "session_shutdown", reason }); }
-    catch { /* extension shutdown is best effort */ }
+    const shutdown = Promise.resolve()
+      .then(() => st.session.extensionRunner?.emit?.({ type: "session_shutdown", reason }))
+      .catch(() => {});
+    const timeout = new Promise(resolve => {
+      const timer = setTimeout(resolve, 5000);
+      timer.unref?.();
+    });
+    await Promise.race([shutdown, timeout]);
     st.unsubscribe?.();
-    st.session.dispose?.();
+    try { st.session.dispose?.(); } catch {}
   }
 
   assertPiConfigurationReloadable() {
