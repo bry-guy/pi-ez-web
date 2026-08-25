@@ -15,9 +15,14 @@ these paths stable across container restarts:
 
 The repository also contains `deploy/k8s-preview`, a frontend-only,
 production-backed preview workload. The infra repository creates an Argo CD
-Application for a selected branch and overrides its GHCR image with that branch
-commit's immutable digest; preview resources are name-prefixed so they do not
-select the production pod. The preview runs with `PI_WEB_UI_ONLY=1`, mounts no
+Application that follows the internal `preview/pi` deployment ref and its
+immutable GHCR digest; preview resources are name-prefixed so they do not select
+the production pod. Feature branch builds replace the preview slot. Main builds
+replace it too, wait until `/ui-health` reports the source commit, then promote
+the same image digest to `deploy/k8s`. The main gate connects through
+`tailscale/github-action` using the `TAILSCALE_OAUTH_CLIENT_ID` and
+`TAILSCALE_OAUTH_CLIENT_SECRET` repository secrets. The preview runs with
+`PI_WEB_UI_ONLY=1`, mounts no
 application state or operator Secret, and serves `/ui-health` for Kubernetes
 probes. The preview origin's `/api/*` requests are routed by the infra-owned
 Caddy configuration to the production Service, while all other paths go to the
@@ -77,9 +82,10 @@ and `fsGroup` so the `node` user can write the state, repository, and worktree
 volumes.
 
 The owned application resources live in `deploy/k8s/`, and the Argo CD
-bootstrap resources live in `deploy/argocd/`. The release workflow builds a
-private GHCR image, records its immutable digest in `deploy/k8s/kustomization.yaml`,
-and Argo CD reconciles the committed desired state. The namespace pull Secret
+bootstrap resources live in `deploy/argocd/`. The release workflow builds one
+private GHCR image, validates that digest in preview, records the verified digest
+in `deploy/k8s/kustomization.yaml`, and lets Argo CD reconcile the committed
+desired state. The namespace pull Secret
 and runtime/operator Secrets are materialized out of band through fnox and
 1Password; no secret values belong in Git or image layers. Site-specific
 platform wiring such as Caddy routes, kubeconfigs, and the secret-sync task

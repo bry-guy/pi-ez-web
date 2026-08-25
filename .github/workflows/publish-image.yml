@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: pi-ez-web-${{ startsWith(github.ref_name, 'feature/') && 'preview' || github.ref_name }}
+  group: pi-ez-web-${{ github.ref_name == 'main' && 'main' || 'preview' }}
   cancel-in-progress: ${{ startsWith(github.ref_name, 'feature/') }}
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
@@ -67,57 +67,104 @@ jobs:
           build-args: |
             PI_WEB_BUILD_ID=${{ steps.source.outputs.sha }}
 
-      - name: Update deployment digest
+      - name: Stage image in preview
+        id: preview
         shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
-          digest="${{ steps.build.outputs.digest }}"
-          if [[ "$GITHUB_REF_NAME" == main ]]; then
-            python3 scripts/update-image-digest.py \
-              ghcr.io/${{ github.repository_owner }}/pi-ez-web \
-              "$digest"
-          else
-            python3 - "$digest" <<'PY'
-          import pathlib, re, sys
-          path = pathlib.Path("deploy/k8s-preview/kustomization.yaml")
-          digest = sys.argv[1]
-          text = path.read_text()
-          pattern = r'  - name: ghcr\.io/bry-guy/pi-ez-web\n(?:    newTag: [^\n]+|    newName: ghcr\.io/bry-guy/pi-ez-web\n    digest: [^\n]+)'
-          replacement = f'  - name: ghcr.io/bry-guy/pi-ez-web\n    newName: ghcr.io/bry-guy/pi-ez-web\n    digest: {digest}'
-          updated, count = re.subn(pattern, replacement, text)
-          if count != 1:
-              raise SystemExit("expected one pi-ez-web preview image entry")
-          path.write_text(updated)
-          PY
+          remote_source="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk 'NR == 1 { print $1 }')"
+          if [[ "$remote_source" != "$SOURCE_SHA" ]]; then
+            echo "$GITHUB_REF_NAME moved after this build started" >&2
+            exit 1
           fi
 
-      - name: Commit deployment digest
-        run: |
-          if [[ "$GITHUB_REF_NAME" == main ]]; then
-            target=deploy/k8s/kustomization.yaml
-          else
-            target=deploy/k8s-preview/kustomization.yaml
-          fi
-          if git diff --quiet -- "$target"; then
-            exit 0
-          fi
+          git checkout --detach "$SOURCE_SHA"
+          python3 scripts/update-image-digest.py \
+            deploy/k8s-preview/kustomization.yaml \
+            ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pi-ez-web \
+            "$DIGEST"
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add "$target"
-          git commit -m "chore(deploy): update ${GITHUB_REF_NAME} image digest [skip ci]"
-          git push
+          git add deploy/k8s-preview/kustomization.yaml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(deploy): stage $GITHUB_REF_NAME in preview [skip ci]"
+          fi
+          preview_commit="$(git rev-parse HEAD)"
+          for _ in $(seq 1 12); do
+            previous="$(git ls-remote origin refs/heads/preview/pi | awk 'NR == 1 { print $1 }')"
+            if git push --force-with-lease="refs/heads/preview/pi:$previous" \
+              origin "$preview_commit:refs/heads/preview/pi"; then
+              echo "commit=$preview_commit" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Could not update preview/pi" >&2
+          exit 1
 
-      - name: Advance preview pointer
-        if: startsWith(github.ref_name, 'feature/')
+      - name: Connect to preview tailnet
+        if: github.ref_name == 'main'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
+          tags: ${{ vars.TAILSCALE_TAGS || 'tag:platform' }}
+
+      - name: Verify preview artifact
+        if: github.ref_name == 'main'
         shell: bash
+        env:
+          EXPECTED_BUILD: ${{ steps.source.outputs.sha }}
+          PREVIEW_COMMIT: ${{ steps.preview.outputs.commit }}
+          PREVIEW_URL: ${{ vars.PI_EZ_WEB_PREVIEW_URL || 'https://pi.preview.bry-guy.net' }}
         run: |
           set -euo pipefail
-          # Do not let an older build win if the feature branch moved while
-          # this image was building. The newest workflow run will advance it.
-          branch_sha="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
-          if [[ "$branch_sha" != "$(git rev-parse HEAD)" ]]; then
-            echo "${GITHUB_REF_NAME} advanced during the build; leaving preview/pi unchanged"
+          for _ in $(seq 1 90); do
+            pointer="$(git ls-remote origin refs/heads/preview/pi | awk 'NR == 1 { print $1 }')"
+            if [[ "$pointer" != "$PREVIEW_COMMIT" ]]; then
+              git push --force-with-lease="refs/heads/preview/pi:$pointer" \
+                origin "$PREVIEW_COMMIT:refs/heads/preview/pi" || true
+            fi
+
+            body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+              "$PREVIEW_URL/ui-health?build=$EXPECTED_BUILD" || true)"
+            if BODY="$body" EXPECTED_BUILD="$EXPECTED_BUILD" python3 -c \
+              'import json, os, sys; value = json.loads(os.environ["BODY"]); sys.exit(0 if value.get("ok") is True and value.get("buildId") == os.environ["EXPECTED_BUILD"] else 1)' \
+              2>/dev/null; then
+              echo "Preview is serving $EXPECTED_BUILD"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Preview did not serve $EXPECTED_BUILD within 15 minutes" >&2
+          exit 1
+
+      - name: Promote verified image to production
+        if: github.ref_name == 'main'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          remote_main="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          if [[ "$remote_main" != "$SOURCE_SHA" ]]; then
+            echo "main moved before production promotion" >&2
+            exit 1
+          fi
+
+          git checkout --detach "$SOURCE_SHA"
+          python3 scripts/update-image-digest.py \
+            deploy/k8s/kustomization.yaml \
+            ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pi-ez-web \
+            "$DIGEST"
+          git add deploy/k8s/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Production already references $DIGEST"
             exit 0
           fi
-          git push --force origin HEAD:refs/heads/preview/pi
-          echo "Advanced preview/pi to ${GITHUB_SHA}"
+          git commit -m "chore(deploy): promote $SOURCE_SHA [skip ci]"
+          git push origin HEAD:refs/heads/main

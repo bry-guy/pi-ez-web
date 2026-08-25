@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -57,4 +59,30 @@ test("k3s deployment uses private image GitOps wiring", () => {
   assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /docker\/login-action/);
+  assert.match(workflow, /Stage image in preview[\s\S]*deploy\/k8s-preview\/kustomization\.yaml/);
+  assert.match(workflow, /Verify preview artifact[\s\S]*ui-health[\s\S]*buildId/);
+  assert.match(workflow, /Promote verified image to production[\s\S]*deploy\/k8s\/kustomization\.yaml/);
+  assert.match(workflow, /TAILSCALE_OAUTH_CLIENT_ID/);
+  assert.equal(workflow.match(/steps\.build\.outputs\.digest/g)?.length, 2);
+  assert.match(workflow, /force-with-lease=.*preview\/pi/);
+  assert.doesNotMatch(workflow, /git push --force origin/);
+});
+
+test("image digest updater supports production and preview manifests", () => {
+  const script = path.join(root, "scripts/update-image-digest.py");
+  const digest = `sha256:${"1".repeat(64)}`;
+  const image = "ghcr.io/bry-guy/pi-ez-web";
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ez-web-digest-"));
+
+  try {
+    for (const source of ["deploy/k8s/kustomization.yaml", "deploy/k8s-preview/kustomization.yaml"]) {
+      const target = path.join(temp, path.basename(path.dirname(source)), "kustomization.yaml");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(root, source), target);
+      execFileSync("python3", [script, target, image, digest]);
+      assert.match(fs.readFileSync(target, "utf8"), new RegExp(`digest: ${digest}`));
+    }
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
 });

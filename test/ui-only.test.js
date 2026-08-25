@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { BUILD_ID } from "../server/version.js";
 
 let base;
 let server;
@@ -19,7 +20,8 @@ after(() => {
 test("ui-only mode serves an independent health endpoint and preview config", async () => {
   const healthResponse = await fetch(`${base}/ui-health`);
   assert.equal(healthResponse.status, 200);
-  assert.deepEqual(await healthResponse.json(), { ok: true, mode: "ui-only" });
+  assert.equal(healthResponse.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await healthResponse.json(), { ok: true, mode: "ui-only", buildId: BUILD_ID });
 
   const configResponse = await fetch(`${base}/ui-config.json`);
   assert.equal(configResponse.status, 200);

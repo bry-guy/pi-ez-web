@@ -11,6 +11,7 @@ import { createSupervisor } from "./supervisor/index.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { publicError } from "./pi-configuration.js";
 import { writeLog } from "./logging.js";
+import { BUILD_ID } from "./version.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ONLY_CONFIG = Object.freeze({
@@ -25,7 +26,10 @@ function uiOnlyEnabled() {
 }
 
 function addStaticRoutes(app, { uiOnly }) {
-  app.get("/ui-health", c => c.json({ ok: true, mode: uiOnly ? "ui-only" : "full" }));
+  app.get("/ui-health", c => {
+    c.header("cache-control", "no-store");
+    return c.json({ ok: true, mode: uiOnly ? "ui-only" : "full", buildId: BUILD_ID });
+  });
   app.get("/ui-config.json", c => {
     c.header("cache-control", "no-store");
     return c.json(uiOnly ? UI_ONLY_CONFIG : { ...UI_ONLY_CONFIG, preview: false, productionData: false, label: null });
