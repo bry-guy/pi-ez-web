@@ -108,6 +108,11 @@ function bindSessionToContext(sessionId, project, context) {
   saveBindings(bindings);
 }
 
+function boundProject(sessionId) {
+  const projectId = loadBindings()[sessionId]?.projectId;
+  return projectId ? loadConfig().projects.find(project => project.id === projectId) || null : null;
+}
+
 function branchContext(project, branch) {
   const contexts = ws.listContexts(project.repoPath).filter(context => context.branch === branch);
   return contexts.find(context => context.kind === "checkout") || contexts[0] || null;
@@ -532,9 +537,8 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: body.mode === "fork" ? "fork" : "switch", title: body.mode === "fork" ? "Fork session" : "Switch session" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/branch-context` });
     const cwd = await sessionWorkspace(id, sup);
-    const found = cwd && findProjectByWorkspace(cwd);
-    if (!found) return err(c, 404, "no_project_for_session");
-    const { project } = found;
+    const project = (cwd && findProjectByWorkspace(cwd))?.project || boundProject(id);
+    if (!project) return err(c, 404, "no_project_for_session");
     const source = await sup.meta(id);
     if (body.mode === "fork" && !source) {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The source session was not found." });

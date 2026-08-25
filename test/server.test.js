@@ -718,6 +718,22 @@ test("session creation and current branch switching allow a dirty primary checko
   assert.equal(fs.readFileSync(path.join(repo, "dirty.txt"), "utf8"), "keep me\n");
 });
 
+test("session switching recovers a session whose worktree was removed", async () => {
+  const repo = makeRepo("missing-worktree-session-repo");
+  const created = await (await post("/api/projects", { repoPath: repo })).json();
+  const createdSession = await (await post(`/api/projects/${created.id}/sessions`, {
+    branch: "feature/missing-worktree", baseBranch: "main",
+  })).json();
+  ws.removeWorkspace({ repoPath: repo, workspacePath: createdSession.workspacePath });
+
+  const response = await post(`/api/sessions/${createdSession.id}/branch-context`, {
+    branch: "main", baseBranch: "main", mode: "switch",
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json()).branch, "main");
+  assert.equal(loadBindings()[createdSession.id].workspacePath, repo);
+});
+
 test("settings can persist a custom local repositories root", async () => {
   const customRoot = path.join(tmp, "another-repositories");
   const r = await post("/api/settings", { reposRoot: customRoot });
