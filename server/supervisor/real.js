@@ -1071,7 +1071,7 @@ export class RealSupervisor {
     this.info.set(id, { id, path: session.sessionFile, cwd, parentSessionId: parentId });
     const st = {
       session, cwd, msgId: null, turnId: null, assistantParent: null,
-      liveRecords: new Map(), toolMeta: new Map(), parentSessionId: parentId,
+      liveRecords: new Map(), pendingMessages: [], toolMeta: new Map(), parentSessionId: parentId,
       subagents: new SubagentActivityStore(),
     };
     seedSubagentState(st);

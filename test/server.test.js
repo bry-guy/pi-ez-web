@@ -357,7 +357,10 @@ test("named project hooks apply before per-project overrides", async () => {
   const hookRepo = makeRepo("named-hook-repo");
   saveConfig({ projectHookSets: { named: { check: "printf named", setup: "printf setup" } } });
   const res = await (await post("/api/projects", { name: "named", repoPath: hookRepo, hooks: { check: "printf override" } })).json();
-  assert.equal(res.setup.stdout, "setup");
+  assert.equal(res.setup, null);
+  assert.equal(res.setupNeeded, true);
+  const setup = await post(`/api/sessions/${res.sessionId}/hooks/setup`, {});
+  assert.equal((await setup.json()).stdout, "setup");
   const check = await post(`/api/sessions/${res.sessionId}/hooks/check`, {});
   assert.equal((await check.json()).stdout, "override");
 });
@@ -391,7 +394,11 @@ test("project hooks run in the checkout and can be invoked manually", async () =
       check: "printf check >> hook-ran.txt",
     },
   })).json();
-  assert.equal(res.setup.ok, true);
+  assert.equal(res.setup, null);
+  assert.equal(res.setupNeeded, true);
+  assert.equal(fs.existsSync(hookFile), false);
+  const setup = await post(`/api/sessions/${res.sessionId}/hooks/setup`, {});
+  assert.equal((await setup.json()).ok, true);
   assert.equal(fs.readFileSync(hookFile, "utf8"), "setup");
   const state = await (await get("/api/state")).json();
   const hooked = state.projects.find(x => x.id === res.id);
@@ -404,11 +411,28 @@ test("project hooks run in the checkout and can be invoked manually", async () =
   assert.equal(missing.status, 404);
 });
 
+test("setup hooks do not block messages on the newly bound session", async () => {
+  const hookRepo = makeRepo("concurrent-setup-repo");
+  const res = await (await post("/api/projects", {
+    repoPath: hookRepo,
+    hooks: { setup: "sleep 0.4; printf setup > setup-ran.txt" },
+  })).json();
+  assert.equal(res.setup, null);
+  assert.equal(res.setupNeeded, true);
+  const setup = post(`/api/sessions/${res.sessionId}/hooks/setup`, {});
+  const message = await post(`/api/sessions/${res.sessionId}/message`, { text: "message while setup runs" });
+  assert.equal(message.status, 200, await message.clone().text());
+  assert.equal((await (await setup).json()).ok, true);
+  assert.equal(fs.readFileSync(path.join(hookRepo, "setup-ran.txt"), "utf8"), "setup");
+});
+
 test("project creation: first session on the checkout branch", async () => {
   const res = await (await post("/api/projects", { repoPath: repo })).json();
   projectId = res.id;
   firstSessionId = res.sessionId;
   assert.ok(projectId && firstSessionId);
+  assert.equal(res.setup, null);
+  assert.equal(res.setupNeeded, false);
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.equal(p.branch, "main");
@@ -665,6 +689,8 @@ test("project session creation starts a new session on the project", async () =>
   assert.equal(r.status, 200);
   const body = await r.json();
   assert.equal(body.projectId, projectId);
+  assert.equal(body.setup, null);
+  assert.equal(body.setupNeeded, false);
   const state = await (await get("/api/state")).json();
   const p = state.projects.find(x => x.id === projectId);
   assert.ok(p.sessions.some(s => s.id === body.id));
@@ -771,6 +797,28 @@ test("new sessions persist their selected Git context", async () => {
   const state = await (await get("/api/state")).json();
   const project = state.projects.find(item => item.id === created.id);
   assert.equal(project.workspaceStatus.main.sessions.length, 2);
+});
+
+test("branch-context fork returns before setup and binds the child session", async () => {
+  const contextRepo = makeRepo("branch-context-setup-repo");
+  const created = await (await post("/api/projects", {
+    repoPath: contextRepo,
+    hooks: { setup: "printf setup > setup-ran.txt" },
+  })).json();
+  assert.equal(created.setup, null);
+  assert.equal(created.setupNeeded, true);
+  const response = await post(`/api/sessions/${created.sessionId}/branch-context`, {
+    branch: "feature/branch-context-setup", mode: "fork",
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const fork = await response.json();
+  assert.equal(fork.setup, null);
+  assert.equal(fork.setupNeeded, true);
+  assert.equal(loadBindings()[fork.id].workspacePath, fork.workspacePath);
+  assert.equal(fs.existsSync(path.join(fork.workspacePath, "setup-ran.txt")), false);
+  const setup = await post(`/api/sessions/${fork.id}/hooks/setup`, {});
+  assert.equal((await setup.json()).ok, true);
+  assert.equal(fs.readFileSync(path.join(fork.workspacePath, "setup-ran.txt"), "utf8"), "setup");
 });
 
 test("new and fork sessions can target discovered Git contexts", async () => {

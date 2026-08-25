@@ -50,6 +50,10 @@ textarea, input, button { font: inherit; color: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
 
 @keyframes piBlink { 0%, 48% { opacity: 1 } 52%, 100% { opacity: 0 } }
+@keyframes operationDotBeat {
+  0%, 5.5%, 11.11%, 16.61%, 22.22%, 27.72%, 33.33%, 38.83%, 44.44%, 49.94%, 55.56%, 61.06%, 66.67%, 72.17%, 77.78%, 83.28%, 88.89%, 100% { opacity: 1; }
+  5.56%, 11.10%, 16.67%, 22.21%, 27.78%, 33.32%, 38.89%, 44.43%, 50%, 55.55%, 61.11%, 66.66%, 72.22%, 77.77%, 83.33%, 88.88% { opacity: 0; }
+}
 @keyframes piImplode {
   0%, 50% { transform: scale(1) rotate(0deg); opacity: 1; filter: blur(0); }
   63%  { transform: scale(0.14) rotate(-140deg); opacity: 0.9; filter: blur(0.4px); }
@@ -79,6 +83,7 @@ textarea, input, button { font: inherit; color: inherit; }
 @keyframes piSpin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .pi-think span { animation: none !important; opacity: .75; }
+  .operation-dot { animation: none !important; opacity: 1; }
 }
 
 /* ---------- shell ---------- */
@@ -202,6 +207,13 @@ header.bar {
   display: flex; align-items: center; min-width: 0; margin-top: 1px;
   font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
+.bar-operation-hint {
+  display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px;
+  color: var(--muted); font: 10.5px/1.35 var(--mono);
+}
+.bar-operation-hint > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-operation-hint.success { color: var(--green); }
+.bar-operation-hint.error { color: var(--red); }
 .workspace-trigger {
   display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; margin: -2px -4px; padding: 2px 4px;
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; text-align: left;
@@ -894,12 +906,12 @@ body.modal-open .scrollable { overflow: hidden; }
 .operation-dot, .operation-state-dot {
   width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--orange);
 }
-.operation-dot { animation: piBlink 1.2s steps(1) infinite; }
+.operation-dot { animation: operationDotBeat 7.2s steps(1) infinite; }
 .operation-state-dot { background: currentColor; }
-.operation-row-hint { display: inline-flex; align-items: center; gap: 4px; max-width: 20ch; overflow: hidden; color: var(--muted); font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.operation-row-hint.success { color: var(--green); }
-.operation-row-hint.error { color: var(--red); }
 .screen-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.operation-feed, .session-operation-feed { min-width: 0; overflow: auto; }
+.session-operation-feed { display: grid; gap: 5px; max-height: 260px; font: 11px/1.45 var(--mono); }
 
 /* central server and client diagnostics */
 .logs-scrim {
@@ -967,10 +979,11 @@ body.modal-open .scrollable { overflow: hidden; }
   margin: 13px 20px 0; padding: 10px 12px; border-radius: 9px; background: var(--del-bg);
   color: var(--red); font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
 }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 18px 20px; }
-.confirm-action-main { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
-.confirm-progress { display: inline-flex; align-items: center; gap: 6px; max-width: 30ch; color: var(--orange); font: 10px var(--mono); line-height: 1.35; text-align: right; }
-.confirm-progress span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.confirm-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 18px 20px; }
+.confirm-button-row { display: flex; justify-content: flex-end; gap: 8px; width: 100%; }
+.confirm-action-main { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
+.confirm-progress { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; color: var(--orange); font: 10px var(--mono); line-height: 1.35; text-align: left; }
+.confirm-progress span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .confirm-back {
   border: 1px solid var(--border); background: transparent; color: var(--muted);
   border-radius: 9px; padding: 8px 14px; font-size: 13px; cursor: pointer;

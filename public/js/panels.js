@@ -1,5 +1,5 @@
 import { api, refreshState } from "./api.js";
-import { beginOperation, combineOperationResults, completeOperation, operationFor, operationHint, showCompletedOperation } from "./operations.js";
+import { beginOperation, combineOperationResults, completeOperation, operationFor, operationHint } from "./operations.js";
 import { store } from "./store.js";
 import { esc, mobile, openSessionPicker, selectSession } from "./shell.js";
 
@@ -32,6 +32,54 @@ function operationFeedback(kinds, fallback = "Working…") {
   const status = operation.status === "error" ? "error" : operation.status === "success" ? "success" : "running";
   const dot = status === "running" ? `<i class="operation-dot" aria-hidden="true"></i>` : `<i class="operation-state-dot" aria-hidden="true"></i>`;
   return `<span class="operation-hint ${status}" data-operation-hint="${esc(operation.kind)}">${dot}<span>${esc(operationHint(operation, fallback))}</span></span>`;
+}
+
+const pickerOperationKinds = new Set(["setup", "hook", "check", "sync", "create", "create-session", "create-project", "fork", "fork-session", "switch", "switch-session", "push", "push-preview", "merge", "delete", "refresh-contexts"]);
+
+function runningPickerOperation(kind, sessionId, title = null) {
+  return (store.state.operations || []).find(operation => operation.status === "running"
+    && operation.kind === kind
+    && operation.sessionId === sessionId
+    && (!title || operation.title === title));
+}
+
+function pickerError(message, owner = null) {
+  if (owner && store.state.sessionPicker === owner) store.set({ sessionPickerError: message });
+  else store.setError(message);
+}
+
+function launchSetup(sessionId, initial) {
+  if (!initial?.setupNeeded) return;
+  const operation = beginOperation("setup", "Setup", "", "Starting setup…", sessionId, { action: "setup" });
+  void api.hook(sessionId, "setup", operation.id)
+    .then(result => completeOperation(operation, result))
+    .catch(error => {
+      completeOperation(operation, {}, error);
+      pickerError(`Setup failed: ${error.error || error.message || error}`);
+    });
+}
+
+function pickerOperationFeed(picker) {
+  const sourceId = picker?.sourceSessionId || null;
+  const operations = (store.state.operations || []).filter(operation => pickerOperationKinds.has(operation.kind)
+    && (sourceId ? operation.sessionId === sourceId : !operation.sessionId));
+  const events = operations.flatMap((operation, operationIndex) => {
+    const values = operation.events?.length ? [...operation.events] : [];
+    const current = operationHint(operation);
+    const last = values.at(-1);
+    const lastValue = last?.message || last?.output || "";
+    if (current && (!last || ["Request started.", "Result received."].includes(lastValue) && current !== lastValue)) {
+      values.push({ at: operation.lastUpdatedAt || operation.finishedAt || operation.startedAt, message: current, type: "current" });
+    }
+    return (values.length ? values : [{ at: operation.lastUpdatedAt || operation.startedAt, message: current }])
+      .map((event, eventIndex) => ({ operation, event, order: operationIndex * 1000 + eventIndex }));
+  }).sort((a, b) => (Number(a.event.at || 0) - Number(b.event.at || 0)) || (a.order - b.order)).slice(-12);
+  if (!events.length) return "";
+  const rows = events.map(({ operation, event }) => {
+    const message = event.message || event.output || event.type || operationHint(operation);
+    return `<div class="session-operation-event ${event.type === "error" ? "error" : ""}" data-operation-kind="${esc(operation.kind)}" data-operation-hint="${esc(operation.kind)}">${esc(message)}</div>`;
+  }).join("");
+  return `<div class="session-operation-feed" role="log" aria-live="polite">${rows}</div>`;
 }
 
 const syncErrorMessage = error => ({
@@ -758,24 +806,27 @@ class PiSessionPicker extends HTMLElement {
 
   async refreshBranches() {
     if (this.busy) return;
+    const picker = this.picker();
+    const sessionId = picker?.sourceSessionId || null;
+    if (runningPickerOperation("refresh-contexts", sessionId)) return;
     this.busy = true;
     this.busyLabel = "Refreshing branches…";
-    const operation = beginOperation("refresh-contexts", "Refresh Git contexts", "", "Request started.", this.picker()?.sourceSessionId);
+    const operation = beginOperation("refresh-contexts", "Refresh Git contexts", "", "Request started.", sessionId);
     store.set({ sessionPickerError: null });
     try {
       await refreshState();
       completeOperation(operation, { ok: true, httpStatus: 200, stdout: "Git contexts refreshed." });
     } catch (err) {
       completeOperation(operation, {}, err);
-      store.set({ sessionPickerError: `Could not refresh branches: ${err.error || err.message || err}` });
+      pickerError(`Could not refresh branches: ${err.error || err.message || err}`, picker);
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
   async syncConversation() {
-    const id = this.picker()?.sourceSessionId;
-    if (!id || this.busy || this.syncBusy) return;
-    this.syncBusy = true;
-    const operation = beginOperation("sync", "Synchronize this conversation", "", "Request started.");
+    const picker = this.picker();
+    const id = picker?.sourceSessionId;
+    if (!id || this.busy || runningPickerOperation("sync", id)) return;
+    const operation = beginOperation("sync", "Synchronize this conversation", "", "Request started.", id);
     let result = null;
     try {
       result = await api.syncSession(id, operation.id);
@@ -785,12 +836,12 @@ class PiSessionPicker extends HTMLElement {
         store.notify("state");
       }
       completeOperation(operation, result);
-      void refreshState().catch(err => store.setError(`Could not refresh sync state: ${err.message || err}`));
+      void refreshState().catch(err => pickerError(`Could not refresh sync state: ${err.message || err}`, picker));
     } catch (err) {
       const displayError = Object.assign(new Error(syncErrorMessage(err)), err);
       completeOperation(operation, result || {}, displayError);
+      pickerError(syncErrorMessage(err), picker);
     } finally {
-      this.syncBusy = false;
       this.render();
     }
   }
@@ -802,7 +853,7 @@ class PiSessionPicker extends HTMLElement {
     if (act === "resume-session") {
       const project = this.project();
       const id = e.target.closest("[data-act]")?.dataset.id;
-      if (project && id && !this.busy && !this.syncBusy) {
+      if (project && id && !this.busy) {
         store.state.openTree[project.id] = true;
         selectSession(project.id, id, { showOperation: true });
       }
@@ -824,11 +875,11 @@ class PiSessionPicker extends HTMLElement {
       return;
     }
     if (act === "sync-session") {
-      await this.syncConversation();
+      void this.syncConversation();
       return;
     }
     if (act === "create-session-context" || act === "apply-session-branch") { await this.submit(act === "apply-session-branch" ? e.target.closest("[data-act]").dataset.mode : "new"); return; }
-    if (act === "run-hook") { await this.runHook(e.target.closest("[data-act]")?.dataset.hook); return; }
+    if (act === "run-hook") { void this.runHook(e.target.closest("[data-act]")?.dataset.hook); return; }
     if (act === "close-hook-result") { store.set({ hookResult: null }); return; }
     if (act === "merge-branch") {
       const picker = this.picker(); const project = this.project();
@@ -874,6 +925,7 @@ class PiSessionPicker extends HTMLElement {
       mode === "new" ? "Create session" : mode === "switch" ? "Switch session" : "Fork session",
       "",
       needsPrimaryFetch ? `Waiting for ${primary} preparation…` : "Request started.",
+      picker.sourceSessionId,
     );
     let result = null;
     try {
@@ -888,13 +940,13 @@ class PiSessionPicker extends HTMLElement {
       }
       const targetId = result?.id || picker.sourceSessionId;
       if (!targetId) throw new Error("The server did not return a session id.");
+      operation.sessionId = targetId;
+      completeOperation(operation, result);
       store.set({ sessionPicker: null, sessionPickerError: null });
       store.state.openTree[project.id] = true;
       selectSession(project.id, targetId);
-      completeOperation(operation, result);
-      const refresh = refreshState().catch(err => store.setError(`Could not refresh session state: ${err.message || err}`));
-      if (mode === "switch") await refresh;
-      else void refresh;
+      launchSetup(targetId, result);
+      void refreshState().catch(err => store.setError(`Could not refresh session state: ${err.message || err}`));
     } catch (err) {
       const messages = {
         no_such_base_branch: "That base branch no longer exists.",
@@ -903,17 +955,17 @@ class PiSessionPicker extends HTMLElement {
       };
       const displayError = Object.assign(new Error(messages[err.error] || gitErrorMessage(err)), err);
       completeOperation(operation, result || {}, displayError);
-      store.set({ sessionPickerError: messages[err.error] || gitErrorMessage(err) });
+      pickerError(messages[err.error] || gitErrorMessage(err), picker);
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
   async push() {
     const id = this.picker()?.sourceSessionId;
     const project = this.project();
-    if (!id || !project || this.busy) return;
+    if (!id || !project || this.busy || runningPickerOperation("push-preview", id)) return;
     this.busy = true;
     this.busyLabel = "Checking commits to push…";
-    const operation = beginOperation("push-preview", "Review push", "", "Checking commits to push…");
+    const operation = beginOperation("push-preview", "Review push", "", "Checking commits to push…", id);
     try {
       const preview = await api.pushPreview(id);
       completeOperation(operation, { ok: true, httpStatus: 200, stdout: `${preview.commitCount} commit${preview.commitCount === 1 ? "" : "s"} ready to push.` });
@@ -926,19 +978,20 @@ class PiSessionPicker extends HTMLElement {
   }
 
   async runHook(name) {
-    const id = this.picker()?.sourceSessionId;
-    if (!id || !name || this.hookBusy) return;
-    this.hookBusy = true;
+    const picker = this.picker();
+    const id = picker?.sourceSessionId;
     const title = name ? `${name[0].toUpperCase()}${name.slice(1)}` : "Hook";
-    const operation = beginOperation("hook", title, "", "Request started.");
+    if (!id || !name || runningPickerOperation("hook", id, title)) return;
+    const operation = beginOperation("hook", title, "", "Request started.", id);
     let result = null;
     try {
       result = await api.hook(id, name, operation.id);
       completeOperation(operation, result);
-      void refreshState().catch(err => store.setError(`Could not refresh hook state: ${err.message || err}`));
+      void refreshState().catch(err => pickerError(`Could not refresh hook state: ${err.message || err}`, picker));
     } catch (err) {
       completeOperation(operation, result || {}, err);
-    } finally { this.hookBusy = false; this.render(); }
+      pickerError(`${title} failed: ${err.error || err.message || err}`, picker);
+    } finally { this.render(); }
   }
 
   render() {
@@ -981,8 +1034,9 @@ class PiSessionPicker extends HTMLElement {
     const syncReady = existing && picker.sourceSessionId && sourceSession
       && store.state.sync?.configured && store.state.sync.connection === "available"
       && !sourceStreaming && (!sourceSession.synchronized || sourceSession.syncState === "error");
+    const syncRunning = !!runningPickerOperation("sync", picker.sourceSessionId);
     const syncButton = syncReady
-      ? `<button class="settings-action" data-act="sync-session" title="Synchronize this conversation" aria-label="Synchronize this conversation" ${this.busy || this.syncBusy ? "disabled" : ""}>${this.syncBusy ? "syncing…" : "sync"}</button>`
+      ? `<button class="settings-action" data-act="sync-session" title="Synchronize this conversation" aria-label="Synchronize this conversation" ${this.busy || syncRunning ? "disabled" : ""}>${syncRunning ? "syncing…" : "sync"}</button>`
       : "";
     const current = picker.currentBranch || "";
     const primarySelected = current === primary;
@@ -993,7 +1047,11 @@ class PiSessionPicker extends HTMLElement {
     const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
     const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
     const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
-    const hookButtons = hookNames.map(name => `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${this.hookBusy ? "disabled" : ""}>${esc(hookLabel(name))}</button>`).join("");
+    const hookButtons = hookNames.map(name => {
+      const label = hookLabel(name);
+      const running = !!runningPickerOperation("hook", picker.sourceSessionId, label);
+      return `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? `${label}ing…` : label)}</button>`;
+    }).join("");
     const hookSection = hookButtons ? `<div class="workspace-actions">${hookButtons}</div>` : "";
     const historySessions = mode === "new" ? this.flatten(project.sessions) : [];
     const historyRows = historySessions.map(session => {
@@ -1003,15 +1061,11 @@ class PiSessionPicker extends HTMLElement {
     const historySection = mode === "new" ? `<section class="session-history"><div class="session-context-heading session-history-heading"><span>History</span><span>${historySessions.length} session${historySessions.length === 1 ? "" : "s"}</span></div><div class="session-history-scroll">${historyRows || `<div class="session-history-empty">No previous sessions yet.</div>`}</div></section>` : "";
     const error = store.state.sessionPickerError ? `<div class="session-picker-error">${esc(store.state.sessionPickerError)}</div>` : "";
     const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
-    const operationProgress = [
-      operationFeedback("sync", "Synchronizing conversation…"),
-      operationFeedback("refresh-contexts", "Refreshing Git contexts…"),
-      operationFeedback("push-preview", "Checking commits to push…"),
-      operationFeedback(["create-session", "switch-session", "fork-session"], "Updating session workspace…"),
-      operationFeedback(["push", "hook", "merge", "delete"], "Running Git operation…"),
-    ].filter(Boolean).join("");
+    const operationProgress = pickerOperationFeed(picker);
     const subtitle = existing ? `${esc(project.name)} · switch or fork this conversation` : `${esc(project.name)} · choose a branch for this conversation`;
-    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${historySection}<div class="session-context-heading"><span>Workspace</span><div class="session-context-heading-actions">${syncButton}<button class="settings-action quiet" data-act="refresh-session-contexts" ${this.busy || this.syncBusy ? "disabled" : ""}>${this.busy && this.busyLabel === "Refreshing branches…" ? "Refreshing…" : "Refresh"}</button></div></div>${progress}${operationProgress}<div class="session-context-users branch-user-list">${userText}</div>${error}${hookSection}${branchActions}</div><div class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker" ${this.busy ? "disabled" : ""}>Cancel</button>${actionButtons}</div></div></section></div>`;
+    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${historySection}<div class="session-context-heading"><span>Workspace</span><div class="session-context-heading-actions">${syncButton}<button class="settings-action quiet" data-act="refresh-session-contexts" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Refreshing branches…" ? "Refreshing…" : "Refresh"}</button></div></div>${progress}${operationProgress}<div class="session-context-users branch-user-list">${userText}</div>${error}${hookSection}${branchActions}</div><div class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker">Cancel</button>${actionButtons}</div></div></section></div>`;
+    const feed = this.querySelector(".session-operation-feed");
+    if (feed) feed.scrollTop = feed.scrollHeight;
     if (focusSelector) {
       const next = this.querySelector(focusSelector);
       if (next) {
@@ -1109,18 +1163,22 @@ class PiRepoPicker extends HTMLElement {
     this.connecting = true;
     this.errorMsg = null;
     this.renderResults();
+    const operation = beginOperation("create-project", "Create project", "", "Request started.");
     try {
-      const body = source === "local" ? { source, repoPath: value } : source === "github" ? { source, fullName } : { source, url: value };
+      const body = source === "local" ? { source, repoPath: value, operationId: operation.id } : source === "github" ? { source, fullName, operationId: operation.id } : { source, url: value, operationId: operation.id };
       const result = await api.newProject(body);
       this.connecting = false;
+      operation.sessionId = result.sessionId || null;
       store.set({ repoPickerOpen: false, repoPickerSource: null });
-      await refreshState();
       store.state.openTree[result.id] = true;
       selectSession(result.id, result.sessionId, { showOperation: true });
-      store.set({ hookResult: null, workspaceSettingsOpen: result.setup && !result.setup.ok });
-      if (result.setup) showCompletedOperation("hook", "Setup", result.setup);
+      completeOperation(operation, result);
+      launchSetup(result.sessionId, result);
+      try { await refreshState(); } catch (err) { store.setError(`Could not refresh project state: ${err.message || err}`); }
+      store.set({ hookResult: null });
     } catch (err) {
       this.connecting = false;
+      completeOperation(operation, {}, err);
       const messages = {
         project_exists: "Already connected.",
         not_a_git_repo: "Not a git repository.",
@@ -1422,7 +1480,7 @@ class PiLogs extends HTMLElement {
       this.loaded = true;
       queueMicrotask(() => void this.load());
     }
-    const operations = (store.state.operations || []).map(operation => this.localOperation(operation)).join("");
+    const operations = [...(store.state.operations || [])].reverse().map(operation => this.localOperation(operation)).join("");
     const serverLogs = (store.state.logs || []).map(entry => this.serverEntry(entry)).join("");
     const loading = store.state.logsLoading ? `<div class="logs-empty">Loading server logs…</div>` : "";
     const error = store.state.logsError ? `<div class="logs-error">Could not load the server log: ${esc(store.state.logsError)}</div>` : "";
@@ -1456,7 +1514,7 @@ class PiConfirm extends HTMLElement {
     this.busy = true;
     this.busyLabel = c.type === "merge" ? `Fetching ${primary}…` : c.type === "push" ? "Pushing commits…" : c.type === "deleteBranch" ? "Deleting branch…" : "Working…";
     const operation = ["merge", "push", "deleteBranch"].includes(c.type)
-      ? beginOperation(c.type === "merge" ? "merge" : c.type === "push" ? "push" : "delete", c.type === "merge" ? `Merge ${c.branch}` : c.type === "push" ? `Push ${c.branch}` : `Delete ${c.branch}`, "", "Request started.")
+      ? beginOperation(c.type === "merge" ? "merge" : c.type === "push" ? "push" : "delete", c.type === "merge" ? `Merge ${c.branch}` : c.type === "push" ? `Push ${c.branch}` : `Delete ${c.branch}`, "", "Request started.", c.id)
       : null;
     let result = null;
     let followup = null;
@@ -1526,11 +1584,12 @@ class PiConfirm extends HTMLElement {
       action = "Delete branch";
     }
     const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount);
-    const progressOperation = c.type === "deleteBranch" ? operationFor("delete") : ["merge", "push"].includes(c.type) ? operationFor(c.type) : null;
+    const progressOperation = c.type === "deleteBranch" ? operationFor("delete", { sessionId: c.id }) : ["merge", "push"].includes(c.type) ? operationFor(c.type, { sessionId: c.id }) : null;
+    const progressHint = operationHint(progressOperation, this.busyLabel || "Working…") || this.busyLabel || "Working…";
     const progress = this.busy
-      ? `<div class="confirm-progress" role="status" aria-live="polite"><i class="operation-dot" aria-hidden="true"></i><span>${esc(operationHint(progressOperation, this.busyLabel || "Working…"))}</span></div>`
+      ? `<div class="confirm-progress" role="status" aria-live="polite"><i class="operation-dot" aria-hidden="true"></i><span>${esc(progressHint)}</span></div>`
       : "";
-    this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal" role="dialog" aria-modal="true" aria-busy="${this.busy}"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><button class="confirm-back" data-act="cancel">Go back</button><div class="confirm-action-main"><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? "Working…" : action}</button>${progress}</div></div></div></div>`;
+    this.innerHTML = `<div class="confirm-scrim"><div class="confirm-modal" role="dialog" aria-modal="true" aria-busy="${this.busy}"><div class="confirm-title">${title}</div><div class="confirm-body">${body}${sessionList}${options}</div>${c.error ? `<div class="confirm-error">${esc(c.error)}</div>` : ""}<div class="confirm-actions"><div class="confirm-button-row"><button class="confirm-back" data-act="cancel">Go back</button><button class="confirm-cta danger" data-act="go" ${disabled ? "disabled" : ""}>${this.busy ? "Working…" : action}</button></div>${progress}</div></div></div>`;
   }
 }
 

@@ -63,6 +63,44 @@ test("compaction events become visible status activities", () => {
   assert.equal(events.at(-1).data.clientMessageId, "client-1");
 });
 
+test("forked live state accepts client message ids", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-fork-live-"));
+  try {
+    const script = `
+      import fs from "node:fs";
+      import { RealSupervisor } from "./server/supervisor/real.js";
+      const cwd = process.env.TEST_CWD;
+      fs.mkdirSync(cwd, { recursive: true });
+      const events = [];
+      const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });
+      const parent = await supervisor.createSession({ cwd });
+      supervisor._createConfiguredSession = async ({ sessionManager }) => ({ session: {
+        sessionId: sessionManager.getSessionId(), sessionFile: sessionManager.getSessionFile(), sessionManager,
+        model: { provider: "test", id: "model", api: "test" }, isStreaming: false,
+        subscribe() { return () => {}; }, prompt: async () => {}, setSessionName() {},
+      }});
+      const child = await supervisor.fork(parent.id, null, { cwd });
+      const state = supervisor.live.get(child.id);
+      await supervisor.message(child.id, "hello", "prompt", [], "client-1");
+      supervisor._onEvent(child.id, state, { type: "entry_appended", entry: {
+        id: "user-1", type: "message", message: { role: "user", content: "hello" },
+      }});
+      console.log(JSON.stringify({ pending: state.pendingMessages, event: events.at(-1).data }));
+    `;
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: path.resolve("."),
+      env: { ...process.env, PI_CODING_AGENT_DIR: path.join(tmp, "pi"), TEST_CWD: path.join(tmp, "cwd") },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const result = JSON.parse(output.trim().split("\n").at(-1));
+    assert.deepEqual(result.pending, []);
+    assert.equal(result.event.clientMessageId, "client-1");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("web subagent entries become revisioned grouped activity", () => {
   const events = [];
   const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });

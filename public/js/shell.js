@@ -1,5 +1,5 @@
 import { api, openTranscript, refreshState, transcriptLoading } from "./api.js";
-import { beginOperation, completeOperation, operationFor, operationHint } from "./operations.js";
+import { activeOperations, beginOperation, completeOperation, operationForScope, operationHint } from "./operations.js";
 import { store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -60,7 +60,9 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
   const operation = showOperation && !transcriptLoading(sessionId)
-    ? beginOperation("open-session", "Open session", "", "Request started.", sessionId)
+    ? beginOperation("open-session", "Open session", "", "Request started.", sessionId, {
+      projectId, contextId: node?.contextId, workspacePath: node?.workspacePath, action: "open-session",
+    })
     : null;
   openTranscript(sessionId, { operation });
 }
@@ -117,7 +119,7 @@ export async function closeConversation(id, kind = "session") {
   if (!id || closeOperationInFlight) return;
   closeOperationInFlight = true;
   const label = kind === "chat" ? "Close chat" : "Close session";
-  const operation = beginOperation("close", label, "", "Request started.", id);
+  const operation = beginOperation("close", label, "", "Request started.", id, { action: "close" });
   let result = null;
   try {
     result = await api.close(id, operation.id, kind);
@@ -234,16 +236,11 @@ class PiSidebar extends HTMLElement {
       const sel = store.state.sessionId === n.id && !store.state.chatId && store.state.view === "chat";
       const streaming = store.transcript(n.id).streaming;
       const unread = !!store.state.unread[n.id];
-      const operation = [operationFor("open-session"), operationFor("close")].find(item => item?.sessionId === n.id);
-      const operationStatus = operation?.status === "error" ? "error" : operation?.status === "success" ? "success" : "running";
-      const operationHintMarkup = operation
-        ? `<span class="operation-row-hint ${operationStatus}"><i class="${operation.status === "running" ? "operation-dot" : "operation-state-dot"}" aria-hidden="true"></i>${esc(operationHint(operation))}</span>`
-        : "";
       out.push(`<div class="row-wrap nested" style="margin-left:${13 + depth * 13}px">
         <div class="row ${sel ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread" : ""}" role="button" tabindex="0" ${kids ? `aria-expanded="${open || !!q}"` : ""} data-act="session-row" data-id="${esc(n.id)}" data-pid="${esc(p.id)}" data-kids="${kids ? 1 : 0}">
           <span class="caret" ${kids ? `data-act="toggle-tree" data-tree-id="${esc(n.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(n.title)}"` : ""}>${kids ? ((open || q) ? "▾" : "▸") : "·"}</span>
           <span class="lbl">${esc(n.title)}</span>
-          <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>${operationHintMarkup}
+          <span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>
           <button class="row-close" data-act="close-row" data-kind="session" data-pid="${esc(p.id)}" data-id="${esc(n.id)}"
             data-label="${esc(n.title)}" data-branch="${esc(n.branch || "")}" title="Close session">×</button>
         </div></div>`);
@@ -322,13 +319,8 @@ class PiSidebar extends HTMLElement {
       .map(cRow => {
         const streaming = cRow.streaming || store.transcript(cRow.id).streaming;
         const unread = !!s.unread[cRow.id];
-        const operation = operationFor("close")?.sessionId === cRow.id ? operationFor("close") : null;
-        const operationStatus = operation?.status === "error" ? "error" : operation?.status === "success" ? "success" : "running";
-        const operationHintMarkup = operation
-          ? `<span class="operation-row-hint ${operationStatus}"><i class="${operation.status === "running" ? "operation-dot" : "operation-state-dot"}" aria-hidden="true"></i>${esc(operationHint(operation))}</span>`
-          : "";
         return `<div class="row ${s.chatId === cRow.id ? "active " : ""}${streaming ? "streaming " : ""}${unread ? "unread " : ""}" role="button" tabindex="0" data-act="chat-row" data-id="${esc(cRow.id)}">
-        <span class="lbl">${esc(cRow.title)}</span><span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span>${operationHintMarkup}<span class="when">${esc(cRow.when)}</span>
+        <span class="lbl">${esc(cRow.title)}</span><span class="live-dot" aria-label="${unread ? "Unread reply" : "Streaming"}"></span><span class="when">${esc(cRow.when)}</span>
         <button class="row-close" data-act="close-row" data-kind="chat" data-id="${esc(cRow.id)}"
           data-label="${esc(cRow.title)}" data-branch="" title="Close chat">×</button>
       </div>`;
@@ -431,6 +423,22 @@ class PiHeader extends HTMLElement {
           <span class="workspace-branch">${esc(branch)}</span>${this.workspaceLabels(workspace)}
         </button>
       </div>` : "";
+    const operationScope = {
+      sessionId: s.sessionId || s.chatId, projectId: s.projectId,
+      contextId: node?.contextId, workspacePath: node?.workspacePath,
+    };
+    const latestOperation = s.view === "chat" && !s.sessionPicker && !s.workspaceSettingsOpen
+      ? operationForScope(null, operationScope)
+      : null;
+    const operation = s.view === "chat" && !s.sessionPicker && !s.workspaceSettingsOpen
+      ? activeOperations(operationScope)[0] || (latestOperation?.status === "error" ? latestOperation : null)
+      : null;
+    const operationStatus = operation?.status === "error" ? "error" : "running";
+    const operationArea = operation ? `
+      <div class="bar-operation-hint ${operationStatus}" role="status" aria-live="polite">
+        <i class="${operation.status === "running" ? "operation-dot" : "operation-state-dot"}" aria-hidden="true"></i>
+        <span>${esc(operationHint(operation))}</span>
+      </div>` : "";
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         style="${s.filesOpen ? "color:var(--text)" : ""}">${icon(s.filesOpen ? "chevronRight" : "chevronLeft")}</button>` : "";
@@ -440,7 +448,7 @@ class PiHeader extends HTMLElement {
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
-      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}</div>
+      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${operationArea}</div>
       ${syncStatus}${filesBtn}
     </header>`;
   }

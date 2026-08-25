@@ -129,14 +129,23 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-switch";
         return json({ ok: true, id: "s1", branch: "develop", contextId: "ctx-develop", workspacePath: "/tmp/demo-develop", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Switched session s1 to develop." }] } });
       }
-      if (url === "/api/sessions/s1/hooks/check" && options.method === "POST") return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "" });
+      if (url.endsWith("/hooks/setup") && options.method === "POST") {
+        dom.window.__setupStarted = true;
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-setup";
+        if (dom.window.__holdSetup) return new Promise(resolve => { dom.window.__resolveSetup = () => resolve(dom.window.__setupFails ? json({ error: "http_502" }, false, 502) : json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } })); });
+        return json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } });
+      }
+      if (url.endsWith("/hooks/check") && options.method === "POST") {
+        const operationId = options.headers?.["x-pi-operation-id"] || "test-check";
+        return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "check ok" }] } });
+      }
       if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) {
         state.projects[0].sessions.unshift({ id: "s2", title: "Chat Name", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", model: "mock/fast", when: "now", streaming: false, children: [] });
-        return json({ id: "s2", projectId: "p1", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", operation: { id: options.headers?.["x-pi-operation-id"] || "test-create", status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Created session s2 on feature/from-picker." }] } });
+        return json({ id: "s2", projectId: "p1", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", setupNeeded: true, operation: { id: options.headers?.["x-pi-operation-id"] || "test-create", status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Created session s2 on feature/from-picker." }] } });
       }
-      if (url === "/api/projects") return json({ id: "p2", sessionId: "s2" });
+      if (url === "/api/projects") return json({ id: "p2", sessionId: "s2", setupNeeded: true });
       if (url.includes("/api/projects/") && url.includes("/file?")) {
         const params = new URL(url, "http://pi-web.test").searchParams;
         const target = params.get("target") || "none";
@@ -177,6 +186,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
   const { applyEvent } = await import("../public/js/api.js");
+  const { openSessionPicker } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
@@ -209,6 +219,16 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".operation-modal"), null, "operations no longer open a terminal modal");
   assert.match(root.querySelector("[data-operation-hint='sync']").textContent, /Conversation synchronized/);
   assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Enrolled sessions do not offer sync again");
+  const feedNow = Date.now() + 1000;
+  store.state.operations.unshift({ id: "feed-test", kind: "sync", title: "Synchronize this conversation", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older sync event" }, { at: feedNow, type: "result", message: "Latest sync event" }] });
+  store.notify("state");
+  let feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
+  assert.ok(feedEvents.length >= 2);
+  assert.equal(feedEvents.at(-1).textContent, "Latest sync event");
+  root.querySelector("[data-act='close-session-picker']").click();
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
+  feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
+  assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='push-branch']"));
@@ -216,6 +236,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(root.querySelector(".confirm-modal").textContent, /second commit/);
   assert.match(root.querySelector(".confirm-modal").textContent, /first commit/);
+  const confirmActions = root.querySelector(".confirm-actions");
+  assert.equal(confirmActions.querySelector(":scope > .confirm-button-row .confirm-back").textContent, "Go back");
+  assert.equal(confirmActions.querySelector(":scope > .confirm-button-row .confirm-cta").textContent, "Push commits");
+  assert.equal(confirmActions.querySelector(":scope > .confirm-progress"), null);
   root.querySelector(".confirm-modal [data-act='go']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(root.querySelector(".confirm-modal"), null);
@@ -296,11 +320,31 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   newBranchInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, newBranchInput);
   assert.equal(root.querySelector("[data-act='create-session-context']").disabled, false);
+  dom.window.__holdSetup = true;
   root.querySelector("[data-act='create-session-context']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
+  assert.equal(dom.window.__setupStarted, true, "setup starts after the returned session is selected");
+  assert.equal(root.querySelector(".send-btn").disabled, false, "composer remains usable during setup");
+  assert.ok(root.querySelector(".bar-operation-hint .operation-dot"), "background setup appears in the title hint");
+  assert.equal(root.querySelector(".operation-row-hint"), null, "sidebar operation hints are removed");
   assert.equal(root.querySelector(".operation-modal"), null, "session creation stays non-blocking");
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
+  assert.equal(root.querySelector(".bar-operation-hint"), null, "opening the picker removes the title hint space");
+  assert.ok(root.querySelector(".session-operation-feed"));
+  root.querySelector("[data-act='close-session-picker']").click();
+  openSessionPicker("p1", { mode: "switch", sourceSessionId: "s1" });
+  dom.window.__setupFails = true;
+  dom.window.__resolveSetup();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(store.state.sessionPicker.sourceSessionId, "s1", "a background setup failure leaves a newer picker open");
+  assert.equal(store.state.sessionPickerError, null, "a background setup failure does not leak into another picker");
+  assert.match(store.state.error, /http_502|Setup failed/);
+  root.querySelector("[data-act='close-session-picker']").click();
+  store.set({ error: null });
+  dom.window.__holdSetup = false;
+  dom.window.__setupFails = false;
 
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -324,9 +368,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   filter.value = "oth";
   filter.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, filter);
-  root.querySelector("pi-repo-picker [data-act='close']").click();
-  await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(store.state.repoPickerOpen, false);
+  root.querySelector("pi-repo-picker [data-repo='/tmp/other']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(store.state.repoPickerOpen, false, "project picker closes before background setup");
+  assert.equal(store.state.operations.find(operation => operation.kind === "create-project")?.status, "success");
 
   store.state.repositorySources.sources.find(source => source.id === "github").owner = null;
   store.set({ repoPickerOpen: true, repoPickerSource: "github" });
@@ -644,7 +689,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector(".confirm-modal [data-act='go']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(root.querySelector(".confirm-progress .operation-dot"));
-  assert.match(root.querySelector(".confirm-progress").textContent, /Fetching main|Running git/);
+  const mergeOperation = store.state.operations.find(operation => operation.kind === "merge" && operation.sessionId === "s1");
+  applyEvent({ type: "operation_log", operationId: mergeOperation.id, event: { at: Date.now(), type: "phase", message: "Running git merge." } });
+  assert.match(root.querySelector(".confirm-progress").textContent, /Running git merge/);
+  assert.equal(root.querySelector(".confirm-progress").parentElement.classList.contains("confirm-actions"), true);
+  assert.equal(root.querySelector(".confirm-progress").previousElementSibling.classList.contains("confirm-button-row"), true);
   dom.window.__mergeFails = true;
   root.querySelector(".confirm-modal [data-act='cancel']").click();
   assert.equal(root.querySelector(".confirm-modal"), null);

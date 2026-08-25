@@ -425,9 +425,8 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const context = projectContext(project, null);
     if (context) bindSessionToContext(sessionId, project, context);
     hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id, contextId: context?.id || null } });
-    const setup = projectHooks(cfg, project).setup;
-    const setupResult = setup ? hookResult(await runHook(setup, { cwd: repoPath }), "setup") : null;
-    return c.json({ id: project.id, sessionId, repoPath, cloned, contextId: context?.id || null, branch: context?.branch || null, setup: setupResult });
+    const setupNeeded = !!projectHooks(cfg, project).setup;
+    return c.json({ id: project.id, sessionId, repoPath, cloned, contextId: context?.id || null, branch: context?.branch || null, workspacePath: context?.path || repoPath, setup: null, setupNeeded });
   });
 
   api.post("/projects/:id/sessions", async c => {
@@ -444,31 +443,37 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (!branch && legacyContext) branch = legacyContext.branch;
     branch ||= mainBranch;
     try {
-      const existed = !!branchContext(project, branch);
-      const context = await ensureBranchContext(project, branch, body.baseBranch || mainBranch, { syncMain: true, report: reporter.log });
-      const setup = !existed && context.kind !== "checkout" && projectHooks(loadConfig(), project).setup
-        ? hookResult(await runHook(projectHooks(loadConfig(), project).setup, { cwd: context.path, report: reporter.log }), "setup")
-        : null;
+      let sourceSessionId = null;
+      let atRecordId = null;
       if (mode === "fork") {
-        const sourceSessionId = String(body.sourceSessionId || "");
+        sourceSessionId = String(body.sourceSessionId || "");
         if (!sourceSessionId || !(await sessionBelongsToProject(sourceSessionId, project, sup))) {
           const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The source session was not found in this project." });
           return err(c, 404, "no_such_source_session", { operation });
         }
+        atRecordId = typeof body.atRecordId === "string" && body.atRecordId ? body.atRecordId : null;
+        if (atRecordId && !(await sup.transcript(sourceSessionId)).some(record => record.id === atRecordId && record.role === "user")) {
+          const operation = reporter.finish({ status: "error", httpStatus: 400, message: "The fork record must be a user message." });
+          return err(c, 400, "bad_fork_record", { operation });
+        }
+      }
+      const existed = !!branchContext(project, branch);
+      const context = await ensureBranchContext(project, branch, body.baseBranch || mainBranch, { syncMain: true, report: reporter.log });
+      const setupNeeded = !existed && context.kind !== "checkout" && !!projectHooks(loadConfig(), project).setup;
+      if (mode === "fork") {
         reporter.log({ type: "phase", phase: "fork-session", message: `Forking from session ${sourceSessionId}.` });
-        const atRecordId = typeof body.atRecordId === "string" && body.atRecordId ? body.atRecordId : null;
         const { id: sessionId } = await sup.fork(sourceSessionId, atRecordId, { cwd: context.path, name });
         bindSessionToContext(sessionId, project, context);
         hub.emit(sessionId, "session_forked", { session: { id: sessionId, contextId: context.id, branch: context.branch }, parentSessionId: sourceSessionId });
         const operation = reporter.finish({ httpStatus: 200, message: `Forked session ${sessionId} on ${context.branch}.` });
-        return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, forkedFrom: sourceSessionId, setup, operation });
+        return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, forkedFrom: sourceSessionId, setup: null, setupNeeded, operation });
       }
       reporter.log({ type: "phase", phase: "create-session", message: `Creating the Pi session in ${context.path}.` });
       const { id: sessionId } = await sup.createSession({ cwd: context.path, name });
       bindSessionToContext(sessionId, project, context);
       hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch } });
       const operation = reporter.finish({ httpStatus: 200, message: `Created session ${sessionId} on ${context.branch}.` });
-      return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, setup, operation });
+      return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, setup: null, setupNeeded, operation });
     } catch (e) {
       const statuses = { bad_branch: 400, no_such_base_branch: 404, checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409 };
       if (statuses[e.code]) {
@@ -531,6 +536,10 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (!found) return err(c, 404, "no_project_for_session");
     const { project } = found;
     const source = await sup.meta(id);
+    if (body.mode === "fork" && !source) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The source session was not found." });
+      return err(c, 404, "no_such_session", { operation });
+    }
     const currentBranch = ws.currentBranch(cwd) || null;
     let branch = typeof body.branch === "string" && body.branch.trim() ? body.branch.trim() : null;
     if (!branch) return err(c, 400, "bad_branch");
@@ -540,24 +549,23 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       if (body.mode !== "fork" && sup.isStreaming(id)) return err(c, 409, "session_streaming");
       const existed = !!branchContext(project, branch);
       const context = await ensureBranchContext(project, branch, body.baseBranch || currentBranch || primaryBranch(project), { syncMain: true, report: reporter.log });
-      const setup = !existed && context.kind !== "checkout" && projectHooks(loadConfig(), project).setup
-        ? hookResult(await runHook(projectHooks(loadConfig(), project).setup, { cwd: context.path, report: reporter.log }), "setup")
-        : null;
       if (body.mode === "fork") {
+        const setupNeeded = !existed && context.kind !== "checkout" && !!projectHooks(loadConfig(), project).setup;
         reporter.log({ type: "phase", phase: "fork-session", message: `Forking session ${id} into ${context.path}.` });
         const { id: childId } = await sup.fork(id, null, { cwd: context.path, name });
         bindSessionToContext(childId, project, context);
         hub.emit(childId, "session_forked", { session: { id: childId, contextId: context.id, branch: context.branch }, parentSessionId: id });
         const operation = reporter.finish({ httpStatus: 200, message: `Forked session ${childId} on ${context.branch}.` });
-        return c.json({ id: childId, forkedFrom: id, branch: context.branch, contextId: context.id, workspacePath: context.path, setup, operation });
+        return c.json({ id: childId, forkedFrom: id, branch: context.branch, contextId: context.id, workspacePath: context.path, setup: null, setupNeeded, operation });
       }
+      const setupNeeded = !existed && context.kind !== "checkout" && !!projectHooks(loadConfig(), project).setup;
       reporter.log({ type: "phase", phase: "rehome-session", message: `Moving session ${id} to ${context.path}.` });
       await sup.rehome(id, context.path);
       bindSessionToContext(id, project, context);
       if (hasName) await sup.setName(id, name);
       hub.emit(id, "session_meta", { branch: context.branch, workspacePath: context.path });
       const operation = reporter.finish({ httpStatus: 200, message: `Switched session ${id} to ${context.branch}.` });
-      return c.json({ ok: true, id, branch: context.branch, contextId: context.id, workspacePath: context.path, name: hasName ? name : source?.name || null, operation });
+      return c.json({ ok: true, id, branch: context.branch, contextId: context.id, workspacePath: context.path, name: hasName ? name : source?.name || null, setup: null, setupNeeded, operation });
     } catch (e) {
       const statuses = { bad_branch: 400, no_such_base_branch: 404, checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409, session_streaming: 409, same_branch: 409 };
       if (statuses[e.code]) {
@@ -837,7 +845,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     if (!branch && remoteSource) return err(c, 400, "bad_branch");
     if (branch === primaryBranch(project)) return err(c, 409, "main_worktree_forbidden");
     const existingTarget = branch ? ws.listWorktrees(project.repoPath)[branch] || null : null;
-    if (!fork && existingTarget && path.resolve(existingTarget) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: existingTarget, setup: null });
+    if (!fork && existingTarget && path.resolve(existingTarget) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: existingTarget, setup: null, setupNeeded: false });
     if (remoteSource && branch && localBranches.includes(branch)) return err(c, 409, "branch_exists");
     if (remoteSource && fork) return err(c, 400, "invalid_fork_source");
 
@@ -859,12 +867,13 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
         if (e.code === "main_worktree_forbidden") return err(c, 409, e.code);
         throw e;
       }
-      const setup = projectHooks(cfg, project).setup;
-      const setupResult = setup ? hookResult(await runHook(setup, { cwd: branchWorkspace }), "setup") : null;
+      const setupNeeded = !!projectHooks(cfg, project).setup;
       try {
         const { id: childId } = await sup.fork(id, body.atRecordId || null, { cwd: branchWorkspace });
-        hub.emit(childId, "session_forked", { session: { id: childId, branch: branchName }, parentSessionId: id });
-        return c.json({ id: childId, branch: branchName, workspacePath: branchWorkspace, setup: setupResult });
+        const context = ws.contextStatus({ repoPath: project.repoPath, workspacePath: branchWorkspace, primaryBranch: primaryBranch(project) });
+        bindSessionToContext(childId, project, context);
+        hub.emit(childId, "session_forked", { session: { id: childId, projectId: project.id, contextId: context.id, branch: branchName }, parentSessionId: id });
+        return c.json({ id: childId, projectId: project.id, contextId: context.id, branch: branchName, workspacePath: branchWorkspace, setup: null, setupNeeded });
       } catch (e) {
         try { ws.removeWorkspace({ repoPath: project.repoPath, workspacePath: branchWorkspace, force: true }); } catch { /* best effort cleanup */ }
         try { execFileSync("git", ["branch", "-D", branchName], { cwd: project.repoPath, stdio: "ignore" }); } catch { /* best effort cleanup */ }
@@ -883,7 +892,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       if (e.code === "checkout_branch" || e.code === "main_worktree_forbidden") return err(c, 409, e.code);
       throw e;
     }
-    if (path.resolve(target) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: target, setup: null });
+    if (path.resolve(target) === path.resolve(cwd)) return c.json({ ok: true, branch, workspacePath: target, setup: null, setupNeeded: false });
 
     const bindings = loadBindings();
     try { await sup.rehome(id, target); }
@@ -891,9 +900,8 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     bindings[id] = { branch, workspacePath: target };
     saveBindings(bindings);
     hub.emit(id, "session_meta", { branch });
-    const setup = !existingTarget && projectHooks(cfg, project).setup;
-    const setupResult = setup ? hookResult(await runHook(setup, { cwd: target }), "setup") : null;
-    return c.json({ ok: true, branch, workspacePath: target, setup: setupResult });
+    const setupNeeded = !existingTarget && !!projectHooks(cfg, project).setup;
+    return c.json({ ok: true, branch, workspacePath: target, setup: null, setupNeeded });
     });
   });
 
@@ -1134,17 +1142,24 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     const name = c.req.param("name");
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: "hook", title: `${name} hook` });
     reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/hooks/${name}` });
-    return mutate(id, async () => {
-      const cwd = await sessionWorkspace(id, sup);
-      if (!cwd) return err(c, 404, "no_workspace");
-      const found = findProjectByWorkspace(cwd);
-      if (!found) return err(c, 404, "no_project_for_session");
-      const command = projectHooks(loadConfig(), found.project)[name];
-      if (!command) return err(c, 404, "no_such_hook");
-      const result = hookResult(await runHook(command, { cwd, report: reporter.log }), name);
-      const operation = reporter.finish({ status: result.ok ? "success" : "error", httpStatus: result.ok ? 200 : 422, exit: result.exit, message: result.ok ? "Configured hook completed." : "Configured hook failed." });
-      return c.json({ ...result, operation });
-    }, { progress: reporter.log });
+    const cwd = await sessionWorkspace(id, sup);
+    if (!cwd) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: "No workspace is bound to this session." });
+      return err(c, 404, "no_workspace", { operation });
+    }
+    const found = findProjectByWorkspace(cwd);
+    if (!found) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The session is not bound to a project." });
+      return err(c, 404, "no_project_for_session", { operation });
+    }
+    const command = projectHooks(loadConfig(), found.project)[name];
+    if (!command) {
+      const operation = reporter.finish({ status: "error", httpStatus: 404, message: `No such hook: ${name}.` });
+      return err(c, 404, "no_such_hook", { operation });
+    }
+    const result = hookResult(await runHook(command, { cwd, report: reporter.log }), name);
+    const operation = reporter.finish({ status: result.ok ? "success" : "error", httpStatus: result.ok ? 200 : 422, exit: result.exit, message: result.ok ? "Configured hook completed." : "Configured hook failed." });
+    return c.json({ ...result, operation });
   });
 
   // Bang: user-initiated local shell in the session's workspace. Distinct from
