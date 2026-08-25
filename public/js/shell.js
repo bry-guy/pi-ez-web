@@ -29,7 +29,8 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   const source = sourceSessionId || (mode !== "new" ? store.state.sessionId : null);
   const active = source ? store.findSession(source, project.sessions) : null;
   const defaultBranch = project.defaultBranch || project.primaryBranch || "main";
-  const currentBranch = active ? (active.branch || defaultBranch) : (project.branch || defaultBranch);
+  const unavailable = active && project.contexts?.some(context => context.id === active.contextId && context.kind === "unavailable");
+  const currentBranch = unavailable ? null : active ? (active.branch || defaultBranch) : (project.branch || defaultBranch);
   store.set({
     sessionPicker: {
       projectId,

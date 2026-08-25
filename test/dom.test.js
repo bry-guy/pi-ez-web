@@ -190,6 +190,18 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
+  const project = store.state.projects[0];
+  const session = project.sessions.find(item => item.id === "s1");
+  const originalSession = { ...session };
+  project.contexts.push({ id: "ctx-missing", branch: null, path: "/tmp/missing", kind: "unavailable", dirty: null, status: "unavailable", sessions: [session] });
+  Object.assign(session, { contextId: "ctx-missing", branch: null, workspacePath: "/tmp/missing" });
+  openSessionPicker("p1", { mode: "switch", sourceSessionId: "s1" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false, "a missing context can switch to main");
+  root.querySelector("[data-act='close-session-picker']").click();
+  Object.assign(session, originalSession);
+  project.contexts.pop();
+  store.notify("state");
 
   store.state.transcripts.sibling = { records: [], streaming: true, seq: -1 };
   store.notify("transcript");
