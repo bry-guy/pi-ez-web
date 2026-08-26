@@ -113,7 +113,9 @@ async function boot() {
       if (url === "/api/sessions/s1/sync/refresh" && options.method === "POST") {
         dom.window.__refreshCalls = (dom.window.__refreshCalls || 0) + 1;
         const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-refresh";
-        return json({ ok: true, refreshed: true, sessionId: "s1", synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Canonical conversation refreshed." }] } });
+        const response = () => json({ ok: true, refreshed: true, sessionId: "s1", synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Canonical conversation refreshed." }] } });
+        if (dom.window.__holdRefresh) return new Promise(resolve => { dom.window.__resolveRefresh = () => resolve(response()); });
+        return response();
       }
       if (url.includes("/api/sessions/") && url.endsWith("/close") && options.method === "POST") {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-close";
@@ -190,7 +192,7 @@ async function boot() {
 test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
-  const { applyEvent } = await import("../public/js/api.js");
+  const { api, applyEvent } = await import("../public/js/api.js");
   const { openSessionPicker, selectSession } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
@@ -252,6 +254,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   selectSession("p1", "s1");
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(dom.window.__refreshCalls, 2);
+  dom.window.__holdRefresh = true;
+  const firstRefresh = api.refreshSyncSession("s1");
+  const secondRefresh = api.refreshSyncSession("s1");
+  assert.strictEqual(firstRefresh, secondRefresh);
+  dom.window.__resolveRefresh();
+  await Promise.all([firstRefresh, secondRefresh]);
+  dom.window.__holdRefresh = false;
+  assert.equal(dom.window.__refreshCalls, 3);
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
   assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");

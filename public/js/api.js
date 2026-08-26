@@ -2,6 +2,24 @@ import { appendOperationEvent, completeOperation, completeOperationSnapshot } fr
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const JH = { "content-type": "application/json" };
+const syncRefreshes = new Map();
+
+function requestSyncRefresh(id, operationId = null) {
+  const existing = syncRefreshes.get(id);
+  if (existing) return existing;
+  const request = fetch(`/api/sessions/${encodeURIComponent(id)}/sync/refresh`, {
+    method: "POST",
+    headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) },
+    body: JSON.stringify(operationId ? { operationId } : {}),
+  }).then(j);
+  syncRefreshes.set(id, request);
+  request.then(
+    () => { if (syncRefreshes.get(id) === request) syncRefreshes.delete(id); },
+    () => { if (syncRefreshes.get(id) === request) syncRefreshes.delete(id); },
+  );
+  return request;
+}
+
 export function formatDuration(durationMs) {
   return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
 }
@@ -38,7 +56,7 @@ export const api = {
   authCancel: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
   syncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
-  refreshSyncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync/refresh`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
+  refreshSyncSession: requestSyncRefresh,
   syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: value => {
