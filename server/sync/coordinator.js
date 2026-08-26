@@ -149,6 +149,22 @@ class BaseCoordinator {
     }
   }
 
+  async refresh(sessionId, { progress = null } = {}) {
+    progress?.({ type: "phase", phase: "sync-refresh", message: "Refreshing the canonical session snapshot." });
+    const current = await this.status(sessionId);
+    if (!current.synchronized) throw syncError("Synchronize this conversation before refreshing it.", "sync_not_enrolled");
+    const lease = await this.prepareMutation(sessionId, { requireFreshLease: true, progress });
+    if (!lease?.managed) throw syncError("Synchronize this conversation before refreshing it.", "sync_not_enrolled");
+    let result;
+    try {
+      result = { ok: true };
+    } finally {
+      await this.release(sessionId, lease);
+    }
+    if (this.active?.has?.(sessionId)) throw syncError("The synchronized lease could not be released.", "sync_lease_uncertain");
+    return result;
+  }
+
   async prepareMutation() { return { managed: false }; }
   async commitSettled() { return { managed: false }; }
   async commitAndRelease() { return { managed: false }; }
@@ -217,9 +233,15 @@ export class FakeSyncCoordinator extends BaseCoordinator {
     return { ok: true, created: !existing, ...(this.status(sessionId)) };
   }
 
-  async prepareMutation(sessionId, { optional = false, allowStreaming = false } = {}) {
+  async prepareMutation(sessionId, { optional = false, allowStreaming = false, requireFreshLease = false } = {}) {
     this.assertConfigured();
     const existing = this.active.get(sessionId);
+    if (existing?.refreshing || existing?.preparing) {
+      throw syncError("The synchronized conversation is in use by another client.", "active_lease", { details: { holder: this.leases.get(sessionId) || "web" } });
+    }
+    if (requireFreshLease && (existing || this.leases.has(sessionId))) {
+      throw syncError("The synchronized conversation is in use by another client.", "active_lease", { details: { holder: this.leases.get(sessionId) || "web" } });
+    }
     if (existing) {
       if (!allowStreaming) await this.assertIdle(sessionId);
       return { managed: true, ...existing };
@@ -239,7 +261,7 @@ export class FakeSyncCoordinator extends BaseCoordinator {
     if (!remote) throw syncError("The synchronized conversation is unavailable.", "sync_session_not_found");
     const token = `fake-lease-${sessionId}`;
     this.leases.set(sessionId, "web");
-    const active = { managed: true, token, etag: remote.etag, envelope: remote.envelope };
+    const active = { managed: true, token, etag: remote.etag, envelope: remote.envelope, refreshing: requireFreshLease };
     this.active.set(sessionId, active);
     return { ...active, ...this.status(sessionId) };
   }
@@ -668,7 +690,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     return active;
   }
 
-  async prepareMutation(sessionId, { optional = false, allowStreaming = false, progress = null } = {}) {
+  async prepareMutation(sessionId, { optional = false, allowStreaming = false, requireFreshLease = false, progress = null } = {}) {
     this.assertConfigured();
     progress?.({ type: "phase", phase: "sync-prepare", message: "Checking synchronization state." });
     return this._exclusive(sessionId, async () => {
@@ -681,6 +703,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
         current = null;
       }
       if (current) {
+        if (current.refreshing || current.preparing || requireFreshLease) throw syncError("The synchronized conversation is in use by another client.", "active_lease", { details: { holder: current.holder || this.holder, expiresAt: current.expiresAt } });
         if (current.blocked?.code === "sync_lease_uncertain" && !allowStreaming) return { managed: true, ...await this._recoverActive(sessionId, current) };
         if (current.blocked) throw syncError(current.blocked.message, current.blocked.code, { details: current.blocked.details });
         if (current.uncertain) {
@@ -717,6 +740,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
         pendingEnvelope: null,
         lastFingerprint: stableEnvelopeFingerprint(acquired.session),
         renewing: false,
+        refreshing: requireFreshLease,
       };
       this.active.set(sessionId, active);
       try {
@@ -789,7 +813,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       }
       active.expiresAt = response.lease.expiresAt;
       active.uncertain = false;
-      if (active.blocked?.code === "sync_lease_uncertain") active.blocked = null;
+      if (!active.releasePending && active.blocked?.code === "sync_lease_uncertain") active.blocked = null;
       if (active.pendingEnvelope) await this._flushPending(sessionId, active);
       this._emit(sessionId);
     } catch (error) {
@@ -881,6 +905,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       active.pendingFingerprint = null;
       this._recordConnection();
       await this._releaseUnlocked(sessionId, active);
+      if (this.active.get(sessionId) === active) throw syncError("The synchronized lease could not be released yet.", "sync_lease_uncertain");
       this._emit(sessionId);
       return { ok: true, etag: response.etag, ...await this.status(sessionId) };
     } catch (error) {
@@ -940,7 +965,10 @@ export class PiSyncCoordinator extends BaseCoordinator {
         // retries release so this web process does not strand itself behind
         // its own server-side lease for the full expiry window.
         active.releasePending = true;
+        active.uncertain = true;
+        active.blocked = { code: "sync_lease_uncertain", message: "The synchronized lease could not be released yet." };
         this._recordConnection(error);
+        this._emit(sessionId);
         this._startHeartbeat(sessionId, active);
       } finally {
         active.releasing = null;

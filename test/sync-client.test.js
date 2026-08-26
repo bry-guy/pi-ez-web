@@ -63,7 +63,7 @@ function harness(id = "session-1") {
     isStreaming: () => false,
     isCompacting: () => false,
     async syncSessionInfo() { return { id, file: "/tmp/session.jsonl", cwd: home, headEntryId: local.headEntryId, title: local.title, parentSessionId: null }; },
-    async prepareSyncSnapshot(_id, value) { local = value; materialized++; },
+    async prepareSyncSnapshot(_id, value) { calls.push(["materialize"]); local = value; materialized++; },
     sessionIdFromFile: () => null,
   };
   const adapter = {
@@ -92,7 +92,7 @@ test("real coordinator enrolls, materializes the canonical snapshot, settles, an
   assert.equal(h.materialized, 1);
   h.local = envelope("session-1", "changed locally");
   await h.coordinator.agentSettled("session-1");
-  assert.deepEqual(h.calls.map(call => call[0]), ["enroll", "acquire", "update", "release"]);
+  assert.deepEqual(h.calls.map(call => call[0]), ["enroll", "acquire", "materialize", "update", "release"]);
   assert.equal(h.remote.entries[0].message.content, "changed locally");
   assert.equal((JSON.stringify(loadSyncSessions())).includes("lease-token"), false);
 });
@@ -150,6 +150,56 @@ test("a failed release is retried without stranding the web holder", async () =>
   assert.equal(h.coordinator.active.has("session-release"), true);
   await h.coordinator._heartbeat("session-release", h.coordinator.active.get("session-release"));
   assert.equal(h.coordinator.active.has("session-release"), false);
+});
+
+test("refresh materializes the canonical snapshot and releases without settling", async () => {
+  const h = harness("session-refresh");
+  await h.coordinator.enroll("session-refresh");
+  const result = await h.coordinator.refresh("session-refresh");
+  assert.equal(result.ok, true);
+  assert.equal(h.materialized, 1);
+  assert.deepEqual(h.calls.map(call => call[0]), ["enroll", "acquire", "materialize", "release"]);
+  assert.equal(h.coordinator.active.has("session-refresh"), false);
+});
+
+test("refresh rejects an active lease before materialization", async () => {
+  const h = harness("session-refresh-conflict");
+  await h.coordinator.enroll("session-refresh-conflict");
+  const localBefore = structuredClone(h.local);
+  let acquired = false;
+  h.client.acquire = async () => {
+    acquired = true;
+    const error = new Error("safe lease message");
+    error.code = "active_lease";
+    error.details = { holder: "laptop", expiresAt: "2026-01-01T00:02:00Z", currentEtag: "secret-etag" };
+    throw error;
+  };
+  await assert.rejects(() => h.coordinator.refresh("session-refresh-conflict"), error => {
+    assert.equal(error.code, "active_lease");
+    assert.equal(error.status, 423);
+    return true;
+  });
+  assert.equal(h.materialized, 0);
+  assert.deepEqual(h.local, localBefore);
+  assert.equal(acquired, true);
+  assert.deepEqual(h.calls.map(call => call[0]), ["enroll"]);
+  assert.equal(h.coordinator.active.has("session-refresh-conflict"), false);
+});
+
+test("refresh reports an uncertain lease when release fails", async () => {
+  const h = harness("session-refresh-release");
+  await h.coordinator.enroll("session-refresh-release");
+  const release = h.client.release;
+  h.client.release = async () => {
+    const error = new Error("temporary network failure");
+    error.code = "network_error";
+    throw error;
+  };
+  await assert.rejects(() => h.coordinator.refresh("session-refresh-release"), error => error.code === "sync_lease_uncertain");
+  assert.equal(h.coordinator.active.has("session-refresh-release"), true);
+  h.client.release = release;
+  await h.coordinator.release("session-refresh-release");
+  assert.equal(h.coordinator.active.has("session-refresh-release"), false);
 });
 
 test("an external lease is surfaced without exposing a token or ETag", async () => {

@@ -110,6 +110,11 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-op";
         return json({ ok: true, sessionId: "s1", created: true, synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Conversation synchronized successfully." }] } });
       }
+      if (url === "/api/sessions/s1/sync/refresh" && options.method === "POST") {
+        dom.window.__refreshCalls = (dom.window.__refreshCalls || 0) + 1;
+        const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-refresh";
+        return json({ ok: true, refreshed: true, sessionId: "s1", synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Canonical conversation refreshed." }] } });
+      }
       if (url.includes("/api/sessions/") && url.endsWith("/close") && options.method === "POST") {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-close";
         return json({ ok: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Session closed." }] } });
@@ -238,6 +243,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(feedEvents.length >= 2);
   assert.equal(feedEvents.at(-1).textContent, "Latest sync event");
   root.querySelector("[data-act='close-session-picker']").click();
+  assert.equal(root.querySelector("pi-header [data-act='refresh-sync']").textContent, "Refresh");
+  root.querySelector("pi-header [data-act='refresh-sync']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(dom.window.__refreshCalls, 1);
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
   assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");

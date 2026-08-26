@@ -110,6 +110,23 @@ export async function newProjectSession(projectId) {
   openSessionPicker(projectId, { mode: "new" });
 }
 
+async function refreshSyncConversation() {
+  const id = store.activeKey();
+  const session = id ? store.findAnySession(id) : null;
+  const running = operationForScope("sync-refresh", { sessionId: id });
+  if (!id || !session?.synchronized || running?.status === "running") return;
+  const operation = beginOperation("sync-refresh", "Refresh synchronized conversation", "", "Request started.", id);
+  try {
+    const result = await api.refreshSyncSession(id, operation.id);
+    completeOperation(operation, result);
+    await openTranscript(id, { scrollToLatest: false });
+    void refreshState().catch(error => store.setError(`Could not refresh sync state: ${error.message || error}`));
+  } catch (error) {
+    completeOperation(operation, {}, error);
+    store.setError(`Could not refresh conversation: ${error.message || error.error || error}`);
+  }
+}
+
 let closeOperationInFlight = false;
 const closeErrorMessage = error => ({
   session_streaming: "Stop the current response before closing this conversation.",
@@ -374,6 +391,8 @@ class PiHeader extends HTMLElement {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
       void refreshState().catch(() => {});
+    } else if (act === "refresh-sync") {
+      void refreshSyncConversation();
     } else if (act === "close-workspace-settings") {
       store.set({ workspaceSettingsOpen: false });
     } else if (act === "files") {
@@ -415,6 +434,11 @@ class PiHeader extends HTMLElement {
       : activeSession?.synchronized && activeSession.syncState !== "error"
         ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
         : "";
+    const refreshOperation = activeSession?.id ? operationForScope("sync-refresh", { sessionId: activeSession.id }) : null;
+    const localBusy = !!activeSession?.id && (store.transcript(activeSession.id).streaming || store.transcript(activeSession.id).compacting || activeSession.compacting);
+    const syncRefreshButton = activeSession?.synchronized && !s.sessionPicker
+      ? `<button class="ghost-btn" data-act="refresh-sync" title="Refresh synchronized conversation" ${localBusy || refreshOperation?.status === "running" ? "disabled" : ""}>Refresh</button>`
+      : "";
     const workspace = inProject ? this.sessionContext() : null;
     const branch = workspace ? this.contextLabel(workspace) : null;
     const workspaceArea = inProject && workspace ? `
@@ -450,7 +474,7 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${operationArea}</div>
-      ${syncStatus}${filesBtn}
+      ${syncStatus}${syncRefreshButton}${filesBtn}
     </header>`;
   }
 

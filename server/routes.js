@@ -680,12 +680,58 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     }
   };
 
+  const refreshSyncSession = async c => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: "sync-refresh", title: "Refresh synchronized conversation" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/sync/refresh` });
+    const meta = await sup.meta(id);
+    if (!meta) return err(c, 404, "no_such_session");
+    if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
+    if (sup.isCompacting(id)) return err(c, 409, "session_compacting");
+    try {
+      await sync.refresh(id, { progress: reporter.log });
+      const status = await sync.status(id);
+      hub.emit(id, "sync_state", { sync: status });
+      const operation = reporter.finish({ httpStatus: 200, message: "Canonical conversation refreshed." });
+      return c.json({ ok: true, refreshed: true, sessionId: id, ...status, operation });
+    } catch (e) {
+      const statuses = {
+        active_lease: 423,
+        sync_lease_uncertain: 423,
+        sync_not_configured: 409,
+        sync_not_enrolled: 409,
+        sync_session_not_found: 409,
+        sync_enrollment_failed: 502,
+        sync_stale_etag: 409,
+        sync_conflict: 409,
+        sync_materialization_failed: 409,
+        sync_workspace_setup_required: 409,
+        session_streaming: 409,
+        session_compacting: 409,
+        sync_client_unavailable: 503,
+        sync_unavailable: 503,
+      };
+      if (statuses[e.code]) {
+        const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.message || e.code });
+        return err(c, statuses[e.code], e.code, { ...(e.message ? { message: e.message } : {}), ...(e.details ? { details: e.details } : {}), operation });
+      }
+      if (String(e?.message || "").startsWith("unknown session")) {
+        const operation = reporter.finish({ status: "error", httpStatus: 404, message: "No such session." });
+        return err(c, 404, "no_such_session", { operation });
+      }
+      reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
+      throw e;
+    }
+  };
+
   api.get("/sessions/:id/sync", async c => {
     const id = c.req.param("id");
     if (!await sup.meta(id)) return err(c, 404, "no_such_session");
     return c.json({ sessionId: id, ...(await sync.status(id)) });
   });
   api.post("/sessions/:id/sync", syncSession);
+  api.post("/sessions/:id/sync/refresh", refreshSyncSession);
   // Keep the action name easy for non-browser clients while the UI uses the
   // noun “Synchronize”. Both routes share the same coordinator boundary.
   api.post("/sessions/:id/enroll", syncSession);

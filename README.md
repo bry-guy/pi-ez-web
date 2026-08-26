@@ -149,7 +149,9 @@ PI_WEB_SYNC_CLIENT_MODULE=/path/to/pi-sync/packages/pi-sync mise start
 The web adapter keeps lease tokens and ETags in memory only. It materializes a
 canonical snapshot before a synchronized mutation, renews the lease while Pi
 runs, uploads the settled native JSONL through the shared adapter, and releases
-it. Unenrolled sessions remain local-only unless `allConversations` is enabled.
+it. The active conversation refreshes on browser reconnect/focus; the header
+Refresh action is available when an explicit handoff pull is needed. Unenrolled
+sessions remain local-only unless `allConversations` is enabled.
 
 For a local real-server test, `mise start` is the normal command but does not
 inherit a deployment's environment. Supply the public OAuth App client ID to

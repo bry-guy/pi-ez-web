@@ -38,6 +38,7 @@ export const api = {
   authCancel: id => fetch(`/api/auth-flows/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
   syncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
+  refreshSyncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync/refresh`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: value => {
@@ -232,6 +233,7 @@ let recoveryTimer = null;
 let recoveryAttempt = 0;
 let recoveryInFlight = false;
 let reloadIssued = false;
+const syncRefreshInFlight = new Set();
 
 function stopRecovery() {
   if (recoveryTimer) clearTimeout(recoveryTimer);
@@ -280,6 +282,30 @@ function startRecovery() {
   scheduleRecovery(250);
 }
 
+async function refreshActiveSync(id) {
+  if (!id || syncRefreshInFlight.has(id)) return;
+  const session = findSessionInState(store.state, id);
+  const transcript = store.transcript(id);
+  if (!session?.synchronized || transcript.streaming || transcript.compacting) {
+    void openTranscript(id);
+    return;
+  }
+  syncRefreshInFlight.add(id);
+  try {
+    await api.refreshSyncSession(id);
+    await openTranscript(id, { scrollToLatest: false });
+    await refreshState();
+  } catch (error) {
+    if ([423, 409].includes(error.status)) {
+      void refreshState().catch(() => {});
+    } else {
+      store.setError(`Could not refresh synchronized conversation: ${error.message || error}`);
+    }
+  } finally {
+    syncRefreshInFlight.delete(id);
+  }
+}
+
 export function resumeConnection() {
   if (globalThis.navigator?.onLine === false) {
     store.set({ offline: true, reconnecting: false });
@@ -288,7 +314,7 @@ export function resumeConnection() {
   store.set({ offline: false });
   connectSSE();
   const id = store.activeKey();
-  if (id) void openTranscript(id);
+  if (id) void refreshActiveSync(id);
   void recoverConnection();
 }
 
