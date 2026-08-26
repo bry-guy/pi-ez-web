@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - 'feature/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 concurrency:
   group: pi-ez-web-${{ github.ref_name == 'main' && 'main' || 'preview' }}
@@ -109,9 +111,9 @@ jobs:
         if: github.ref_name == 'main'
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
-          tags: ${{ vars.TAILSCALE_TAGS || 'tag:platform' }}
+          oauth-client-id: ${{ vars.TAILSCALE_FEDERATED_CLIENT_ID }}
+          audience: ${{ vars.TAILSCALE_FEDERATED_AUDIENCE }}
+          tags: tag:ci
 
       - name: Verify preview artifact
         if: github.ref_name == 'main'
