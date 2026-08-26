@@ -852,6 +852,11 @@ export class PiSyncCoordinator extends BaseCoordinator {
     return envelope;
   }
 
+  async _releaseSettled(sessionId, active) {
+    await this._releaseUnlocked(sessionId, active);
+    if (this.active.get(sessionId) === active) throw syncError("The synchronized lease could not be released yet.", "sync_lease_uncertain");
+  }
+
   async _flushPending(sessionId, active) {
     if (this.active.get(sessionId) !== active || !active.pendingEnvelope || active.uncertain || active.blocked) return;
     try {
@@ -861,9 +866,6 @@ export class PiSyncCoordinator extends BaseCoordinator {
       active.lastFingerprint = active.pendingFingerprint;
       active.pendingEnvelope = null;
       active.pendingFingerprint = null;
-      await this._releaseUnlocked(sessionId, active);
-      this._recordConnection();
-      this._emit(sessionId);
     } catch (error) {
       const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
       if (converted.code === "sync_stale_etag") this._markBlocked(sessionId, active, "The canonical session changed elsewhere; the local session was preserved.", "sync_conflict", converted.details);
@@ -874,7 +876,17 @@ export class PiSyncCoordinator extends BaseCoordinator {
         this._recordConnection(converted);
         this._emit(sessionId);
       }
+      return;
     }
+    try {
+      await this._releaseSettled(sessionId, active);
+    } catch (error) {
+      this._recordConnection(error);
+      this._emit(sessionId);
+      return;
+    }
+    this._recordConnection();
+    this._emit(sessionId);
   }
 
   async _commitUnlocked(sessionId, active, progress = null) {
@@ -892,7 +904,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
     if (active.uncertain || active.blocked) throw syncError(active.blocked?.message || "The synchronized lease is uncertain.", active.blocked?.code || "sync_lease_uncertain", { details: active.blocked?.details });
     if (active.lastFingerprint === active.pendingFingerprint) {
-      await this._releaseUnlocked(sessionId, active);
+      await this._releaseSettled(sessionId, active);
       return { ok: true, etag: active.etag, ...await this.status(sessionId) };
     }
     try {
@@ -904,10 +916,6 @@ export class PiSyncCoordinator extends BaseCoordinator {
       active.pendingEnvelope = null;
       active.pendingFingerprint = null;
       this._recordConnection();
-      await this._releaseUnlocked(sessionId, active);
-      if (this.active.get(sessionId) === active) throw syncError("The synchronized lease could not be released yet.", "sync_lease_uncertain");
-      this._emit(sessionId);
-      return { ok: true, etag: response.etag, ...await this.status(sessionId) };
     } catch (error) {
       const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
       if (converted.code === "sync_stale_etag") this._markBlocked(sessionId, active, "The canonical session changed elsewhere; the local session was preserved.", "sync_conflict", converted.details);
@@ -920,6 +928,9 @@ export class PiSyncCoordinator extends BaseCoordinator {
       }
       throw converted;
     }
+    await this._releaseSettled(sessionId, active);
+    this._emit(sessionId);
+    return { ok: true, etag: active.etag, ...await this.status(sessionId) };
   }
 
   async commitSettled(sessionId, options = {}) {

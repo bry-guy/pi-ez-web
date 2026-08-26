@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,11 @@ function envelope(id, text = "hello") {
     title: "Test session",
     entries: [{ type: "message", id: "entry-1", parentId: null, timestamp: "2026-01-01T00:00:01Z", message: { role: "user", content: text } }],
   };
+}
+
+function turnEnvelope(id, text, title, headEntryId, workspace) {
+  const value = envelope(id, text);
+  return { ...value, title, headEntryId, workspace, entries: [{ ...value.entries[0], id: headEntryId }] };
 }
 
 function harness(id = "session-1") {
@@ -79,7 +85,7 @@ function harness(id = "session-1") {
     heartbeatMs: 60_000,
     holder: "pi-web-test",
   });
-  return { coordinator, client, calls, get local() { return local; }, get remote() { return remote; }, get materialized() { return materialized; }, set local(value) { local = value; } };
+  return { coordinator, client, calls, cwd: home, get local() { return local; }, get remote() { return remote; }, get materialized() { return materialized; }, set local(value) { local = value; } };
 }
 
 test("real coordinator enrolls, materializes the canonical snapshot, settles, and releases", async () => {
@@ -152,6 +158,23 @@ test("a failed release is retried without stranding the web holder", async () =>
   assert.equal(h.coordinator.active.has("session-release"), false);
 });
 
+test("settlement does not report success when release fails", async () => {
+  const h = harness("session-settlement-release");
+  await h.coordinator.enroll("session-settlement-release");
+  await h.coordinator.beginMutation("session-settlement-release");
+  const release = h.client.release;
+  h.client.release = async () => {
+    const error = new Error("temporary network failure");
+    error.code = "network_error";
+    throw error;
+  };
+  await assert.rejects(() => h.coordinator.agentSettled("session-settlement-release"), error => error.code === "sync_lease_uncertain");
+  assert.equal(h.coordinator.active.has("session-settlement-release"), true);
+  h.client.release = release;
+  await h.coordinator._heartbeat("session-settlement-release", h.coordinator.active.get("session-settlement-release"));
+  assert.equal(h.coordinator.active.has("session-settlement-release"), false);
+});
+
 test("refresh materializes the canonical snapshot and releases without settling", async () => {
   const h = harness("session-refresh");
   await h.coordinator.enroll("session-refresh");
@@ -160,6 +183,36 @@ test("refresh materializes the canonical snapshot and releases without settling"
   assert.equal(h.materialized, 1);
   assert.deepEqual(h.calls.map(call => call[0]), ["enroll", "acquire", "materialize", "release"]);
   assert.equal(h.coordinator.active.has("session-refresh"), false);
+});
+
+test("turn-scoped handoff round-trips entries, head, title, and workspace", async () => {
+  const h = harness("session-roundtrip");
+  fs.writeFileSync(path.join(h.cwd, "workspace.txt"), "initial\n");
+  execFileSync("git", ["-C", h.cwd, "init", "-b", "main"], { stdio: "ignore" });
+  execFileSync("git", ["-C", h.cwd, "add", "workspace.txt"], { stdio: "ignore" });
+  execFileSync("git", ["-C", h.cwd, "-c", "user.name=pi-test", "-c", "user.email=pi-test@example.com", "commit", "-m", "initial"], { stdio: "ignore" });
+  execFileSync("git", ["-C", h.cwd, "remote", "add", "origin", "git@example.com:repo.git"], { stdio: "ignore" });
+  const workspaceCommit = execFileSync("git", ["-C", h.cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  await h.coordinator.enroll("session-roundtrip");
+  await h.coordinator.beginMutation("session-roundtrip");
+  h.local = turnEnvelope("session-roundtrip", "from A", "A title", "head-a", { gitRemote: "git@example.com:repo.git", branch: "main", commit: workspaceCommit });
+  await h.coordinator.agentSettled("session-roundtrip");
+
+  await h.coordinator.refresh("session-roundtrip");
+  assert.equal(h.local.title, "A title");
+  assert.equal(h.local.headEntryId, "head-a");
+  assert.deepEqual(h.local.workspace, { gitRemote: "git@example.com:repo.git", branch: "main", commit: workspaceCommit });
+
+  await h.coordinator.beginMutation("session-roundtrip");
+  h.local = turnEnvelope("session-roundtrip", "from B", "B title", "head-b", { gitRemote: "git@example.com:repo.git", branch: "main", commit: workspaceCommit });
+  await h.coordinator.agentSettled("session-roundtrip");
+
+  await h.coordinator.refresh("session-roundtrip");
+  assert.equal(h.local.entries[0].message.content, "from B");
+  assert.equal(h.local.title, "B title");
+  assert.equal(h.local.headEntryId, "head-b");
+  assert.deepEqual(h.local.workspace, { gitRemote: "git@example.com:repo.git", branch: "main", commit: workspaceCommit });
+  assert.equal(h.coordinator.active.has("session-roundtrip"), false);
 });
 
 test("refresh rejects an active lease before materialization", async () => {

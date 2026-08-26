@@ -191,7 +191,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
   const { applyEvent } = await import("../public/js/api.js");
-  const { openSessionPicker } = await import("../public/js/shell.js");
+  const { openSessionPicker, selectSession } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
@@ -247,6 +247,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-header [data-act='refresh-sync']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(dom.window.__refreshCalls, 1);
+  selectSession("p1", "sibling");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  selectSession("p1", "s1");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(dom.window.__refreshCalls, 2);
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
   assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");

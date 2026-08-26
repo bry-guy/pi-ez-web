@@ -60,12 +60,17 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
-  const operation = showOperation && !transcriptLoading(sessionId)
+  const refreshOnSelect = node?.synchronized && !store.transcript(sessionId).streaming && !store.transcript(sessionId).compacting;
+  const operation = showOperation && !refreshOnSelect && !transcriptLoading(sessionId)
     ? beginOperation("open-session", "Open session", "", "Request started.", sessionId, {
       projectId, contextId: node?.contextId, workspacePath: node?.workspacePath, action: "open-session",
     })
     : null;
-  openTranscript(sessionId, { operation });
+  if (refreshOnSelect) {
+    void refreshSyncConversation();
+  } else {
+    openTranscript(sessionId, { operation });
+  }
 }
 export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
@@ -124,6 +129,7 @@ async function refreshSyncConversation() {
   } catch (error) {
     completeOperation(operation, {}, error);
     store.setError(`Could not refresh conversation: ${error.message || error.error || error}`);
+    void openTranscript(id, { scrollToLatest: false });
   }
 }
 
