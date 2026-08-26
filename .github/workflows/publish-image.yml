@@ -109,7 +109,7 @@ jobs:
 
       - name: Connect to preview tailnet
         if: github.ref_name == 'main'
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ vars.TAILSCALE_FEDERATED_CLIENT_ID }}
           audience: ${{ vars.TAILSCALE_FEDERATED_AUDIENCE }}

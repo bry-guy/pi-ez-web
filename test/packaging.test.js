@@ -64,6 +64,7 @@ test("k3s deployment uses private image GitOps wiring", () => {
   assert.match(workflow, /Stage image in preview[\s\S]*deploy\/k8s-preview\/kustomization\.yaml/);
   assert.match(workflow, /Verify preview artifact[\s\S]*ui-health[\s\S]*buildId/);
   assert.match(workflow, /Promote verified image to production[\s\S]*deploy\/k8s\/kustomization\.yaml/);
+  assert.match(workflow, /tailscale\/github-action@v4/);
   assert.match(workflow, /TAILSCALE_FEDERATED_CLIENT_ID/);
   assert.match(workflow, /TAILSCALE_FEDERATED_AUDIENCE/);
   assert.match(workflow, /tags: tag:ci/);
