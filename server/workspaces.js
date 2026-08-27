@@ -332,7 +332,6 @@ export function resolveContext(repoPath, id) {
   return context;
 }
 
-// Legacy API helpers retained for migration; current UI never calls them.
 export function pullWorkspace(workspacePath) {
   try {
     return {

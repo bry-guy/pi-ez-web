@@ -267,6 +267,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
+  assert.ok(root.querySelector("[data-act='pull-branch']"));
   assert.ok(root.querySelector("[data-act='push-branch']"));
   root.querySelector("[data-act='push-branch']").click();
   await new Promise(resolve => setTimeout(resolve, 20));

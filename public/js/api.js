@@ -67,6 +67,7 @@ export const api = {
   forkSession: (id, name = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/fork`, { method: "POST", headers: JH, body: JSON.stringify({ name }) }).then(j),
   branchSession: (id, options = {}) => fetch(`/api/sessions/${encodeURIComponent(id)}/branch-context`, { method: "POST", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
   mergeBranch: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/merge-local`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
+  pullBranch: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}/pull`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   pushPreview: id => fetch(`/api/sessions/${encodeURIComponent(id)}/push-preview`, { cache: "no-store" }).then(j),
   pushBranch: (id, operationId = null, expected = {}) => {
     const body = { ...(operationId ? { operationId } : {}), ...(expected?.head ? { expectedHead: expected.head } : {}), ...(Object.prototype.hasOwnProperty.call(expected || {}, "baseHead") ? { expectedBaseHead: expected.baseHead } : {}) };

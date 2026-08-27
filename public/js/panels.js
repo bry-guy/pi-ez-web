@@ -15,6 +15,7 @@ const gitErrorMessage = error => ({
   main_not_fast_forwardable: "The primary branch has diverged; reconcile it before continuing.",
   git_switch_failed: "Git could not switch the checkout.",
   merge_conflict: "Git reported a merge conflict; the merge was aborted.",
+  git_pull_failed: "Git could not pull this branch.",
   git_push_failed: "Git could not push this branch.",
   push_preview_failed: "The commits to push could not be listed.",
   push_preview_stale: "The branch changed; review the commits to push again.",
@@ -898,6 +899,7 @@ class PiSessionPicker extends HTMLElement {
       store.set({ confirm: { type: "deleteBranch", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, label: picker.currentBranch, sessions: context?.sessions || [], closeSessions: false, force: false, dirty: context?.dirty ?? false, status: context?.status || "unknown", error: null } });
       return;
     }
+    if (act === "pull-branch") await this.pull();
     if (act === "push-branch") await this.push();
   }
 
@@ -956,6 +958,23 @@ class PiSessionPicker extends HTMLElement {
       const displayError = Object.assign(new Error(messages[err.error] || gitErrorMessage(err)), err);
       completeOperation(operation, result || {}, displayError);
       pickerError(messages[err.error] || gitErrorMessage(err), picker);
+    } finally { this.busy = false; this.busyLabel = null; this.render(); }
+  }
+
+  async pull() {
+    const id = this.picker()?.sourceSessionId;
+    if (!id || this.busy) return;
+    this.busy = true;
+    this.busyLabel = "Pulling…";
+    const operation = beginOperation("pull", "Pull", "", "Request started.");
+    let result = null;
+    try {
+      result = await api.pullBranch(id);
+      completeOperation(operation, result);
+      void refreshState().catch(err => store.setError(`Could not refresh branch state: ${err.message || err}`));
+    } catch (err) {
+      completeOperation(operation, result || {}, err);
+      store.set({ sessionPickerError: gitErrorMessage(err) });
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
@@ -1044,7 +1063,7 @@ class PiSessionPicker extends HTMLElement {
       ? `<button class="settings-action" data-act="apply-session-branch" data-mode="switch" ${this.busy || !different ? "disabled" : ""}>Switch</button><button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Fork</button>`
       : `<button class="settings-save" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button>`;
     const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
-    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
+    const branchActions = existing && current && effectiveBranch === current ? `<section class="session-branch-actions"><div class="session-context-heading"><span>Git</span></div><div class="workspace-actions"><button class="settings-action" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="settings-action" data-act="pull-branch" ${this.busy ? "disabled" : ""}>Pull</button><button class="settings-action" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button><button class="settings-action danger-outline" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div></section>` : "";
     const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
     const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
     const hookButtons = hookNames.map(name => {
