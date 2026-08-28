@@ -62,7 +62,7 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
     c.header("x-request-id", requestId);
     const code = typeof error?.code === "string" ? error.code : "";
     const status = Number(error?.status);
-    if (status >= 400 && status < 500 && (code.startsWith("sync_") || ["active_lease", "session_streaming", "session_compacting"].includes(code))) {
+    if (status >= 400 && status < 500 && (code.startsWith("sync_") || ["active_lease", "session_streaming", "session_compacting", "workspace_mismatch", "workspace_required"].includes(code))) {
       return c.json({ error: code, ...(error.message ? { message: error.message } : {}), ...(error.details ? { details: error.details } : {}) }, status);
     }
     if (status >= 500 && status < 600 && code.startsWith("sync_")) {

@@ -114,6 +114,25 @@ test("unknown API failures return structured JSON with a request id", async () =
   assert.equal(body.requestId, response.headers.get("x-request-id"));
 });
 
+test("bare synchronization scope errors preserve their HTTP status", async () => {
+  const { createApp } = await import("../server/index.js");
+  const failure = Object.assign(new Error("conversation belongs to a different Git repository"), {
+    code: "workspace_mismatch",
+    status: 409,
+  });
+  const { app } = createApp({ syncCoordinator: { beginMutation: async () => { throw failure; } } });
+  const created = await app.request("http://pi-web.test/api/chats", { method: "POST" });
+  assert.equal(created.status, 200);
+  const { id } = await created.json();
+  const response = await app.request(`http://pi-web.test/api/sessions/${id}/message`, {
+    method: "POST",
+    headers: J,
+    body: JSON.stringify({ text: "hello" }),
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "workspace_mismatch");
+});
+
 test("serves the UI", async () => {
   const html = await (await get("/")).text();
   assert.match(html, /<pi-app>/);
