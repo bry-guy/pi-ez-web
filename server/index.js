@@ -9,6 +9,7 @@ import { hub } from "./events.js";
 import { buildApi } from "./routes.js";
 import { createSupervisor } from "./supervisor/index.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
+import { PiSyncWebAdapter } from "./sync/web-adapter.js";
 import { publicError } from "./pi-configuration.js";
 import { writeLog } from "./logging.js";
 import { BUILD_ID } from "./version.js";
@@ -72,15 +73,20 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
   if (!uiOnly) {
     ensureHome();
     sup = createSupervisor(hub);
-    const coordinator = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
-    sup.setSyncCoordinator?.(coordinator);
+    const realMode = (process.env.PI_WEB_MODE || "real") !== "mock";
+    const adapter = !syncCoordinator && realMode
+      ? new PiSyncWebAdapter({ hub, supervisor: sup, configProvider: loadConfig })
+      : null;
+    const coordinator = syncCoordinator || (adapter || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig }));
+    if (adapter) sup.setSyncAdapter?.(adapter);
+    else sup.setSyncCoordinator?.(coordinator);
     app.use("/api/*", async (c, next) => {
       const requestId = randomUUID();
       c.set("requestId", requestId);
       c.header("x-request-id", requestId);
       await next();
     });
-    app.route("/api", buildApi(sup, { syncCoordinator: coordinator }));
+    app.route("/api", buildApi(sup, { syncCoordinator: adapter ? null : coordinator, syncAdapter: adapter }));
   }
   addStaticRoutes(app, { uiOnly });
   return { app, sup };

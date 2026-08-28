@@ -109,6 +109,8 @@ export const api = {
   setThinking: (id, level) => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`, { method: "POST", headers: JH, body: JSON.stringify({ level }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
   command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  extensionUiResponse: (sessionId, requestId, body) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "POST", headers: JH, body: JSON.stringify(body || {}) }).then(j),
+  extensionUiCancel: (sessionId, requestId) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "DELETE" }).then(j),
   exportSession: (id, format = "html") => `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
   hook: (id, name, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   settings: (defaultModel, reposRoot) => {
@@ -305,7 +307,7 @@ async function refreshActiveSync(id) {
   if (!id || syncRefreshInFlight.has(id)) return;
   const session = findSessionInState(store.state, id);
   const transcript = store.transcript(id);
-  if (!session?.synchronized || transcript.streaming || transcript.compacting) {
+  if (store.state.sync?.implementation === "extension" || !session?.synchronized || transcript.streaming || transcript.compacting) {
     void openTranscript(id);
     return;
   }
@@ -372,6 +374,44 @@ function tOf(id) {
 function byId(records, id) { return records.find(r => r.id === id); }
 
 export function applyEvent(evt, replay = false) {
+  if (evt.type === "extension_ui_request") {
+    store.set({ extensionUi: { ...evt, sessionId: evt.sessionId } });
+    return;
+  }
+  if (evt.type === "extension_ui_notify") {
+    store.set({ commandNotice: { sessionId: evt.sessionId, title: "Pi", message: evt.message || "", level: evt.level || "info" } });
+    return;
+  }
+  if (evt.type === "extension_ui_status") {
+    store.set(state => ({ extensionStatuses: {
+      ...state.extensionStatuses,
+      [evt.sessionId]: { ...(state.extensionStatuses[evt.sessionId] || {}), [evt.key]: evt.text },
+    } }));
+    return;
+  }
+  if (evt.type === "extension_ui_title") {
+    if (evt.sessionId === store.activeKey() && typeof document !== "undefined") document.title = evt.title || "pi";
+    return;
+  }
+  if (evt.type === "extension_ui_editor") {
+    if (evt.sessionId === store.activeKey() && typeof document !== "undefined") {
+      const field = document.querySelector("pi-composer textarea");
+      if (field) {
+        const value = String(evt.text || "");
+        if (evt.action === "paste") {
+          const start = field.selectionStart ?? field.value.length;
+          const end = field.selectionEnd ?? start;
+          field.value = field.value.slice(0, start) + value + field.value.slice(end);
+          field.selectionStart = field.selectionEnd = start + value.length;
+        } else {
+          field.value = value;
+          field.selectionStart = field.selectionEnd = value.length;
+        }
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+    return;
+  }
   if (evt.type === "operation_log") {
     appendOperationEvent(evt.operationId, evt.event);
     return;
@@ -536,6 +576,12 @@ export function applyEvent(evt, replay = false) {
       break;
     }
     default: break;
+  }
+  if (evt.type === "session_switched" && evt.toSessionId) {
+    void refreshState()
+      .then(() => import("./shell.js"))
+      .then(({ selectSessionById }) => selectSessionById(evt.toSessionId, { skipRefresh: true }))
+      .catch(error => store.setError(`Could not open the synchronized conversation: ${error.message || error}`));
   }
   if (["turn_end", "bang_end"].includes(evt.type)
     && findSessionInState({ projects: store.state.projects, chats: [] }, evt.sessionId)) {

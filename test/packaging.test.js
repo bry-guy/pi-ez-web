@@ -26,7 +26,7 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
-  assert.match(dockerfile, /ARG PI_SYNC_COMMIT=667213eda54392b9ba546e5bd6dc896f384ec755/);
+  assert.match(dockerfile, /ARG PI_SYNC_BASE_COMMIT=667213eda54392b9ba546e5bd6dc896f384ec755/);
   assert.equal(piSyncCommit, "667213eda54392b9ba546e5bd6dc896f384ec755");
   assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
   assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
@@ -48,12 +48,15 @@ test("project hook capability is advertised by the server", () => {
 
 test("k3s deployment uses private image GitOps wiring", () => {
   const deployment = fs.readFileSync(path.join(root, "deploy/k8s/deployment.yaml"), "utf8");
+  const previewDeployment = fs.readFileSync(path.join(root, "deploy/k8s-preview/deployment.yaml"), "utf8");
   const kustomization = fs.readFileSync(path.join(root, "deploy/k8s/kustomization.yaml"), "utf8");
   const application = fs.readFileSync(path.join(root, "deploy/argocd/app-pi-ez-web.yaml"), "utf8");
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
 
   assert.match(deployment, /imagePullSecrets:[\s\S]*name: ghcr-pull/);
   assert.doesNotMatch(deployment, /localhost\/pi-ez-web|:latest/);
+  assert.match(previewDeployment, /PI_WEB_SYNC_SERVER_URL[\s\S]*http:\/\/pi-syncd\.pi-sync\.svc:8080/);
+  assert.match(previewDeployment, /PI_WEB_SYNC_ALL_CONVERSATIONS[\s\S]*value: "false"/);
   assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
   assert.match(kustomization, /digest: sha256:/);
   assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);

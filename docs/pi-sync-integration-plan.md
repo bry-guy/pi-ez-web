@@ -1,251 +1,170 @@
-# pi-sync integration plan
+# pi-sync integration
 
-Status: adapter implementation complete against pi-sync release commit `c5160aaca51ad7e53e24846eb62053944f4da1bb`; production rollout remains declarative and starts with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
+Status: the real web runtime now loads the pi-sync extension through the Pi SDK
+when a sync server is configured. `PiSyncWebAdapter` supplies browser dialogs,
+extension status, and session replacement; the extension owns enrollment, leases,
+heartbeat, ETags, materialization, and settled-session upload. The old web
+coordinator remains available for mock-mode and compatibility tests while the
+extension path is validated.
 
-## Context
+## Goals
 
-The cross-device conversation design moves canonical enrolled sessions into the
-standalone `pi-syncd` service. Pi continues to execute locally: pi-ez-web runs
-models and tools against its server workspaces, while CLI clients run against
-their laptop workspaces. An exclusive renewable lease guarantees that only one
-runtime may update an enrolled conversation.
+- Keep `pi-syncd` as the canonical snapshot and lease authority.
+- Make pi-ez-web a browser host for the same Pi extensions, skills, prompts,
+and tools used by the CLI.
+- Avoid duplicating pi-sync lifecycle logic in pi-ez-web.
+- Preserve Git upstream, branch, and pushed-commit information in synchronized
+session envelopes.
+- Make synchronized conversation names sticky across clients.
+- Warn about Git mismatches without fetching, switching branches, or blocking
+Pi execution.
 
-The sibling `pi-sync` repository owns the Go service, protocol, reusable
-TypeScript client, native JSONL adapter, CLI extension, and synchronized
-workspace skill. This repository owns only the pi-ez-web adapter and user
-experience. The selfhost `infra` repository deploys the service and supplies the
-tailnet route and persistent storage.
+No change to upstream Pi is required. The web runtime embeds `AgentSession`
+directly and uses its existing extension bindings.
 
-The standalone pi-sync service and reusable client are now released. This
-branch consumes the pinned client behind the coordinator and supervisor lease
-boundary; rollout validation remains deliberately separate from application
-startup.
-
-For the personal deployment, all web conversations will be synchronized. The
-application also supports manual per-conversation enrollment so the upstream
-self-hosted default does not require a sync server.
-
-## Configuration and state
-
-Extend `server/config.js` with:
-
-```json
-{
-  "sync": {
-    "serverUrl": null,
-    "allConversations": false
-  }
-}
-```
-
-Support `PI_WEB_SYNC_SERVER_URL` and
-`PI_WEB_SYNC_ALL_CONVERSATIONS` as read-only deployment overrides. A missing
-URL disables the adapter without changing existing local behavior. The
-selfhost production deployment supplies both overrides; local and third-party
-installs remain manual until configured.
-
-Persist successful manual enrollment IDs in an atomic file under
-`PI_WEB_HOME`, for example `sync-sessions.json`. Once marked enrolled, the
-remote snapshot is canonical. Do not mark an ID until `POST /v1/sessions`
-succeeds. `allConversations` treats every discovered session as enrolled and
-uses the local file only to track pending initial enrollment failures.
-
-Use the native Pi session ID as the sync session ID. Keep lease tokens and ETags
-in memory while a web operation is active; pi-ez-web reacquires and receives the
-canonical ETag before every later mutation.
-
-## Adapter boundary
-
-Add a host-level coordinator rather than loading the CLI extension into each
-web AgentSession:
+## Runtime boundary
 
 ```text
-server/sync/client.js          wrapper around the pi-sync TypeScript client
-server/sync/coordinator.js     enrollment, lease, heartbeat, pull/push lifecycle
-server/sync/session-files.js   canonical envelope to local JSONL materialization
-server/sync/workspace.js       upstream Git pointer derivation
+pi-ez-web browser adapter
+  AgentSession event rendering
+  ExtensionUIContext over SSE/HTTP
+  switchSession command action
+
+Pi AgentSession
+  configured profile, packages, extensions, skills, prompts, and tools
+  pi-sync extension
+
+pi-syncd
+  canonical envelopes, ETags, and renewable exclusive leases
 ```
 
-Pin the reusable `pi-sync` npm package at build time. The coordinator is the
-only module allowed to communicate with `pi-syncd`; routes and the supervisor
-call it through a narrow interface.
+`PiSyncWebAdapter` is a host integration, not a second synchronization client.
+It provides:
 
-The coordinator API should expose operations shaped like:
+- `select`, `confirm`, `input`, and `editor` through browser dialogs;
+- `notify`, status, title, and editor-text forwarding;
+- the command context required by `/sync`, especially `switchSession`;
+- safe status inspection for browser state;
+- the configured web sync URL for the extension;
+- best-effort all-conversation enrollment when that setting is enabled.
 
-```text
-status(sessionId)
-enroll(sessionId)
-prepareMutation(sessionId)
-commitSettled(sessionId)
-commitAndRelease(sessionId)
-release(sessionId)
-```
+The adapter does not acquire leases, normalize envelopes, upload snapshots, or
+perform Git mutations.
 
-`prepareMutation` acquires the remote lease, starts its heartbeat, receives the
-canonical envelope and ETag, materializes it using the web session's current
-workspace binding, invalidates any stale supervisor runtime, and then permits
-attachment. `commitSettled` serializes the current manager with its active leaf
-and updates the remote snapshot using the held token and ETag.
+Arbitrary terminal `ctx.ui.custom()` components and terminal-only renderers are
+not translated to HTML. Their underlying commands and tools may still load;
+only the specialized TUI representation is unavailable.
 
-## Supervisor coordination
+## Extension loading
 
-Refactor `server/supervisor/real.js` so an enrolled session cannot be attached
-for mutation until the coordinator has prepared it.
+When `sync.serverUrl` is configured, the supervisor adds the installed
+pi-sync extension to `DefaultResourceLoader`'s additional extension paths. The
+extension's `resources_discover` handler supplies its synchronized-workspace
+skill. All other configured Pi resources continue to be loaded through the
+normal Pi profile/package mechanism.
 
-Required behavior:
+The web runtime binds a browser UI context while retaining `mode: "json"`.
+`ctx.hasUI` is therefore true for browser-capable dialogs without claiming that
+the runtime is a terminal TUI.
 
-1. An external `423 Locked` result prevents prompt, steering, compaction,
-   navigation, model/session metadata changes, and other durable Pi mutations.
-2. Before installing a downloaded snapshot, unsubscribe and dispose any idle
-   cached `AgentSession` for that ID.
-3. Never replace a local file while its AgentSession is streaming.
-4. Materialize through a temporary sibling and atomic rename, then attach a new
-   manager and restore the envelope's `headEntryId` with Pi's navigation API.
-5. Start heartbeat renewal when the web mutation acquires the lease.
-6. Keep the lease through retries, compaction retries, follow-ups, steering,
-   and abort handling until the run reaches `agent_settled`.
-7. On settlement, upload the complete normalized session and release.
-8. For an idle one-shot mutation, upload and release immediately after the
-   mutation completes.
-9. If heartbeat renewal becomes uncertain, allow the in-flight run to settle
-   locally but do not accept another mutation until the coordinator has
-   reacquired against the unchanged ETag.
+## Synchronization behavior
 
-Create one supervisor invalidation method rather than reaching into its `live`
-map from routes. Update metadata and session discovery caches after every
-materialization or successful remote commit.
+The pi-sync extension is authoritative in the real web runtime:
 
-Inventory the existing route/supervisor mutation methods and put the lease
-boundary beneath them so browser code cannot accidentally bypass it. Read-only
-state and the last materialized transcript remain available while another
-client owns the lease; the latest remote transcript is loaded when web next
-acquires the session.
+1. `/sync start` normalizes and enrolls the current native Pi session.
+2. A normal prompt is intercepted by the extension's `input` handler.
+3. The extension acquires the server lease and starts its heartbeat.
+4. Pi runs the turn locally with the configured web workspace.
+5. `agent_settled` normalizes and uploads the complete JSONL snapshot.
+6. The extension releases the lease.
+7. `/sync` lists sessions through the browser `select` dialog.
+8. The extension materializes the selected canonical snapshot and calls
+   `ctx.switchSession`; the web adapter replaces the active `AgentSession`.
 
-## Enrollment
+The old `PiSyncCoordinator` is not installed in this path, so there is only one
+live lease state machine for a web session. It remains for mock-mode behavior and
+existing coordinator tests until extension-only end-to-end validation replaces
+them.
 
-### Individual enrollment
+The initial cutover gives prompt turns and explicit sync operations the
+extension-owned lifecycle. Existing web-only durable operations that do not
+enter Pi's prompt lifecycle remain local until a later prompt or explicit
+synchronization operation. Automatic focus refresh is disabled in this path so
+those local entries are not silently replaced.
 
-Add a conversation action, `Synchronize this conversation`. It is available
-only when a sync server is configured and the session is idle.
+The web's existing sync endpoints remain as thin compatibility surfaces:
+manual enrollment and refresh invoke `/sync start` and `/sync refresh` through
+the actual extension, while status reads the extension binding and server
+metadata without exposing lease tokens to browsers. Refresh is explicit in the
+extension-owned path; automatic focus refresh is disabled so web-only local
+entries are not silently replaced before they are included in a later turn.
 
-The server action:
+## Sticky names
 
-1. Discovers the native session and current head.
-2. Derives the upstream Git pointer when the workspace has one.
-3. Normalizes and validates the envelope through the shared client library.
-4. Creates it on `pi-syncd`.
-5. Persists the enrollment ID locally only after success.
-6. Releases the creation lease after the initial upload.
+For a synchronized binding with a title:
 
-Enrollment is one-way in this implementation. The UI reports an enrolled
-conversation but does not offer removal.
+- enrollment records the current Pi session name;
+- materialization records the canonical title;
+- `session_start` restores the title through Pi's session API;
+- later local name changes are immediately restored to the binding title;
+- web `/name` preserves the synchronized title rather than creating a durable
+  divergent name.
 
-### Synchronize all
+A future explicit canonical rename command may update the title under a lease;
+that is not required for the initial integration.
 
-Add a Settings control backed by `sync.allConversations`. Enabling it starts an
-observable reconciliation pass over existing sessions:
+## Git workspace pointers
 
-- Enroll idle sessions not present on the server.
-- Defer streaming sessions until they settle.
-- Record and display failures without blocking application startup.
-- Enroll each newly created chat or project session before its first mutation.
+The shared envelope carries the configured upstream remote, branch, and pushed
+commit. Dirty state, local-only commits, patches, worktree paths, and stash
+state are not transferred.
 
-For the selfhost deployment this value is enabled declaratively. The startup
-reconciler must remain idempotent and must never overwrite an already-enrolled
-remote session after a duplicate-ID response.
+The extension performs read-only comparison and notifies when the current
+workspace does not match the recorded pointer. It never:
 
-## Workspace pointer
+- fetches;
+- checks out or creates branches;
+- merges or resets;
+- transfers dirty files;
+- blocks prompts or tools because of a mismatch.
 
-The adapter sends only the committed and pushed upstream state:
+When settling a turn, an existing pointer is retained if the current workspace
+is on a different repository or branch. If the repository and branch match, a
+new pushed upstream commit may advance the pointer. A session without a pointer
+can acquire one when an upstream becomes available.
 
-```json
-{
-  "gitRemote": "...",
-  "branch": "upstream-branch",
-  "commit": "upstream-commit"
-}
-```
+## Validation
 
-Derive it from the session workspace's configured upstream. Local dirty state,
-local-only commits, worktree paths, and stash state do not enter the sync
-envelope. If no upstream exists, omit the workspace pointer while continuing
-to synchronize the conversation.
+The current tests cover browser `select`/`confirm`/`input`/`editor` request and
+cancellation, command error propagation, Git pointer sanitization, duplicate
+materialized-file selection, and the pi-sync extension's lease/ETag lifecycle.
+The remaining acceptance tests are:
 
-When a remote snapshot is materialized on pi-ez-web, resolve its Git remote to a
-configured project and existing branch-backed workspace. Require the selected
-workspace to represent the recorded remote and make the recorded commit
-available through normal Git workflow before permitting the next mutation.
-Do not transfer patches or mutate Git automatically inside the sync adapter.
+- actual pi-sync `/sync start`, prompt settlement, and `/sync refresh` through
+  the web SDK runtime;
+- browser `/sync` selection and `switchSession` replacement;
+- sticky names across materialization and local rename attempts;
+- Git pointer transfer and non-blocking mismatch notifications;
+- representative third-party extensions and skills loading unchanged.
 
-Make the `synchronized-workspace` skill from the pinned `pi-sync` package
-available to web AgentSessions without loading the package's CLI extension.
-Before a synchronized run, add a concise context note with the upstream branch
-and commit and direct the agent to the skill. The skill establishes that code
-moves only after a coherent commit and push.
+The existing coordinator tests continue to cover the compatibility fake and the
+previous network lifecycle during the transition. They are not evidence that
+the extension-only web path is complete.
 
-## API and browser state
+## Explicit follow-up work
 
-Extend `/api/health` and `/api/state` with a versioned sync capability and
-connection status. Session rows need only:
+These are intentionally not part of the initial sync cutover:
 
-```json
-{
-  "synchronized": true,
-  "syncState": "available | in_use | pending | error",
-  "leaseHolder": "macbook"
-}
-```
-
-Expose app-owned endpoints for enrollment and Settings changes. Browsers never
-receive a syncd lease token and never call syncd directly.
-
-When a mutation is blocked by an external lease, return `423` with a stable
-application error code and display the holder label and expiry. Update SSE/state
-notifications when enrollment, lease ownership, or commit status changes so
-open tabs converge without reloading.
-
-## Tests
-
-### Unit and integration
-
-- Configuration normalization and environment precedence.
-- Manual enrollment persistence and idempotent all-session reconciliation.
-- Git upstream pointer derivation without dirty/local-only state.
-- Supervisor disposal before materialization.
-- Route-level `423` behavior for every durable mutation family.
-- Heartbeat across a long mocked stream and release at `agent_settled`.
-- Reacquisition after syncd restart when the ETag is unchanged.
-- Stale ETag preservation without local or remote overwrite.
-- Different web/CLI `cwd` values and parent-session normalization.
-- Extension skill loading without the CLI sync extension.
-
-Use an in-process fake sync client for most server tests and a real temporary
-`pi-syncd` in one end-to-end gate.
-
-### Browser
-
-Add DOM coverage for the per-conversation action, Settings control, pending and
-locked states, and stable error messages. Add one browser integration test that
-enrolls a web session, observes a simulated CLI lease, waits for release, and
-continues the same session.
-
-## Delivery sequence
-
-The released client is now consumed behind the coordinator boundary. The
-remaining rollout work is operational validation rather than a placeholder
-network adapter:
-
-1. Build the pinned `@bry-guy/pi-sync` package into the production image.
-2. Roll out `pi-syncd` and validate its private-network health endpoint.
-3. Run the real web-to-CLI-to-web end-to-end test against the pinned service.
-4. Migrate one non-critical session and verify lease conflict, heartbeat,
-   workspace setup, stale-ETag preservation, and release behavior.
-5. Enable the production setting only after the selected-session migration
-   passes.
-
-The production deployment must start with `PI_WEB_SYNC_ALL_CONVERSATIONS=false`.
-Only the later rollout step changes it to `true`; local and third-party installs
-remain unchanged when no sync URL is configured.
-
-Keep the adapter behind the configured server URL until the rollout is proven;
-unenrolled sessions must continue to behave exactly as they do today.
+- remove the compatibility coordinator after extension-only end-to-end tests;
+- make browser built-in command adapters thinner around Pi SDK operations;
+- expose Pi extension argument completions in the web composer;
+- improve fallback rendering for custom extension messages and tool results;
+- support text widgets and richer status placement;
+- provide browser-specific renderers for extensions that require custom TUI
+  components;
+- add an explicit `/sync rename` or `/sync flush` operation;
+- improve workspace selection and Git guidance without automatic Git changes;
+- bring direct web-only durable mutations (for example bang records and
+  compaction) into an explicit extension-owned flush lifecycle;
+- reduce remaining transcript/event translation where the SDK event surface is
+  sufficient.

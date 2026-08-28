@@ -39,13 +39,36 @@ export default function syncExtension(pi: ExtensionAPI) {
   let currentSessionId: string | undefined;
   let active: ActiveLease | undefined;
   let blocked: BlockReason | undefined;
+  const workspaceWarnings = new Set<string>();
 
   const notify = (ctx: ExtensionContext | undefined, message: string, level: "info" | "warning" | "error" = "info") => {
-    if (ctx?.hasUI) ctx.ui.notify(message, level);
+    try {
+      if (ctx?.hasUI) ctx.ui.notify(message, level);
+    } catch {
+      // Session replacement can invalidate the command context before an error is reported.
+    }
   };
 
   const setStatus = (ctx: ExtensionContext | undefined, text?: string) => {
-    if (ctx?.hasUI) ctx.ui.setStatus("pi-sync", text);
+    try {
+      if (ctx?.hasUI) ctx.ui.setStatus("pi-sync", text);
+    } catch {
+      // Session replacement can invalidate the command context before status cleanup.
+    }
+  };
+
+  const errorCode = (error: unknown): string | undefined => {
+    if (!error || typeof error !== "object" || !("code" in error)) return undefined;
+    return typeof error.code === "string" ? error.code : undefined;
+  };
+
+  const failCommand = (ctx: ExtensionContext | undefined, error: unknown, fallbackCode: string, fallbackMessage: string): never => {
+    const message = error instanceof Error && error.message ? error.message : fallbackMessage;
+    const failure = error instanceof Error
+      ? Object.assign(error, { code: errorCode(error) ?? fallbackCode })
+      : Object.assign(new Error(message), { code: errorCode(error) ?? fallbackCode });
+    notify(ctx, message, "error");
+    throw failure;
   };
 
   const configuredUrl = (args = ""): string | undefined => {
@@ -346,15 +369,45 @@ export default function syncExtension(pi: ExtensionAPI) {
     return { stdout: result.stdout, code: result.code };
   });
 
+  const workspaceIdentity = (workspace?: SyncBinding["workspace"]) => workspace
+    ? `${workspace.gitRemote}|${workspace.branch}|${workspace.commit}`
+    : "none";
+
+  const warnWorkspace = async (ctx: ExtensionContext | undefined, binding?: SyncBinding) => {
+    if (!ctx || !binding?.workspace) return;
+    let actual: SyncBinding["workspace"] | undefined;
+    try { actual = await workspaceFor(ctx); } catch { actual = undefined; }
+    const expectedKey = workspaceIdentity(binding.workspace);
+    const actualKey = workspaceIdentity(actual);
+    if (expectedKey === actualKey) {
+      for (const key of workspaceWarnings) if (key.startsWith(`${expectedKey}|`)) workspaceWarnings.delete(key);
+      return;
+    }
+    const warningKey = `${expectedKey}|${actualKey}`;
+    if (workspaceWarnings.has(warningKey)) return;
+    workspaceWarnings.add(warningKey);
+    const expected = `${binding.workspace.branch}@${binding.workspace.commit}`;
+    const current = actual ? `${actual.branch}@${actual.commit}` : "no matching upstream";
+    notify(ctx, `Git workspace differs from the synchronized conversation (expected ${expected}; current ${current}). No Git changes were made.`, "warning");
+  };
+
+  const workspaceForCommit = async (ctx: ExtensionContext, binding?: SyncBinding) => {
+    let actual: SyncBinding["workspace"] | undefined;
+    try { actual = await workspaceFor(ctx); } catch { actual = undefined; }
+    const expected = binding?.workspace ?? active?.binding.workspace;
+    if (!expected || (actual && actual.gitRemote === expected.gitRemote && actual.branch === expected.branch)) return actual || expected;
+    return expected;
+  };
+
   const normalizeCurrent = async (ctx: ExtensionContext, binding?: SyncBinding): Promise<{ envelope: SessionEnvelope; path: string }> => {
     const path = ctx.sessionManager.getSessionFile();
     if (!path) throw new Error("synchronization requires a persistent Pi session");
     const envelope = await normalizeSessionFile(path, {
       requestedSessionId: ctx.sessionManager.getSessionId(),
       headEntryId: ctx.sessionManager.getLeafId() ?? "",
-      title: ctx.sessionManager.getSessionName() ?? binding?.title ?? active?.binding.title ?? "",
+      title: binding?.title ?? active?.binding.title ?? ctx.sessionManager.getSessionName() ?? "",
       parentSessionId: binding?.parentSessionId ?? active?.binding.parentSessionId,
-      workspace: await workspaceFor(ctx),
+      workspace: await workspaceForCommit(ctx, binding),
     });
     return { envelope, path };
   };
@@ -365,17 +418,13 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   const repairCurrent = async (ctx: ExtensionCommandContext, binding: SyncBinding): Promise<void> => {
     if (!ctx.hasUI) {
-      notify(ctx, "Open Pi interactively and run /sync start to confirm rebuilding this missing server session.", "warning");
-      return;
+      return failCommand(ctx, undefined, "sync_ui_required", "Open Pi interactively and run /sync start to confirm rebuilding this missing server session.");
     }
     const confirmed = await ctx.ui.confirm(
       "Recreate synchronized session?",
       "The server no longer has this conversation. Recreate it from this local session?",
     );
-    if (!confirmed) {
-      notify(ctx, "Synchronized session setup was left unchanged.", "info");
-      return;
-    }
+    if (!confirmed) return failCommand(ctx, undefined, "sync_repair_cancelled", "Synchronized session setup was left unchanged.");
 
     let normalized: { envelope: SessionEnvelope; path: string };
     try {
@@ -384,12 +433,14 @@ export default function syncExtension(pi: ExtensionAPI) {
         throw new Error("the current Pi session ID does not match its synchronization binding");
       }
     } catch (error) {
-      notify(ctx, error instanceof Error ? error.message : "Could not normalize the local Pi session.", "error");
-      return;
+      return failCommand(ctx, error, "sync_enrollment_failed", "Could not normalize the local Pi session.");
     }
 
     try {
       const response = await clientFor(binding.serverUrl).enroll(normalized.envelope);
+      if (response.session.sessionId !== binding.canonicalSessionId) {
+        throw Object.assign(new Error("The sync server returned a different conversation identity."), { code: "sync_identity_mismatch" });
+      }
       const nextBinding: SyncBinding = {
         ...binding,
         state: "ready",
@@ -405,29 +456,25 @@ export default function syncExtension(pi: ExtensionAPI) {
       notify(ctx, "The local conversation was re-enrolled; the next prompt will acquire its lease.", "info");
     } catch (error) {
       if (error instanceof SyncClientError && error.code === "duplicate_enrollment") {
-        notify(ctx, "A server copy already exists. The local file was preserved; use /sync to open the canonical copy.", "warning");
-      } else {
-        notify(ctx, error instanceof Error ? error.message : "Could not re-enroll the local conversation.", "error");
+        return failCommand(ctx, undefined, "sync_duplicate", "A server copy already exists. The local file was preserved; use /sync to open the canonical copy.");
       }
+      return failCommand(ctx, error, "sync_enrollment_failed", "Could not re-enroll the local conversation.");
     }
   };
 
   const enrollCurrent = async (ctx: ExtensionCommandContext, args: string) => {
     if (!ctx.sessionManager.getSessionFile()) {
-      notify(ctx, "Only persistent Pi sessions can be synchronized.", "error");
-      return;
+      return failCommand(ctx, undefined, "sync_not_persistent", "Only persistent Pi sessions can be synchronized.");
     }
     currentSessionId = ctx.sessionManager.getSessionId();
     const existing = await store.get(currentSessionId);
     const url = configuredUrl(args) ?? existing?.serverUrl;
     if (!url) {
-      notify(ctx, "Set PI_SYNC_SERVER_URL or provide a sync server URL after /sync start.", "error");
-      return;
+      return failCommand(ctx, undefined, "sync_not_configured", "Set PI_SYNC_SERVER_URL or provide a sync server URL after /sync start.");
     }
     if (existing) {
       if (existing.serverUrl !== url) {
-        notify(ctx, "This session is already bound to a different sync server.", "error");
-        return;
+        return failCommand(ctx, undefined, "sync_server_mismatch", "This session is already bound to a different sync server.");
       }
       if (existing.state === "setup_required") {
         await repairCurrent(ctx, existing);
@@ -442,11 +489,13 @@ export default function syncExtension(pi: ExtensionAPI) {
     try {
       normalized = await normalizeCurrent(ctx);
     } catch (error) {
-      notify(ctx, error instanceof Error ? error.message : "Could not normalize the Pi session.", "error");
-      return;
+      return failCommand(ctx, error, "sync_enrollment_failed", "Could not normalize the Pi session.");
     }
     try {
       const response = await clientFor(url).enroll(normalized.envelope);
+      if (response.session.sessionId !== normalized.envelope.sessionId) {
+        throw Object.assign(new Error("The sync server returned a different conversation identity."), { code: "sync_identity_mismatch" });
+      }
       const binding: SyncBinding = {
         nativeSessionId: normalized.envelope.sessionId,
         serverUrl: url,
@@ -463,30 +512,22 @@ export default function syncExtension(pi: ExtensionAPI) {
       notify(ctx, "Conversation enrolled; the next prompt will acquire its lease.", "info");
     } catch (error) {
       if (error instanceof SyncClientError && error.code === "duplicate_enrollment") {
-        notify(ctx, "A server copy already exists. The local file was preserved; use /sync to open the canonical copy.", "warning");
-      } else {
-        notify(ctx, error instanceof Error ? error.message : "Conversation enrollment failed.", "error");
+        return failCommand(ctx, undefined, "sync_duplicate", "A server copy already exists. The local file was preserved; use /sync to open the canonical copy.");
       }
+      return failCommand(ctx, error, "sync_enrollment_failed", "Conversation enrollment failed.");
     }
   };
 
-  const syncPick = async (ctx: ExtensionCommandContext) => {
+  const syncPick = async (ctx: ExtensionCommandContext, args = "") => {
     const currentBinding = await store.get(ctx.sessionManager.getSessionId());
-    const url = configuredUrl() ?? currentBinding?.serverUrl;
-    if (!url) {
-      notify(ctx, "Set PI_SYNC_SERVER_URL before using /sync.", "error");
-      return;
-    }
-    if (!ctx.hasUI) {
-      notify(ctx, "The synchronized-session picker requires Pi interactive UI.", "error");
-      return;
-    }
+    const url = configuredUrl(args) ?? currentBinding?.serverUrl;
+    if (!url) return failCommand(ctx, undefined, "sync_not_configured", "Set PI_SYNC_SERVER_URL before using /sync.");
+    if (!ctx.hasUI) return failCommand(ctx, undefined, "sync_ui_required", "The synchronized-session picker requires Pi interactive UI.");
     let list;
     try {
       list = await clientFor(url).list();
     } catch (error) {
-      notify(ctx, error instanceof Error ? error.message : "Could not list synchronized sessions.", "error");
-      return;
+      return failCommand(ctx, error, "sync_unavailable", "Could not list synchronized sessions.");
     }
     if (list.sessions.length === 0) {
       notify(ctx, "No synchronized conversations are enrolled yet. Use /sync start.", "info");
@@ -504,8 +545,11 @@ export default function syncExtension(pi: ExtensionAPI) {
     try {
       acquired = await clientFor(url).acquire(row.item.sessionId, deviceLabel);
     } catch (error) {
-      notify(ctx, error instanceof Error ? error.message : "Could not acquire synchronized session.", "error");
-      return;
+      return failCommand(ctx, error, "sync_unavailable", "Could not acquire synchronized session.");
+    }
+    if (acquired.session.sessionId !== row.item.sessionId) {
+      await clientFor(url).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
+      return failCommand(ctx, undefined, "sync_identity_mismatch", "The sync server returned a different conversation identity.");
     }
     const sessionDir = ctx.sessionManager.getSessionDir();
     const target = join(sessionDir, `${Date.now()}_${acquired.session.sessionId}.jsonl`);
@@ -525,17 +569,21 @@ export default function syncExtension(pi: ExtensionAPI) {
     };
     let stored = false;
     let released = false;
+    let switched = false;
+    let releaseError: unknown;
     const releasePickerLease = async (): Promise<boolean> => {
       try {
         await clientFor(url).release(acquired.session.sessionId, acquired.lease.token);
         released = true;
         return true;
-      } catch {
+      } catch (error) {
+        releaseError = error;
         return false;
       }
     };
     try {
-      await materializeSessionFile(target, acquired.session, { cwd: ctx.cwd });
+      const parentSessionPath = await parentPathFor(acquired.session.parentSessionId);
+      await materializeSessionFile(target, acquired.session, { cwd: ctx.cwd, ...(parentSessionPath ? { parentSessionPath } : {}) });
       await store.set(targetBinding);
       stored = true;
       if (await releasePickerLease()) {
@@ -549,27 +597,103 @@ export default function syncExtension(pi: ExtensionAPI) {
           replacement.ui.notify("Synchronized conversation opened. The next prompt will acquire its lease.", "info");
         },
       });
+      switched = !result.cancelled;
       if (result.cancelled) {
         if (!released) await releasePickerLease();
         if (stored && released) await store.remove(targetBinding.nativeSessionId);
+      } else if (releaseError) {
+        throw Object.assign(new Error("The synchronized session opened, but its lease could not be released."), { code: "sync_lease_uncertain", cause: releaseError });
       }
     } catch (error) {
+      if (switched) throw error;
       if (!released) await releasePickerLease();
       if (stored && released) await store.remove(targetBinding.nativeSessionId).catch(() => undefined);
-      notify(ctx, error instanceof Error ? error.message : "Could not open synchronized session.", "error");
+      return failCommand(ctx, error, "sync_materialization_failed", "Could not open synchronized session.");
     }
   };
 
-  const showStatus = async (ctx: ExtensionCommandContext) => {
+  const parentPathFor = async (parentSessionId?: string | null) => {
+    if (!parentSessionId) return undefined;
+    return (await store.get(parentSessionId))?.materializedFile;
+  };
+
+  const refreshCurrent = async (ctx: ExtensionCommandContext) => {
+    currentSessionId = ctx.sessionManager.getSessionId();
+    const binding = await store.get(currentSessionId);
+    if (!binding) return failCommand(ctx, undefined, "sync_not_enrolled", "This Pi session is not synchronized.");
+    if (!ctx.isIdle()) return failCommand(ctx, undefined, "session_streaming", "Stop the current response before refreshing this conversation.");
+    let acquired;
+    try {
+      acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel);
+    } catch (error) {
+      return failCommand(ctx, error, "sync_unavailable", "Could not acquire the synchronized conversation.");
+    }
+    if (acquired.session.sessionId !== binding.canonicalSessionId) {
+      await clientFor(binding.serverUrl).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
+      return failCommand(ctx, undefined, "sync_identity_mismatch", "The sync server returned a different conversation identity.");
+    }
+    const target = binding.materializedFile || ctx.sessionManager.getSessionFile();
+    if (!target) {
+      await clientFor(binding.serverUrl).release(binding.canonicalSessionId, acquired.lease.token).catch(() => undefined);
+      return failCommand(ctx, undefined, "sync_materialization_failed", "The synchronized conversation has no local session file.");
+    }
+    const nextBinding: SyncBinding = {
+      ...binding,
+      state: "ready",
+      lastEtag: acquired.etag,
+      lastFingerprint: stableEnvelopeFingerprint(acquired.session),
+      workspace: acquired.session.workspace,
+      parentSessionId: acquired.session.parentSessionId,
+      title: acquired.session.title,
+    };
+    delete nextBinding.leaseToken;
+    delete nextBinding.leaseExpiresAt;
+    let released = false;
+    let switched = false;
+    let releaseError: unknown;
+    try {
+      const parentSessionPath = await parentPathFor(acquired.session.parentSessionId);
+      await materializeSessionFile(target, acquired.session, { cwd: ctx.cwd, ...(parentSessionPath ? { parentSessionPath } : {}) });
+      await store.set(nextBinding);
+      try {
+        await clientFor(binding.serverUrl).release(binding.canonicalSessionId, acquired.lease.token);
+        released = true;
+      } catch (error) {
+        releaseError = error;
+        await store.set({ ...nextBinding, leaseToken: acquired.lease.token, leaseExpiresAt: acquired.lease.expiresAt });
+        notify(ctx, "The canonical conversation was refreshed, but its lease could not be released; the next prompt will retry.", "warning");
+      }
+      const result = await ctx.switchSession(target, {
+        withSession: async replacement => {
+          await restoreHead((entryId, options) => replacement.navigateTree(entryId, options), acquired.session.headEntryId);
+          replacement.ui.notify("Synchronized conversation refreshed.", "info");
+        },
+      });
+      switched = !result.cancelled;
+      if (result.cancelled) {
+        notify(ctx, "The synchronized conversation was not refreshed.", "warning");
+        if (!released) await clientFor(binding.serverUrl).release(binding.canonicalSessionId, acquired.lease.token).catch(() => undefined);
+      } else if (releaseError) {
+        throw Object.assign(new Error("The synchronized conversation was refreshed, but its lease could not be released."), { code: "sync_lease_uncertain", cause: releaseError });
+      }
+    } catch (error) {
+      if (switched) throw error;
+      if (!released) await clientFor(binding.serverUrl).release(binding.canonicalSessionId, acquired.lease.token).catch(() => undefined);
+      return failCommand(ctx, error, "sync_materialization_failed", "Could not refresh the synchronized conversation.");
+    }
+  };
+
+  const showStatus = async (ctx: ExtensionCommandContext, args = "") => {
     currentSessionId = ctx.sessionManager.getSessionId();
     const binding = await store.get(currentSessionId);
     if (!binding) {
       notify(ctx, "This Pi session is not synchronized.", "info");
       return;
     }
+    const url = configuredUrl(args) ?? binding.serverUrl;
     let health = "unreachable";
     try {
-      await clientFor(binding.serverUrl).health({ timeoutMs: 5_000 });
+      await clientFor(url).health({ timeoutMs: 5_000 });
       health = "available";
     } catch {
       // Status remains useful offline; do not expose transport details.
@@ -587,12 +711,14 @@ export default function syncExtension(pi: ExtensionAPI) {
       const command = args.trim();
       if (command === "start" || command.startsWith("start ")) {
         await enrollCurrent(ctx, command.slice("start".length).trim());
-      } else if (command === "status") {
-        await showStatus(ctx);
-      } else if (command === "" || command === "open") {
-        await syncPick(ctx);
+      } else if (command === "status" || command.startsWith("status ")) {
+        await showStatus(ctx, command.slice("status".length).trim());
+      } else if (command === "refresh") {
+        await refreshCurrent(ctx);
+      } else if (command === "" || command === "open" || command.startsWith("open ")) {
+        await syncPick(ctx, command.slice("open".length).trim());
       } else {
-        notify(ctx, "Usage: /sync, /sync start [server URL], or /sync status", "error");
+        notify(ctx, "Usage: /sync, /sync start [server URL], /sync status, or /sync refresh", "error");
       }
     },
   });
@@ -603,7 +729,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     deviceLabel = await store.deviceLabel();
     active = undefined;
     blocked = undefined;
-    const binding = await store.get(currentSessionId);
+    let binding = await store.get(currentSessionId);
     if (!binding) {
       setStatus(ctx);
       return;
@@ -614,8 +740,25 @@ export default function syncExtension(pi: ExtensionAPI) {
       showBlocked(ctx);
       return;
     }
+    if (binding.title === undefined) {
+      binding = { ...binding, title: ctx.sessionManager.getSessionName() || "" };
+      await store.set(binding);
+    }
+    if (typeof binding.title === "string" && (ctx.sessionManager.getSessionName() || "") !== binding.title.trim()) {
+      pi.setSessionName?.(binding.title.trim());
+    }
+    void warnWorkspace(ctx, binding);
     if (binding.leaseToken) resumeActive(ctx, binding);
     else setStatus(ctx, "sync: not leased");
+  });
+
+  pi.on("session_info_changed", async (_event, ctx) => {
+    if (!currentSessionId) return;
+    const binding = await store.get(currentSessionId);
+    if (typeof binding?.title !== "string") return;
+    const title = binding.title.trim();
+    if ((ctx.sessionManager.getSessionName() || "") === title) return;
+    pi.setSessionName?.(title);
   });
 
   pi.on("resources_discover", async () => {
@@ -632,6 +775,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       showBlocked(ctx);
       return { action: "handled" as const };
     }
+    void warnWorkspace(ctx, binding);
     if (binding.leaseToken) {
       if (!active || active.token !== binding.leaseToken) resumeActive(ctx, binding);
       if (!(await verifyPendingLease(ctx, binding))) {
@@ -672,7 +816,7 @@ export default function syncExtension(pi: ExtensionAPI) {
   const guardDurableMutation = async (ctx: ExtensionContext) => {
     if (!currentSessionId) return;
     const binding = await store.get(currentSessionId);
-    if (binding && !ready()) {
+    if (binding && !ready() && ctx.mode !== "json") {
       showBlocked(ctx);
       return { cancel: true as const };
     }

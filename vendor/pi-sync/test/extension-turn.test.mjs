@@ -36,6 +36,7 @@ async function harness(fetch) {
   extension(pi);
   const ctx = {
     hasUI: true,
+    isIdle: () => true,
     cwd: root,
     ui: {
       confirm: async () => true,
@@ -93,6 +94,35 @@ function responseForRenew(etag) {
     lease: { holder: "pi-test", acquiredAt: envelope.createdAt, expiresAt: "2026-01-01T00:02:00Z" },
   });
 }
+
+test("sync start reports duplicate enrollment to its host", async () => {
+  const fake = await harness(async (_url, _init = {}) => Response.json({ error: { code: "duplicate_enrollment" } }, { status: 409 }));
+  try {
+    await assert.rejects(fake.handlers.get("command:sync")("start http://sync.test", fake.ctx), error => error.code === "sync_duplicate");
+    assert.match(fake.notices.join(" "), /already exists/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("sync refresh reports an active lease to its host", async () => {
+  const fake = await harness(async (_url, _init = {}) => Response.json({ error: { code: "active_lease" } }, { status: 423 }));
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await assert.rejects(fake.handlers.get("command:sync")("refresh", fake.ctx), error => error.code === "active_lease");
+    assert.match(fake.notices.join(" "), /in use/);
+  } finally {
+    await fake.close();
+  }
+});
 
 test("acquires per input, settles PUT before DELETE, and reacquires next input", async () => {
   const requests = [];

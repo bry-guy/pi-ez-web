@@ -39,6 +39,19 @@ test("derives only the pushed upstream workspace pointer", async () => {
   assert.equal(calls.length, 3);
 });
 
+test("removes credentials from Git remote pointers", async () => {
+  const workspace = await deriveWorkspacePointer("/work", async (_command, args) => {
+    if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { stdout: "origin/main\n", code: 0 };
+    if (args[0] === "remote") return { stdout: "https://user:secret@example.com/owner/repo.git?token=secret\n", code: 0 };
+    return { stdout: "0123456789abcdef0123456789abcdef01234567\n", code: 0 };
+  });
+  assert.deepEqual(workspace, {
+    gitRemote: "https://example.com/owner/repo.git",
+    branch: "main",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+  });
+});
+
 test("restores the canonical head through Pi navigation", async () => {
   const calls = [];
   await restoreHead(async (id, options) => {

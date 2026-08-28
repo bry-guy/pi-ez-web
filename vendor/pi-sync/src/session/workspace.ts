@@ -18,8 +18,24 @@ export async function deriveWorkspacePointer(cwd: string, runner: GitCommandRunn
   const branch = upstreamRef.slice(separator + 1);
   const remote = await runOptional(runner, "git", ["remote", "get-url", remoteName]);
   const commit = await runOptional(runner, "git", ["rev-parse", "@{upstream}"]);
-  if (!remote || !commit) return undefined;
-  return { gitRemote: remote.trim(), branch, commit: commit.trim() };
+  const gitRemote = sanitizeRemote(remote);
+  if (!gitRemote || !commit) return undefined;
+  return { gitRemote, branch, commit: commit.trim() };
+}
+
+function sanitizeRemote(value: string | undefined): string | undefined {
+  const remote = String(value || "").trim();
+  if (!remote || /[\u0000\r\n\s]/.test(remote)) return undefined;
+  try {
+    const parsed = new URL(remote);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "") || undefined;
+  } catch {
+    return remote;
+  }
 }
 
 function defaultGitRunner(cwd: string): GitCommandRunner {
