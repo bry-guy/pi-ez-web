@@ -1143,6 +1143,7 @@ function snapshotRecords(st) {
     else Object.assign(existing, cloneRecord(record));
   }
   for (const record of st.liveRecords.values()) {
+    if (record.role === "assistant" && !record.streaming) continue;
     const existing = records.find(r => r.id === record.id);
     if (!existing) records.push(cloneRecord(record));
     else if (record.role === "activity") Object.assign(existing, cloneRecord(record));
