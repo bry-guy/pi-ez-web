@@ -161,7 +161,7 @@ spec:
               value: /data/pi-ez-workspaces/pi-ez-web
             # Preview is wired to the private sync service for manual, disposable testing.
             - name: PI_WEB_SYNC_SERVER_URL
-              value: http://pi-syncd.pi-sync.svc:8080
+              value: http://preview-pi-syncd.pi-sync.svc:8080
             - name: PI_WEB_SYNC_ALL_CONVERSATIONS
               value: "false"
           ports:

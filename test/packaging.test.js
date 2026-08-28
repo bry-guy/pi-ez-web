@@ -55,7 +55,7 @@ test("k3s deployment uses private image GitOps wiring", () => {
 
   assert.match(deployment, /imagePullSecrets:[\s\S]*name: ghcr-pull/);
   assert.doesNotMatch(deployment, /localhost\/pi-ez-web|:latest/);
-  assert.match(previewDeployment, /PI_WEB_SYNC_SERVER_URL[\s\S]*http:\/\/pi-syncd\.pi-sync\.svc:8080/);
+  assert.match(previewDeployment, /PI_WEB_SYNC_SERVER_URL[\s\S]*http:\/\/preview-pi-syncd\.pi-sync\.svc:8080/);
   assert.match(previewDeployment, /PI_WEB_SYNC_ALL_CONVERSATIONS[\s\S]*value: "false"/);
   assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
   assert.match(kustomization, /digest: sha256:/);
