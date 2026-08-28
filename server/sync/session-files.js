@@ -17,6 +17,12 @@ export async function deriveWorkspacePointer(cwd, runner) {
   return gitRemote ? { ...pointer, gitRemote } : undefined;
 }
 
+export async function deriveRepositoryIdentity(cwd, runner) {
+  const module = await loadPiSyncModule();
+  if (typeof module.deriveRepositoryIdentity !== "function") return undefined;
+  return module.deriveRepositoryIdentity(cwd, runner);
+}
+
 export async function materializeSessionFile(file, envelope, options) {
   const module = await loadPiSyncModule();
   if (typeof module.materializeSessionFile !== "function") {

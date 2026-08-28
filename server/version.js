@@ -10,6 +10,7 @@ export const API_CAPABILITIES = Object.freeze([
   "workspace-branches",
   "pi-resources",
   "extension-activity",
+  "extension-ui",
   "subagent-activity",
   "file-explorer",
   "pi-sync",

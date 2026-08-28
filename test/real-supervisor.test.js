@@ -188,6 +188,18 @@ test("manual compact reports expected no-op states instead of an internal error"
   }
 });
 
+test("extension command failures propagate through the web supervisor", async () => {
+  const failure = Object.assign(new Error("sync failed"), { code: "sync_failure" });
+  const supervisor = new RealSupervisor({});
+  supervisor._attachById = async () => ({ session: {
+    extensionRunner: {
+      getCommand: name => name === "sync" ? { handler: async () => { throw failure; } } : undefined,
+      createCommandContext: () => ({}),
+    },
+  } });
+  await assert.rejects(supervisor.command("session-1", "/sync refresh"), error => error === failure);
+});
+
 test("configured extensions load commands and session_start tools", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-extension-"));
   try {

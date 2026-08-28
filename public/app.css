@@ -736,6 +736,27 @@ aside.files.file-viewer {
 .session-picker-actions-heading { margin: 0 0 7px; }
 .session-picker-action-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 
+.extension-ui-scrim {
+  position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: oklch(0.15 0.02 255 / .56);
+}
+.extension-ui-modal {
+  width: min(520px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden;
+  border-radius: 14px; background: var(--surface-2); box-shadow: var(--elevation-2);
+}
+.extension-ui-head { padding: 16px 18px 13px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.extension-ui-body { max-height: 60vh; overflow-y: auto; padding: 16px; }
+.extension-ui-message { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.extension-ui-options { display: grid; gap: 7px; }
+.extension-ui-option { width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); text-align: left; font: 12px var(--mono); cursor: pointer; }
+.extension-ui-option:hover, .extension-ui-option:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--text); outline: 0; }
+.extension-ui-option:disabled { opacity: .55; cursor: default; }
+.extension-ui-field { display: grid; gap: 6px; color: var(--muted); font-size: 11.5px; }
+.extension-ui-field input, .extension-ui-field textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 12px/1.45 var(--mono); outline: 0; resize: vertical; }
+.extension-ui-field input:focus, .extension-ui-field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.extension-ui-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 16px 16px; background: var(--surface-2); }
+.extension-status { max-width: 28ch; overflow: hidden; color: var(--faint); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- modal ---------- */
 .scrim {
   position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
@@ -1034,6 +1055,7 @@ body.modal-open .scrollable { overflow: hidden; }
 .model-group + .model-group, .model-unavailable, .diff-body,
 .file-error { box-shadow: none; }
 .settings-row + .settings-row { margin-top: 2px; }
+.extension-ui-field input, .extension-ui-field textarea { border: 1px solid var(--border) !important; }
 .rail-foot { margin: 8px 8px 0; border-radius: 10px; background: var(--surface-2); }
 .settings-card, .confirm-modal, .reload-card { box-shadow: var(--elevation-1); }
 

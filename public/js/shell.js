@@ -14,6 +14,12 @@ function savedActiveSession() {
     return value && typeof value === "object" ? value : null;
   } catch { return null; }
 }
+function cancelExtensionUiFor(nextSessionId) {
+  const request = store.state.extensionUi;
+  if (!request || request.sessionId === nextSessionId) return;
+  void api.extensionUiCancel(request.sessionId, request.requestId).catch(() => {});
+  store.set({ extensionUi: null });
+}
 const icon = name => {
   const paths = {
     settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
@@ -49,7 +55,8 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   });
 }
 
-export function selectSession(projectId, sessionId, { showOperation = false } = {}) {
+export function selectSession(projectId, sessionId, { showOperation = false, skipRefresh = false } = {}) {
+  cancelExtensionUiFor(sessionId);
   const project = store.state.projects.find(p => p.id === projectId);
   const node = findNode(project?.sessions, sessionId);
   store.set({
@@ -60,7 +67,11 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
-  const refreshOnSelect = node?.synchronized && !store.transcript(sessionId).streaming && !store.transcript(sessionId).compacting;
+  const refreshOnSelect = !skipRefresh
+    && store.state.sync?.implementation !== "extension"
+    && node?.synchronized
+    && !store.transcript(sessionId).streaming
+    && !store.transcript(sessionId).compacting;
   const operation = showOperation && !refreshOnSelect && !transcriptLoading(sessionId)
     ? beginOperation("open-session", "Open session", "", "Request started.", sessionId, {
       projectId, contextId: node?.contextId, workspacePath: node?.workspacePath, action: "open-session",
@@ -72,7 +83,24 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
     openTranscript(sessionId, { operation });
   }
 }
+export function selectSessionById(sessionId, options = {}) {
+  for (const project of store.state.projects) {
+    if (findNode(project.sessions, sessionId)) {
+      store.state.openTree[project.id] = true;
+      selectSession(project.id, sessionId, options);
+      return true;
+    }
+  }
+  const chat = store.state.chats.find(item => item.id === sessionId);
+  if (chat) {
+    selectChat(sessionId);
+    return true;
+  }
+  return false;
+}
+
 export function selectChat(chatId) {
+  cancelExtensionUiFor(chatId);
   const chat = store.state.chats.find(c => c.id === chatId);
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
@@ -440,6 +468,9 @@ class PiHeader extends HTMLElement {
       : activeSession?.synchronized && activeSession.syncState !== "error"
         ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
         : "";
+    const extensionStatus = activeSession?.id && store.state.extensionStatuses[activeSession.id]?.["pi-sync"]
+      ? `<span class="extension-status" title="Pi extension status">${esc(store.state.extensionStatuses[activeSession.id]["pi-sync"])}</span>`
+      : "";
     const refreshOperation = activeSession?.id ? operationForScope("sync-refresh", { sessionId: activeSession.id }) : null;
     const localBusy = !!activeSession?.id && (store.transcript(activeSession.id).streaming || store.transcript(activeSession.id).compacting || activeSession.compacting);
     const syncRefreshButton = activeSession?.synchronized && !s.sessionPicker
@@ -480,7 +511,7 @@ class PiHeader extends HTMLElement {
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${operationArea}</div>
-      ${syncStatus}${syncRefreshButton}${filesBtn}
+      ${syncStatus}${extensionStatus}${syncRefreshButton}${filesBtn}
     </header>`;
   }
 

@@ -94,6 +94,8 @@ const syncErrorMessage = error => ({
   sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
   sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
   sync_session_not_found: "The sync server no longer has this conversation.",
+  sync_workspace_mismatch: "This synchronized conversation belongs to a different Git repository.",
+  workspace_mismatch: "This synchronized conversation belongs to a different Git repository.",
   sync_workspace_setup_required: error?.message || "Prepare the recorded Git workspace before continuing.",
   session_streaming: "Stop the current response before synchronizing this conversation.",
   session_compacting: "Wait for compaction to finish before synchronizing this conversation.",
@@ -1612,6 +1614,104 @@ class PiConfirm extends HTMLElement {
   }
 }
 
+class PiExtensionUI extends HTMLElement {
+  connectedCallback() {
+    this.busy = false;
+    this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
+    this.addEventListener("click", e => this.onClick(e));
+    this.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        void this.cancel();
+      } else if (e.key === "Enter" && e.target.matches("input")) {
+        e.preventDefault();
+        void this.submit({ value: e.target.value });
+      } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.matches("textarea")) {
+        e.preventDefault();
+        void this.submit({ value: e.target.value });
+      }
+    });
+    this.render();
+  }
+
+  disconnectedCallback() { this.unsub?.(); }
+
+  request() {
+    const request = store.state.extensionUi;
+    return request && request.sessionId === store.activeKey() ? request : null;
+  }
+
+  async onClick(e) {
+    const request = this.request();
+    if (!request || this.busy) return;
+    if (e.target.matches(".extension-ui-scrim") || e.target.closest("[data-extension-ui-cancel]")) return this.cancel();
+    const option = e.target.closest("[data-extension-ui-option]");
+    if (option) {
+      const value = request.options?.[Number(option.dataset.extensionUiOption)];
+      if (typeof value === "string") return this.submit({ value });
+    }
+    if (e.target.closest("[data-extension-ui-submit]")) {
+      const field = this.querySelector("[data-extension-ui-value]");
+      return this.submit(request.method === "confirm"
+        ? { confirmed: true }
+        : { value: field?.value || "" });
+    }
+  }
+
+  async submit(body) {
+    const request = this.request();
+    if (!request || this.busy) return;
+    this.busy = true;
+    this.render();
+    try {
+      await api.extensionUiResponse(request.sessionId, request.requestId, body);
+      this.busy = false;
+      if (store.state.extensionUi?.requestId === request.requestId) store.set({ extensionUi: null });
+    } catch (error) {
+      this.busy = false;
+      store.setError(`Extension UI response failed: ${error.message || error}`);
+      this.render();
+    }
+  }
+
+  async cancel() {
+    const request = this.request();
+    if (!request || this.busy) return;
+    this.busy = true;
+    try { await api.extensionUiCancel(request.sessionId, request.requestId); }
+    catch (error) { store.setError(`Could not cancel extension UI: ${error.message || error}`); }
+    finally {
+      this.busy = false;
+      if (store.state.extensionUi?.requestId === request.requestId) store.set({ extensionUi: null });
+    }
+  }
+
+  render() {
+    const request = this.request();
+    if (!request) { this.innerHTML = ""; return; }
+    const method = request.method;
+    const title = esc(request.title || "Pi extension");
+    let body;
+    let actions = `<button class="confirm-back" data-extension-ui-cancel ${this.busy ? "disabled" : ""}>Cancel</button>`;
+    if (method === "select") {
+      const options = (request.options || []).map((option, index) => `<button class="extension-ui-option" data-extension-ui-option="${index}" ${this.busy ? "disabled" : ""}>${esc(option)}</button>`).join("");
+      body = `<div class="extension-ui-options">${options || `<div class="modal-empty">No options available.</div>`}</div>`;
+    } else if (method === "confirm") {
+      body = `<p class="extension-ui-message">${esc(request.message || "")}</p>`;
+      actions += `<button class="confirm-cta accent" data-extension-ui-submit ${this.busy ? "disabled" : ""}>Confirm</button>`;
+    } else {
+      const multiline = method === "editor";
+      const field = multiline
+        ? `<textarea data-extension-ui-value rows="8" placeholder="${esc(request.placeholder || "")}" ${this.busy ? "disabled" : ""}>${esc(request.prefill || "")}</textarea>`
+        : `<input data-extension-ui-value value="${esc(request.prefill || "")}" placeholder="${esc(request.placeholder || "")}" autocomplete="off" ${this.busy ? "disabled" : ""}>`;
+      body = `<label class="extension-ui-field"><span>${multiline ? "Edit" : "Value"}</span>${field}</label>`;
+      actions += `<button class="confirm-cta accent" data-extension-ui-submit ${this.busy ? "disabled" : ""}>Continue</button>`;
+    }
+    this.innerHTML = `<div class="extension-ui-scrim"><section class="extension-ui-modal" role="dialog" aria-modal="true" aria-busy="${this.busy}" aria-label="${title}"><div class="extension-ui-head"><div class="modal-title">${title}</div></div><div class="extension-ui-body">${body}</div>${actions ? `<div class="extension-ui-actions">${actions}</div>` : ""}</section></div>`;
+    if (!this.busy) this.querySelector("[data-extension-ui-value], [data-extension-ui-option]")?.focus();
+  }
+}
+
 /* ---------------- app root ---------------- */
 class PiApp extends HTMLElement {
   connectedCallback() {
@@ -1638,6 +1738,7 @@ class PiApp extends HTMLElement {
         <pi-session-picker></pi-session-picker>
         <pi-logs></pi-logs>
         <pi-confirm></pi-confirm>
+        <pi-extension-ui></pi-extension-ui>
         <div class="reload-prompt hidden" data-reload-prompt>
           <div class="reload-card"><div class="screen-title">Reload required</div><div class="proj-sub" data-reload-message></div><button class="primary-btn" data-act="reload">Reload</button></div>
         </div>
@@ -1723,7 +1824,7 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
-    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.workspaceSettingsOpen);
+    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.workspaceSettingsOpen || store.state.extensionUi);
     document.body?.classList.toggle("modal-open", modalOpen);
     const previewBanner = this.querySelector("[data-preview-banner]");
     const preview = store.state.uiConfig?.preview === true;
@@ -1750,6 +1851,7 @@ class PiApp extends HTMLElement {
 
 customElements.define("pi-logs", PiLogs);
 customElements.define("pi-confirm", PiConfirm);
+customElements.define("pi-extension-ui", PiExtensionUI);
 customElements.define("pi-session-picker", PiSessionPicker);
 customElements.define("pi-settings", PiSettings);
 customElements.define("pi-files", PiFiles);

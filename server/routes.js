@@ -17,13 +17,26 @@ import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
-import { markSyncEnrolled, markSyncPending } from "./sync/enrollment.js";
+import { markSyncPending } from "./sync/enrollment.js";
 import { createOperationReporter, operationRequestId } from "./operations.js";
 import { readLogs, logFileName } from "./logging.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
 const formatDuration = durationMs => durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+const SYNC_ERROR_STATUS = Object.freeze({
+  sync_not_configured: 409, sync_not_enrolled: 409, sync_not_persistent: 409,
+  sync_ui_required: 409, sync_repair_cancelled: 409, sync_server_mismatch: 409,
+  sync_duplicate: 409, sync_identity_mismatch: 409, sync_workspace_mismatch: 409, sync_session_not_found: 409,
+  workspace_mismatch: 409, workspace_required: 409,
+  sync_workspace_setup_required: 409, sync_materialization_failed: 409,
+  sync_stale_etag: 409, sync_conflict: 409, conflict: 409, duplicate_enrollment: 409,
+  session_streaming: 409, session_compacting: 409,
+  active_lease: 423, lease_invalid: 423, lease_required: 423, sync_lease_uncertain: 423,
+  request_too_large: 413,
+  sync_client_unavailable: 503, sync_unavailable: 503, network_error: 503, timeout: 503, not_found: 503,
+  invalid_response: 502, sync_enrollment_failed: 502,
+});
 
 // Collisions count like humans do: foo, foo-2, foo-3.
 // The `.N` namespace is reserved for fork children (see forkWorkspace).
@@ -162,10 +175,11 @@ async function sessionBelongsToProject(id, project, sup) {
   return found?.project?.id === project.id;
 }
 
-export function buildApi(sup, { syncCoordinator = null } = {}) {
+export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {}) {
   const api = new Hono();
-  const sync = syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
-  sup.setSyncCoordinator?.(sync);
+  const sync = syncAdapter || syncCoordinator || createSyncCoordinator({ supervisor: sup, configProvider: loadConfig });
+  if (syncAdapter) sup.setSyncAdapter?.(syncAdapter);
+  else sup.setSyncCoordinator?.(sync);
   const mutate = (id, task, options = {}) => typeof sync.withMutation === "function"
     ? sync.withMutation(id, task, options)
     : task();
@@ -359,6 +373,28 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       remove();
     })
   );
+
+  api.post("/sessions/:id/extension-ui/:requestId", async c => {
+    const adapter = syncAdapter || (typeof sync.respond === "function" ? sync : null);
+    if (!adapter?.respond) return err(c, 404, "no_extension_ui");
+    try {
+      return c.json(adapter.respond(c.req.param("id"), c.req.param("requestId"), await c.req.json().catch(() => ({}))));
+    } catch (e) {
+      if (e.code === "stale_extension_ui_request") return err(c, 409, e.code, { message: e.message });
+      if (e.code === "invalid_extension_ui_response") return err(c, 400, e.code, { message: e.message });
+      throw e;
+    }
+  });
+
+  api.delete("/sessions/:id/extension-ui/:requestId", c => {
+    const adapter = syncAdapter || (typeof sync.cancel === "function" ? sync : null);
+    if (!adapter?.cancel) return err(c, 404, "no_extension_ui");
+    try { return c.json(adapter.cancel(c.req.param("id"), c.req.param("requestId"))); }
+    catch (e) {
+      if (e.code === "stale_extension_ui_request") return err(c, 409, e.code, { message: e.message });
+      throw e;
+    }
+  });
 
   // ---------- chats & projects ----------
   api.post("/chats", async c => {
@@ -646,27 +682,15 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
     try {
       reporter.log({ type: "phase", phase: "sync-enroll", message: "Enrolling the conversation with the synchronization service." });
       const result = await sync.enroll(id, { progress: reporter.log });
-      // The local marker is written only after the coordinator confirms the
-      // remote creation. It contains no lease material or credentials.
-      markSyncEnrolled(id);
       const status = await sync.status(id);
       hub.emit(id, "sync_state", { sync: status });
       const operation = reporter.finish({ httpStatus: 200, message: result.created === false ? "Conversation was already synchronized." : "Conversation synchronized successfully." });
       return c.json({ ok: true, sessionId: id, ...status, created: result.created !== false, operation });
     } catch (e) {
-      if (syncConfig(loadConfig()).allConversations && ["sync_client_unavailable", "sync_unavailable", "sync_enrollment_failed", "sync_session_not_found"].includes(e.code)) {
+      if (!syncAdapter && syncConfig(loadConfig()).allConversations && ["sync_client_unavailable", "sync_unavailable", "sync_enrollment_failed", "sync_session_not_found"].includes(e.code)) {
         markSyncPending(id);
       }
-      const statuses = {
-        sync_not_configured: 409,
-        sync_not_enrolled: 409,
-        session_streaming: 409,
-        session_compacting: 409,
-        sync_stale_etag: 409,
-        sync_client_unavailable: 503,
-        sync_unavailable: 503,
-        sync_enrollment_failed: 502,
-      };
+      const statuses = SYNC_ERROR_STATUS;
       if (statuses[e.code]) {
         const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.message || e.code });
         return err(c, statuses[e.code], e.code, { ...(e.message ? { message: e.message } : {}), operation });
@@ -696,22 +720,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       const operation = reporter.finish({ httpStatus: 200, message: "Canonical conversation refreshed." });
       return c.json({ ok: true, refreshed: true, sessionId: id, ...status, operation });
     } catch (e) {
-      const statuses = {
-        active_lease: 423,
-        sync_lease_uncertain: 423,
-        sync_not_configured: 409,
-        sync_not_enrolled: 409,
-        sync_session_not_found: 409,
-        sync_enrollment_failed: 502,
-        sync_stale_etag: 409,
-        sync_conflict: 409,
-        sync_materialization_failed: 409,
-        sync_workspace_setup_required: 409,
-        session_streaming: 409,
-        session_compacting: 409,
-        sync_client_unavailable: 503,
-        sync_unavailable: 503,
-      };
+      const statuses = SYNC_ERROR_STATUS;
       if (statuses[e.code]) {
         const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.message || e.code });
         return err(c, statuses[e.code], e.code, { ...(e.message ? { message: e.message } : {}), ...(e.details ? { details: e.details } : {}), operation });
@@ -733,7 +742,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
   api.post("/sessions/:id/sync", syncSession);
   api.post("/sessions/:id/sync/refresh", refreshSyncSession);
   // Keep the action name easy for non-browser clients while the UI uses the
-  // noun “Synchronize”. Both routes share the same coordinator boundary.
+  // noun “Synchronize”. Both routes use the configured Pi sync integration.
   api.post("/sessions/:id/enroll", syncSession);
 
   api.get("/sessions/:id/commands", async c => {
@@ -756,6 +765,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       return c.json({ ok: true, ...result });
     } catch (e) {
       const statuses = {
+        ...SYNC_ERROR_STATUS,
         model_required: 409, command_busy: 409, model_unavailable: 400, unknown_slash_command: 400, invalid_slash_command: 400,
         command_usage: 400, session_export_too_large: 413, github_auth_required: 401,
         github_rate_limited: 403, github_unavailable: 502,
@@ -1346,6 +1356,7 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       : null;
     reporter?.log({ type: "request", phase: "request", message: "POST /api/settings (Pi resource configuration)" });
     let nextPiConfiguration;
+    let syncConfigurationChanged = false;
     if (body.pi !== undefined) {
       try {
         nextPiConfiguration = normalizePiConfig(body.pi, { strict: true });
@@ -1372,12 +1383,16 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
         return err(c, 409, "setting_overridden", { field: "sync.allConversations", source: "PI_WEB_SYNC_ALL_CONVERSATIONS" });
       }
       try {
+        const previousSync = syncConfig(cfg);
         const nextSync = normalizeSyncConfig({ ...cfg.sync, ...body.sync }, { strict: true });
-        sync.assertConfigurationChangeAllowed?.(syncConfig(cfg), nextSync);
+        sync.assertConfigurationChangeAllowed?.(previousSync, nextSync);
+        syncConfigurationChanged = JSON.stringify(previousSync) !== JSON.stringify(nextSync);
+        if (syncConfigurationChanged) sup.assertPiConfigurationReloadable?.();
         cfg.sync = nextSync;
       }
       catch (e) {
         if (e.code === "invalid_sync_configuration") return err(c, 400, e.code, { message: e.message });
+        if (e.code === "pi_configuration_busy") return err(c, 409, e.code, { message: "An active session is still running." });
         throw e;
       }
     }
@@ -1419,7 +1434,8 @@ export function buildApi(sup, { syncCoordinator = null } = {}) {
       cfg.projectHookSets = normalizeHookSets(body.projectHookSets);
     }
     saveConfig(cfg);
-    const piConfiguration = nextPiConfiguration || autoProfileChange
+    if (syncConfigurationChanged) syncAdapter?.resetExtensionPath?.();
+    const piConfiguration = nextPiConfiguration || autoProfileChange || syncConfigurationChanged
       ? await sup.reloadPiConfiguration({ report: reporter?.log, sessionId: body.activeSessionId || null })
       : await sup.piConfigurationState();
     const modelState = await sup.modelState();

@@ -17,8 +17,10 @@ const envelope = {
   entries: [{ type: "message", id: "a", parentId: null, timestamp: "2026-01-01T00:00:01Z" }],
 };
 
-async function harness(fetch) {
+async function harness(fetch, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-sync-turn-"));
+  const previousServerUrl = process.env.PI_SYNC_SERVER_URL;
+  if (options.serverUrl) process.env.PI_SYNC_SERVER_URL = options.serverUrl;
   const sessionPath = join(root, "session.jsonl");
   await writeFile(sessionPath, `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${JSON.stringify(envelope.entries[0])}\n`);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -31,14 +33,20 @@ async function harness(fetch) {
   const pi = {
     registerCommand(name, command) { handlers.set(`command:${name}`, command.handler); },
     on(name, handler) { handlers.set(name, handler); },
-    exec: async () => ({ stdout: "", code: 1 }),
+    exec: async (_command, args) => {
+      if (options.repositoryRemote && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { stdout: "origin/main\n", code: 0 };
+      if (options.repositoryRemote && args[0] === "remote" && args[1] === "get-url") return { stdout: `${options.repositoryRemote}\n`, code: 0 };
+      return { stdout: "", code: 1 };
+    },
   };
   extension(pi);
   const ctx = {
     hasUI: true,
+    isIdle: () => true,
     cwd: root,
     ui: {
       confirm: async () => true,
+      select: async (title, choices) => options.select ? options.select(title, choices) : choices[0],
       notify: (message) => notices.push(message),
       setStatus: (_id, text) => statuses.push(text),
     },
@@ -49,6 +57,7 @@ async function harness(fetch) {
       getLeafId: () => envelope.headEntryId,
       getSessionName: () => envelope.title,
     },
+    switchSession: async () => ({ cancelled: true }),
   };
   return {
     root,
@@ -63,6 +72,8 @@ async function harness(fetch) {
       globalThis.fetch = previousFetch;
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      if (previousServerUrl === undefined) delete process.env.PI_SYNC_SERVER_URL;
+      else process.env.PI_SYNC_SERVER_URL = previousServerUrl;
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -86,6 +97,49 @@ function responseForUpdate(etag) {
   return Response.json({ formatVersion: 1, session: envelope, etag });
 }
 
+test("sync picker limits choices to the current Git repository", async () => {
+  const workspace = { gitRemote: "git@github.com:owner/repo.git", branch: "feature/other", commit: "0123456789abcdef0123456789abcdef01234567" };
+  const session = { ...envelope, sessionId: "session-a", title: "same repository", workspace };
+  const choices = [];
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    requests.push({ url, init });
+    const parsed = new URL(url);
+    if (parsed.pathname === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [
+          { sessionId: "session-a", title: "same repository", createdAt: envelope.createdAt, headEntryId: "a", etag: "e1", leaseHolder: null, leaseExpiresAt: null, workspace },
+          { sessionId: "session-b", title: "other repository", createdAt: envelope.createdAt, headEntryId: "a", etag: "e2", leaseHolder: null, leaseExpiresAt: null, workspace: { ...workspace, gitRemote: "https://github.com/other/repo.git" } },
+        ],
+      });
+    }
+    if (parsed.pathname === "/v1/sessions/session-a/lease" && init.method === "POST") {
+      return Response.json({ formatVersion: 1, session, etag: "e1", lease: { token: "picker-token", holder: "pi-test", acquiredAt: envelope.createdAt, expiresAt: "2026-01-01T00:02:00Z" } });
+    }
+    if (parsed.pathname === "/v1/sessions/session-a/lease" && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, {
+    serverUrl: "http://sync.test",
+    repositoryRemote: "https://user:secret@github.com/owner/repo.git",
+    select: async (_title, options) => {
+      choices.push(...options);
+      return options[0];
+    },
+  });
+  try {
+    await fake.handlers.get("command:sync")("", fake.ctx);
+    assert.deepEqual(choices, ["same repository — available"]);
+    assert.equal(new URL(requests[0].url).search, "?repository=github.com%2Fowner%2Frepo");
+    const leaseRequest = requests.find((request) => request.init.method === "POST" && request.url.endsWith("/session-a/lease"));
+    const leaseBody = JSON.parse(leaseRequest.init.body);
+    assert.equal(typeof leaseBody.holder, "string");
+    assert.equal(leaseBody.repository, "github.com/owner/repo");
+  } finally {
+    await fake.close();
+  }
+});
+
 function responseForRenew(etag) {
   return Response.json({
     formatVersion: 1,
@@ -93,6 +147,109 @@ function responseForRenew(etag) {
     lease: { holder: "pi-test", acquiredAt: envelope.createdAt, expiresAt: "2026-01-01T00:02:00Z" },
   });
 }
+
+test("sync picker keeps unscoped conversations separate from Git repositories", async () => {
+  const session = { ...envelope, sessionId: "session-u", title: "unscoped" };
+  const choices = [];
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    requests.push({ url, init });
+    const parsed = new URL(url);
+    if (parsed.pathname === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [
+          { sessionId: "session-g", title: "Git session", createdAt: envelope.createdAt, headEntryId: "a", etag: "e1", leaseHolder: null, leaseExpiresAt: null, workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef0123456789abcdef01234567" } },
+          { sessionId: "session-u", title: "unscoped", createdAt: envelope.createdAt, headEntryId: "a", etag: "e2", leaseHolder: null, leaseExpiresAt: null },
+        ],
+      });
+    }
+    if (parsed.pathname === "/v1/sessions/session-u/lease" && init.method === "POST") {
+      return Response.json({ formatVersion: 1, session, etag: "e2", lease: { token: "picker-token", holder: "pi-test", acquiredAt: envelope.createdAt, expiresAt: "2026-01-01T00:02:00Z" } });
+    }
+    if (parsed.pathname === "/v1/sessions/session-u/lease" && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, {
+    serverUrl: "http://sync.test",
+    select: async (_title, options) => {
+      choices.push(...options);
+      return options[0];
+    },
+  });
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: "session-existing",
+      lastEtag: "e0",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+      workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef0123456789abcdef01234567" },
+    });
+    await fake.handlers.get("command:sync")("", fake.ctx);
+    assert.deepEqual(choices, ["unscoped — available"]);
+    assert.equal(new URL(requests[0].url).search, "?repository=none");
+    const leaseRequest = requests.find((request) => request.init.method === "POST" && request.url.endsWith("/session-u/lease"));
+    assert.equal(JSON.parse(leaseRequest.init.body).repository, "none");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("does not reuse a Git repository scope from a no-Git workspace", async () => {
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    requests.push({ url, init });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { serverUrl: "http://sync.test" });
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      leaseToken: "existing-token",
+      leaseExpiresAt: "2026-01-01T00:02:00Z",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+      workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef0123456789abcdef01234567" },
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    assert.equal(requests.length, 0);
+    assert.match(fake.notices.join(" "), /different Git repository/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("sync start reports duplicate enrollment to its host", async () => {
+  const fake = await harness(async (_url, _init = {}) => Response.json({ error: { code: "duplicate_enrollment" } }, { status: 409 }));
+  try {
+    await assert.rejects(fake.handlers.get("command:sync")("start http://sync.test", fake.ctx), error => error.code === "sync_duplicate");
+    assert.match(fake.notices.join(" "), /already exists/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("sync refresh reports an active lease to its host", async () => {
+  const fake = await harness(async (_url, _init = {}) => Response.json({ error: { code: "active_lease" } }, { status: 423 }));
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await assert.rejects(fake.handlers.get("command:sync")("refresh", fake.ctx), error => error.code === "active_lease");
+    assert.match(fake.notices.join(" "), /in use/);
+  } finally {
+    await fake.close();
+  }
+});
 
 test("acquires per input, settles PUT before DELETE, and reacquires next input", async () => {
   const requests = [];

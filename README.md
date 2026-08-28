@@ -105,10 +105,10 @@ those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
 extensions execute as the server user with full system access, so an automatic
 GitHub dotfiles profile is also a trust decision: reference only accounts and
 repositories you trust. Refresh reloads the selected idle session runtime;
-active streaming sessions are deferred safely. Headless-compatible tools,
-commands, hooks, startup events, skills, and prompts work in pi-ez-web;
-terminal-only extension UI is not rendered
-and extensions see `ctx.hasUI === false`. Durable todo state and
+active streaming sessions are deferred safely. Pi-compatible tools, commands, hooks, startup events, skills, prompts, and
+portable extension dialogs work in pi-ez-web; terminal-only TUI components are
+not rendered. The real web runtime supplies browser-backed `select`, `confirm`,
+`input`, `editor`, notification, and status behavior. Durable todo state and
 background-agent lifecycle/progress snapshots are shown as grouped, persistent
 safe activity cards below the chat; parallel
 agents remain visible until they finish, while arbitrary extension widgets are
@@ -129,15 +129,19 @@ Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
 `PI_WEB_GITHUB_OWNER`, `PI_WEB_GITHUB_TOKEN`, `PI_WEB_SYNC_SERVER_URL`, and
 `PI_WEB_SYNC_ALL_CONVERSATIONS`. Sync environment values are read-only in
 Settings; without a sync server URL, conversations remain local-only. The
-client ID is not a normal user setting: until the project ships its own
-registered OAuth App ID, a deployment must provide that public ID through this
-advanced override.
+preview deployment supplies the private sync service URL with
+`PI_WEB_SYNC_ALL_CONVERSATIONS=false`, so a feature-branch preview is ready for
+manual enrollment without synchronizing every conversation. The client ID is
+not a normal user setting: until the project ships its own registered OAuth App
+ID, a deployment must provide that public ID through this advanced override.
 Environment values take precedence over config and are read-only in Settings.
 
-The production image builds the pinned `pi-sync` client from the stamped
-source snapshot under `vendor/pi-sync`; `vendor/pi-sync/UPSTREAM_COMMIT` must
-match the `PI_SYNC_COMMIT` Docker build argument. For a local checkout, build
-the sibling package and point the adapter at it without adding package state to
+The production image builds the vendored `pi-sync` client from a source
+snapshot based on `vendor/pi-sync/UPSTREAM_COMMIT`; the Docker
+`PI_SYNC_BASE_COMMIT` argument verifies that upstream base. The snapshot also
+contains this repository's web-host integration patch, so it is not claimed to
+be an unmodified upstream package. For a local checkout, build the sibling
+package and point the adapter at it without adding package state to
 `PI_WEB_HOME`:
 
 ```sh
@@ -146,12 +150,18 @@ npm run build --prefix /path/to/pi-sync/packages/pi-sync
 PI_WEB_SYNC_CLIENT_MODULE=/path/to/pi-sync/packages/pi-sync mise start
 ```
 
-The web adapter keeps lease tokens and ETags in memory only. It materializes a
-canonical snapshot before a synchronized mutation, renews the lease while Pi
-runs, uploads the settled native JSONL through the shared adapter, and releases
-it. The active conversation refreshes on browser reconnect/focus; the header
-Refresh action is available when an explicit handoff pull is needed. Unenrolled
-sessions remain local-only unless `allConversations` is enabled.
+When sync is configured, pi-ez-web loads the pi-sync Pi extension into the same
+SDK runtime as the rest of the selected Pi profile. `PiSyncWebAdapter` supplies
+browser dialogs, session replacement, extension status, and the configured sync
+endpoint; the extension owns enrollment, leases, heartbeat, ETags, JSONL
+materialization, and settlement. The header Refresh action invokes the
+extension's explicit handoff pull; automatic focus refresh is disabled for the
+extension-owned path so local web-only entries are not silently replaced. Unenrolled sessions remain local-only unless
+`allConversations` is enabled. Synchronized names are sticky and Git upstream,
+branch, and pushed-commit pointers travel with the canonical session. When Git
+information is available, the `/sync` picker only offers conversations from the
+same normalized repository remote; branch and commit mismatches remain advisory.
+Git mismatches are reported without fetching, switching branches, or blocking Pi.
 
 For a local real-server test, `mise start` is the normal command but does not
 inherit a deployment's environment. Supply the public OAuth App client ID to

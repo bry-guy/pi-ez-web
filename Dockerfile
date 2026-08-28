@@ -11,7 +11,7 @@ ARG OP_SHA256=198b05dcf9a0972778ce5a4e262c459979b0c837257b5da65e2fba6187734226
 ARG OPENTOFU_VERSION=1.11.5
 ARG OPENTOFU_SHA256=901121681e751574d739de5208cad059eddf9bd739b575745cf9e3c961b28a13
 ARG PI_WEB_BUILD_ID=development
-ARG PI_SYNC_COMMIT=667213eda54392b9ba546e5bd6dc896f384ec755
+ARG PI_SYNC_BASE_COMMIT=667213eda54392b9ba546e5bd6dc896f384ec755
 
 ENV NODE_ENV=production \
     PORT=3141 \
@@ -85,12 +85,13 @@ RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 # pi-sync is a private sibling repository and ships its reusable client from
-# a nested package. The app repository carries a source snapshot stamped with
-# PI_SYNC_COMMIT so CI never needs a cross-repository credential during a
-# Docker build. Build that exact snapshot into the image.
+# a nested package. The app repository carries a source snapshot based on
+# PI_SYNC_BASE_COMMIT. This checkout includes the web-host integration patch,
+# so the marker verifies its upstream base rather than claiming an unmodified
+# upstream package.
 COPY vendor/pi-sync /tmp/pi-sync
 RUN set -eux; \
-    test "$(cat /tmp/pi-sync/UPSTREAM_COMMIT)" = "$PI_SYNC_COMMIT"; \
+    test "$(cat /tmp/pi-sync/UPSTREAM_COMMIT)" = "$PI_SYNC_BASE_COMMIT"; \
     npm install --include=dev --ignore-scripts --no-audit --no-fund --package-lock=false --prefix /tmp/pi-sync; \
     npm run build --prefix /tmp/pi-sync; \
     mkdir -p node_modules/@bry-guy/pi-sync; \

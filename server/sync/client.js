@@ -40,6 +40,24 @@ export async function syncSkillPath() {
   return path.resolve(path.dirname(file), "../../skills");
 }
 
+export async function syncExtensionPath() {
+  const resolved = await import.meta.resolve(importSpecifier());
+  const file = fileURLToPath(resolved);
+  const root = path.resolve(path.dirname(file), "../..");
+  const candidates = [
+    path.join(root, "dist", "extensions", "sync.js"),
+    path.join(root, "extensions", "sync.js"),
+    path.join(root, "extensions", "sync.ts"),
+  ];
+  const extension = candidates.find(candidate => fs.existsSync(candidate));
+  if (!extension) {
+    throw Object.assign(new Error("The installed pi-sync package does not expose its Pi extension."), {
+      code: "sync_client_unavailable",
+    });
+  }
+  return extension;
+}
+
 function importSpecifier() {
   const raw = syncClientModuleName();
   let filePath = raw;

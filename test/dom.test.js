@@ -7,7 +7,7 @@ import createDOMPurify from "dompurify";
 const state = {
   apiContractVersion: 5,
   buildId: "test",
-  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "workspace-contexts", "workspace-branches", "pi-resources", "extension-activity", "subagent-activity", "file-explorer"],
+  capabilities: ["provider-auth", "github-device-auth", "repository-sources", "session-activity", "slash-commands", "project-hooks", "workspace-actions", "workspace-contexts", "workspace-branches", "pi-resources", "extension-activity", "extension-ui", "subagent-activity", "file-explorer"],
   mode: "mock",
   defaultModel: "mock/fast",
   defaultThinkingLevel: "xhigh",
@@ -92,6 +92,12 @@ async function boot() {
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
+      if (url.includes("/api/sessions/") && url.includes("/extension-ui/") && options.method === "POST") {
+        dom.window.__extensionUiResponses = dom.window.__extensionUiResponses || [];
+        dom.window.__extensionUiResponses.push(JSON.parse(options.body || "{}"));
+        return json({ ok: true });
+      }
+      if (url.includes("/api/sessions/") && url.includes("/extension-ui/") && options.method === "DELETE") return json({ ok: true, cancelled: true });
       if (url === "/api/sessions/s1/push-preview") return json({ ok: true, branch: "main", upstream: "origin/main", head: "head-2", baseHead: "head-1", commitCount: 2, commits: [{ hash: "head-2", shortHash: "head-2", subject: "second commit" }, { hash: "head-1", shortHash: "head-1", subject: "first commit" }] });
       if (url === "/api/sessions/s1/push" && options.method === "POST") {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-push";
@@ -197,6 +203,26 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
+  applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_request", requestId: "ui-1", method: "select", title: "Choose a conversation", options: ["one", "two"] });
+  assert.match(root.querySelector(".extension-ui-modal").textContent, /Choose a conversation/);
+  root.querySelector("[data-extension-ui-option='1']").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(root.querySelector(".extension-ui-modal"), null);
+  applyEvent({ v: 1, seq: 2, sessionId: "s1", type: "extension_ui_request", requestId: "ui-2", method: "confirm", title: "Continue", message: "Proceed?" });
+  root.querySelector("[data-extension-ui-submit]").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(root.querySelector(".extension-ui-modal"), null);
+  assert.deepEqual(dom.window.__extensionUiResponses.at(-1), { confirmed: true });
+  applyEvent({ v: 1, seq: 3, sessionId: "s1", type: "extension_ui_request", requestId: "ui-3", method: "input", title: "Name", placeholder: "Session name" });
+  root.querySelector("[data-extension-ui-value]").value = "Web session";
+  root.querySelector("[data-extension-ui-submit]").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(dom.window.__extensionUiResponses.at(-1), { value: "Web session" });
+  applyEvent({ v: 1, seq: 4, sessionId: "s1", type: "extension_ui_request", requestId: "ui-4", method: "editor", title: "Edit", prefill: "before" });
+  root.querySelector("[data-extension-ui-value]").value = "after";
+  root.querySelector("[data-extension-ui-submit]").click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(dom.window.__extensionUiResponses.at(-1), { value: "after" });
   const project = store.state.projects[0];
   const session = project.sessions.find(item => item.id === "s1");
   const originalSession = { ...session };

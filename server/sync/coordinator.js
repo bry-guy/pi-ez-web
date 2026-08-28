@@ -3,6 +3,7 @@ import { loadConfig, syncConfig } from "../config.js";
 import { isSyncEnrolled, markSyncEnrolled, markSyncPending } from "./enrollment.js";
 import { clientErrorCode, clientErrorMessage, createSyncClient, isTransportError, syncSkillPath } from "./client.js";
 import {
+  deriveRepositoryIdentity,
   deriveWorkspacePointer,
   materializeSessionFile,
   normalizeSessionFile,
@@ -30,6 +31,9 @@ const HTTP_STATUS = {
   sync_client_unavailable: 503,
   sync_unavailable: 503,
   sync_session_not_found: 409,
+  sync_workspace_mismatch: 409,
+  workspace_mismatch: 409,
+  workspace_required: 409,
   sync_enrollment_failed: 502,
   sync_active: 409,
 };
@@ -396,6 +400,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     if (code === "active_lease") return syncError(safeMessage(error, "The synchronized conversation is in use by another client."), "active_lease", { details });
     if (code === "stale_etag") return syncError(safeMessage(error, "The synchronized conversation changed elsewhere."), "sync_stale_etag", { details });
     if (code === "session_not_found") return syncError(safeMessage(error, "The synchronized conversation no longer exists on the sync server."), "sync_session_not_found", { details });
+    if (["workspace_mismatch", "workspace_required"].includes(code)) return syncError(safeMessage(error, "The synchronized conversation belongs to a different Git repository."), code, { details });
     if (isLeaseFailure(error)) return syncError("The synchronized lease expired or is no longer valid.", "sync_lease_uncertain", { details });
     if (isTransportError(error)) return syncError("The synchronization service could not be reached.", "sync_unavailable", { details });
     if (["duplicate_enrollment", "invalid_session", "request_too_large"].includes(code)) {
@@ -488,6 +493,16 @@ export class PiSyncCoordinator extends BaseCoordinator {
     finally {
       release();
       if (this.locks.get(sessionId) === current) this.locks.delete(sessionId);
+    }
+  }
+
+  async _repositoryIdentity(sessionId) {
+    const info = await this.supervisor?.syncSessionInfo?.(sessionId);
+    if (!info?.cwd) return undefined;
+    try {
+      return await deriveRepositoryIdentity(info.cwd);
+    } catch {
+      return undefined;
     }
   }
 
@@ -612,7 +627,10 @@ export class PiSyncCoordinator extends BaseCoordinator {
       }
     }
     let acquired;
-    try { acquired = await client.acquire(sessionId, this.holder); }
+    try {
+      const repository = await this._repositoryIdentity(sessionId);
+      acquired = await client.acquire(sessionId, this.holder, { repository: repository ?? "none" });
+    }
     catch (error) {
       const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
       if (converted.code === "active_lease") {
@@ -721,7 +739,10 @@ export class PiSyncCoordinator extends BaseCoordinator {
       progress?.({ type: "phase", phase: "sync-acquire", message: "Acquiring synchronization lease." });
       const client = await this._client();
       let acquired;
-      try { acquired = await client.acquire(sessionId, this.holder); }
+      try {
+        const repository = await this._repositoryIdentity(sessionId);
+        acquired = await client.acquire(sessionId, this.holder, { repository: repository ?? "none" });
+      }
       catch (error) {
         const converted = error.code?.startsWith("sync_") ? error : this._fromClientError(error);
         throw converted;
