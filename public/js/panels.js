@@ -94,6 +94,8 @@ const syncErrorMessage = error => ({
   sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
   sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
   sync_session_not_found: "The sync server no longer has this conversation.",
+  sync_workspace_mismatch: "This synchronized conversation belongs to a different Git repository.",
+  workspace_mismatch: "This synchronized conversation belongs to a different Git repository.",
   sync_workspace_setup_required: error?.message || "Prepare the recorded Git workspace before continuing.",
   session_streaming: "Stop the current response before synchronizing this conversation.",
   session_compacting: "Wait for compaction to finish before synchronizing this conversation.",

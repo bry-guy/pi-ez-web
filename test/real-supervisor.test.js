@@ -133,6 +133,25 @@ test("web subagent entries become revisioned grouped activity", () => {
   assert.deepEqual(events.filter(event => event.type === "activity").map(event => event.data.record.revision), [1, 2]);
 });
 
+test("completed live assistant records do not duplicate persisted messages after transcript refresh", async () => {
+  const supervisor = new RealSupervisor({});
+  const entries = [
+    { type: "message", id: "u1", parentId: null, message: { role: "user", content: "hello" } },
+    { type: "model_change", id: "m1", parentId: "u1", provider: "test", modelId: "model" },
+    { type: "thinking_level_change", id: "t1", parentId: "m1", thinkingLevel: "high" },
+    { type: "message", id: "a1", parentId: "t1", message: { role: "assistant", content: [{ type: "text", text: "answer" }] } },
+  ];
+  supervisor.live.set("session-1", {
+    session: { sessionManager: { getBranch: () => entries } },
+    liveRecords: new Map([["a:u1", { id: "a:u1", role: "assistant", text: "answer" }]]),
+  });
+
+  const transcript = await supervisor.transcript("session-1");
+  assert.deepEqual(transcript.filter(record => record.role === "assistant"), [
+    { id: "a:t1", role: "assistant", text: "answer" },
+  ]);
+});
+
 test("provider error events end the turn with a public error", () => {
   const events = [];
   const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });

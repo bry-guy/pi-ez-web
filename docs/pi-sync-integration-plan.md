@@ -119,6 +119,12 @@ The shared envelope carries the configured upstream remote, branch, and pushed
 commit. Dirty state, local-only commits, patches, worktree paths, and stash
 state are not transferred.
 
+The `/sync` picker derives a normalized repository identity from the current
+workspace and only offers canonical sessions with the same identity. A session
+without a Git remote is treated as unscoped and is only offered from an
+unscoped workspace. The identity ignores credentials and transport syntax, but
+branch and commit remain advisory workspace details.
+
 The extension performs read-only comparison and notifies when the current
 workspace does not match the recorded pointer. It never:
 
@@ -136,8 +142,9 @@ can acquire one when an upstream becomes available.
 ## Validation
 
 The current tests cover browser `select`/`confirm`/`input`/`editor` request and
-cancellation, command error propagation, Git pointer sanitization, duplicate
-materialized-file selection, and the pi-sync extension's lease/ETag lifecycle.
+cancellation, command error propagation, Git pointer sanitization and
+repository scoping, duplicate materialized-file selection, and the pi-sync
+extension's lease/ETag lifecycle.
 The remaining acceptance tests are:
 
 - actual pi-sync `/sync start`, prompt settlement, and `/sync refresh` through

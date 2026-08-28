@@ -27,7 +27,8 @@ const formatDuration = durationMs => durationMs < 1000 ? `${Math.round(durationM
 const SYNC_ERROR_STATUS = Object.freeze({
   sync_not_configured: 409, sync_not_enrolled: 409, sync_not_persistent: 409,
   sync_ui_required: 409, sync_repair_cancelled: 409, sync_server_mismatch: 409,
-  sync_duplicate: 409, sync_identity_mismatch: 409, sync_session_not_found: 409,
+  sync_duplicate: 409, sync_identity_mismatch: 409, sync_workspace_mismatch: 409, sync_session_not_found: 409,
+  workspace_mismatch: 409, workspace_required: 409,
   sync_workspace_setup_required: 409, sync_materialization_failed: 409,
   sync_stale_etag: 409, sync_conflict: 409, conflict: 409, duplicate_enrollment: 409,
   session_streaming: 409, session_compacting: 409,

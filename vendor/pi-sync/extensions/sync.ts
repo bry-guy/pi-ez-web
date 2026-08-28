@@ -13,8 +13,10 @@ import {
   SyncClient,
   SyncClientError,
   type SessionEnvelope,
+  deriveRepositoryIdentity,
   deriveWorkspacePointer,
   materializeSessionFile,
+  repositoryIdentity,
   normalizeSessionFile,
   restoreHead,
   stableEnvelopeFingerprint,
@@ -23,7 +25,7 @@ import {
 const HEARTBEAT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
-type BlockReason = "active_lease" | "uncertain" | "conflict" | "unreachable" | "setup_required" | "invalid";
+type BlockReason = "active_lease" | "uncertain" | "conflict" | "unreachable" | "setup_required" | "workspace_mismatch" | "invalid";
 
 type ActiveLease = {
   binding: SyncBinding;
@@ -105,7 +107,9 @@ export default function syncExtension(pi: ExtensionAPI) {
           ? "The sync server no longer has this conversation. Run /sync start to set it up again from this local copy."
           : blocked === "invalid"
             ? "This file is not the recorded synchronized materialization. Use /sync to open the canonical copy safely."
-            : "The synchronized conversation lease is uncertain. Pi will not accept another prompt until it can safely reacquire it.";
+            : blocked === "workspace_mismatch"
+              ? "The synchronized conversation belongs to a different Git repository. Open it from its repository workspace."
+              : "The synchronized conversation lease is uncertain. Pi will not accept another prompt until it can safely reacquire it.";
     notify(ctx, text, "warning");
   };
 
@@ -208,7 +212,12 @@ export default function syncExtension(pi: ExtensionAPI) {
       return false;
     }
     try {
-      const acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel, { timeoutMs: REQUEST_TIMEOUT_MS });
+      const repository = await repositoryForPicker(ctx);
+      if (repositoryIdentity(binding.workspace) !== repository) {
+        markBlocked(ctx, "workspace_mismatch");
+        return false;
+      }
+      const acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel, { timeoutMs: REQUEST_TIMEOUT_MS, repository: repository ?? null });
       if (binding.lastEtag && acquired.etag !== binding.lastEtag) {
         const conflictBinding = { ...binding, leaseToken: acquired.lease.token, leaseExpiresAt: acquired.lease.expiresAt };
         await store.set(conflictBinding).catch(() => undefined);
@@ -229,6 +238,8 @@ export default function syncExtension(pi: ExtensionAPI) {
         markBlocked(ctx, "active_lease");
       } else if (error instanceof SyncClientError && ["network_error", "timeout"].includes(error.code)) {
         markBlocked(ctx, "unreachable");
+      } else if (error instanceof SyncClientError && ["workspace_mismatch", "workspace_required"].includes(error.code)) {
+        markBlocked(ctx, "workspace_mismatch");
       } else {
         markBlocked(ctx, "uncertain");
       }
@@ -238,6 +249,12 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   const verifyPendingLease = async (ctx: ExtensionContext, binding: SyncBinding): Promise<boolean> => {
     if (!binding.leaseToken) return true;
+    const repository = await repositoryForPicker(ctx);
+    if (repositoryIdentity(binding.workspace) !== repository) {
+      clearHeartbeat();
+      markBlocked(ctx, "workspace_mismatch");
+      return false;
+    }
     const lease = active;
     if (!lease || lease.token !== binding.leaseToken) return false;
     try {
@@ -303,7 +320,7 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   const completeTurn = async (ctx: ExtensionContext, forceUpload: boolean, final = false): Promise<boolean> => {
     if (!currentSessionId) return true;
-    if (blocked === "conflict" || blocked === "setup_required" || blocked === "invalid") return false;
+    if (blocked === "conflict" || blocked === "setup_required" || blocked === "workspace_mismatch" || blocked === "invalid") return false;
     let lease = active;
     if (!lease) {
       const binding = await store.get(currentSessionId);
@@ -364,10 +381,22 @@ export default function syncExtension(pi: ExtensionAPI) {
     return true;
   };
 
-  const workspaceFor = async (ctx: ExtensionContext) => deriveWorkspacePointer(ctx.cwd, async (command, args) => {
+  const gitRunnerFor = (ctx: ExtensionContext) => async (command: string, args: string[]) => {
     const result = await pi.exec(command, args, { cwd: ctx.cwd, timeout: 5_000 });
     return { stdout: result.stdout, code: result.code };
-  });
+  };
+
+  const workspaceFor = async (ctx: ExtensionContext) => deriveWorkspacePointer(ctx.cwd, gitRunnerFor(ctx));
+
+  const repositoryFor = async (ctx: ExtensionContext) => deriveRepositoryIdentity(ctx.cwd, gitRunnerFor(ctx));
+
+  const repositoryForPicker = async (ctx: ExtensionContext) => {
+    try {
+      return await repositoryFor(ctx);
+    } catch {
+      return undefined;
+    }
+  };
 
   const workspaceIdentity = (workspace?: SyncBinding["workspace"]) => workspace
     ? `${workspace.gitRemote}|${workspace.branch}|${workspace.commit}`
@@ -523,33 +552,43 @@ export default function syncExtension(pi: ExtensionAPI) {
     const url = configuredUrl(args) ?? currentBinding?.serverUrl;
     if (!url) return failCommand(ctx, undefined, "sync_not_configured", "Set PI_SYNC_SERVER_URL before using /sync.");
     if (!ctx.hasUI) return failCommand(ctx, undefined, "sync_ui_required", "The synchronized-session picker requires Pi interactive UI.");
+    const repository = await repositoryForPicker(ctx);
     let list;
     try {
-      list = await clientFor(url).list();
+      list = await clientFor(url).list({ repository: repository ?? null });
     } catch (error) {
       return failCommand(ctx, error, "sync_unavailable", "Could not list synchronized sessions.");
     }
-    if (list.sessions.length === 0) {
-      notify(ctx, "No synchronized conversations are enrolled yet. Use /sync start.", "info");
+    const sessions = list.sessions.filter((item) => repositoryIdentity(item.workspace) === repository);
+    if (sessions.length === 0) {
+      notify(ctx, repository
+        ? "No synchronized conversations are available for this Git repository."
+        : "No unscoped synchronized conversations are available here.", "info");
       return;
     }
-    const rows = list.sessions.map((item) => ({
+    const rows = sessions.map((item) => ({
       item,
       label: `${item.title || item.sessionId} — ${item.leaseHolder ? `in use by ${item.leaseHolder}` : "available"}`,
     }));
     const selected = await ctx.ui.select("Synchronized conversations", rows.map((row) => row.label));
     if (!selected) return;
     const row = rows.find((candidate) => candidate.label === selected);
-    if (!row) return;
+    if (!row || repositoryIdentity(row.item.workspace) !== repository) {
+      return failCommand(ctx, undefined, "sync_workspace_mismatch", "The selected conversation belongs to a different Git repository.");
+    }
     let acquired;
     try {
-      acquired = await clientFor(url).acquire(row.item.sessionId, deviceLabel);
+      acquired = await clientFor(url).acquire(row.item.sessionId, deviceLabel, { repository: repository ?? null });
     } catch (error) {
       return failCommand(ctx, error, "sync_unavailable", "Could not acquire synchronized session.");
     }
     if (acquired.session.sessionId !== row.item.sessionId) {
       await clientFor(url).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
       return failCommand(ctx, undefined, "sync_identity_mismatch", "The sync server returned a different conversation identity.");
+    }
+    if (repositoryIdentity(acquired.session.workspace) !== repository) {
+      await clientFor(url).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
+      return failCommand(ctx, undefined, "sync_workspace_mismatch", "The selected conversation belongs to a different Git repository.");
     }
     const sessionDir = ctx.sessionManager.getSessionDir();
     const target = join(sessionDir, `${Date.now()}_${acquired.session.sessionId}.jsonl`);
@@ -622,9 +661,13 @@ export default function syncExtension(pi: ExtensionAPI) {
     const binding = await store.get(currentSessionId);
     if (!binding) return failCommand(ctx, undefined, "sync_not_enrolled", "This Pi session is not synchronized.");
     if (!ctx.isIdle()) return failCommand(ctx, undefined, "session_streaming", "Stop the current response before refreshing this conversation.");
+    const repository = await repositoryForPicker(ctx);
+    if (repositoryIdentity(binding.workspace) !== repository) {
+      return failCommand(ctx, undefined, "sync_workspace_mismatch", "The synchronized conversation belongs to a different Git repository.");
+    }
     let acquired;
     try {
-      acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel);
+      acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel, { repository: repository ?? null });
     } catch (error) {
       return failCommand(ctx, error, "sync_unavailable", "Could not acquire the synchronized conversation.");
     }
@@ -748,8 +791,15 @@ export default function syncExtension(pi: ExtensionAPI) {
       pi.setSessionName?.(binding.title.trim());
     }
     void warnWorkspace(ctx, binding);
-    if (binding.leaseToken) resumeActive(ctx, binding);
-    else setStatus(ctx, "sync: not leased");
+    if (binding.leaseToken) {
+      const repository = await repositoryForPicker(ctx);
+      if (repositoryIdentity(binding.workspace) !== repository) {
+        markBlocked(ctx, "workspace_mismatch");
+        showBlocked(ctx);
+        return;
+      }
+      resumeActive(ctx, binding);
+    } else setStatus(ctx, "sync: not leased");
   });
 
   pi.on("session_info_changed", async (_event, ctx) => {
@@ -771,7 +821,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (!currentSessionId) return { action: "continue" as const };
     let binding = await store.get(currentSessionId);
     if (!binding) return { action: "continue" as const };
-    if (blocked === "conflict" || blocked === "setup_required" || blocked === "invalid") {
+    if (blocked === "conflict" || blocked === "setup_required" || blocked === "workspace_mismatch" || blocked === "invalid") {
       showBlocked(ctx);
       return { action: "handled" as const };
     }
@@ -826,7 +876,7 @@ export default function syncExtension(pi: ExtensionAPI) {
   pi.on("session_before_fork", async (_event, ctx) => guardDurableMutation(ctx));
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (active?.token && (blocked === "conflict" || blocked === "invalid")) await releaseTurn(ctx, active);
+    if (active?.token && (blocked === "conflict" || blocked === "workspace_mismatch" || blocked === "invalid")) await releaseTurn(ctx, active);
     else await completeTurn(ctx, false, true);
     clearHeartbeat();
     active = undefined;

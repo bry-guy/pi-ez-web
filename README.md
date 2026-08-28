@@ -158,8 +158,10 @@ materialization, and settlement. The header Refresh action invokes the
 extension's explicit handoff pull; automatic focus refresh is disabled for the
 extension-owned path so local web-only entries are not silently replaced. Unenrolled sessions remain local-only unless
 `allConversations` is enabled. Synchronized names are sticky and Git upstream,
-branch, and pushed-commit pointers travel with the canonical session. Git
-mismatches are reported without fetching, switching branches, or blocking Pi.
+branch, and pushed-commit pointers travel with the canonical session. When Git
+information is available, the `/sync` picker only offers conversations from the
+same normalized repository remote; branch and commit mismatches remain advisory.
+Git mismatches are reported without fetching, switching branches, or blocking Pi.
 
 For a local real-server test, `mise start` is the normal command but does not
 inherit a deployment's environment. Supply the public OAuth App client ID to
