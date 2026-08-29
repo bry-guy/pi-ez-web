@@ -430,7 +430,7 @@ test("stale PUT releases safely and preserves the local binding base", async () 
     assert.equal(binding.leaseToken, undefined);
     assert.equal(binding.lastEtag, "e1");
     assert.equal(binding.lastFingerprint, "old-fingerprint");
-    assert.match(fake.notices.join(" "), /\/sync/);
+    assert.match(fake.notices.join(" "), /authoritative/);
     await fake.handlers.get("session_shutdown")({}, fake.ctx);
   } finally {
     await fake.close();
@@ -555,7 +555,7 @@ test("expired-token ETag mismatch preserves the local binding and blocks input",
     assert.equal(blocked.leaseToken, undefined);
     assert.equal(blocked.lastEtag, "e1");
     assert.equal(blocked.lastFingerprint, "old-fingerprint");
-    assert.match(fake.notices.join(" "), /\/sync/);
+    assert.match(fake.notices.join(" "), /authoritative/);
   } finally {
     await fake.close();
   }
@@ -589,7 +589,7 @@ test("ETag conflict and active lease block without changing local state", async 
       const blocked = await fake.binding();
       assert.equal(blocked.leaseToken, undefined);
       assert.equal(blocked.lastEtag, "e1");
-      assert.match(fake.notices.join(" "), mode === "etag" ? /\/sync/ : /use/);
+      assert.match(fake.notices.join(" "), mode === "etag" ? /refresh|\/sync/ : /use/);
       assert.equal(requests.filter(({ method }) => method === "DELETE").length, mode === "etag" ? 1 : 0);
     } finally {
       await fake.close();
@@ -597,7 +597,7 @@ test("ETag conflict and active lease block without changing local state", async 
   }
 });
 
-test("refresh replaces an unchanged local materialization with a newer canonical snapshot", async () => {
+test("refresh replaces a divergent local materialization with the canonical snapshot", async () => {
   const remote = {
     ...envelope,
     headEntryId: "b",
@@ -626,7 +626,9 @@ test("refresh replaces an unchanged local materialization with a newer canonical
       canonicalSessionId: envelope.sessionId,
       lastEtag: "e1",
       materializedFile: fake.sessionPath,
-      lastFingerprint: JSON.stringify(envelope),
+      lastFingerprint: "local-unuploaded-turn",
+      leaseToken: "old-token",
+      leaseExpiresAt: "2026-01-01T00:02:00Z",
       state: "ready",
     });
     fake.ctx.switchSession = async (target, options) => {
@@ -649,18 +651,19 @@ test("refresh replaces an unchanged local materialization with a newer canonical
     await fake.handlers.get("session_start")({}, fake.ctx);
     await fake.handlers.get("command:sync")("refresh", fake.ctx);
     assert.ok(switchedTarget);
-    assert.deepEqual(requests.map(({ method }) => method), ["POST", "DELETE"]);
+    assert.deepEqual(requests.map(({ method }) => method), ["DELETE", "POST", "DELETE"]);
     const refreshed = await fake.binding();
     assert.equal(refreshed.lastEtag, "e2");
     assert.equal(refreshed.materializedFile, switchedTarget);
     assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
+    assert.doesNotMatch(await readFile(fake.sessionPath, "utf8"), /"id":"b"/);
     assert.match(fake.notices.join(" "), /refreshed/);
   } finally {
     await fake.close();
   }
 });
 
-test("reconciles a clean stale local copy before the next prompt", async () => {
+test("reconciles a stale local copy with unuploaded changes before the next prompt", async () => {
   const remote = {
     ...envelope,
     headEntryId: "b",
@@ -692,7 +695,7 @@ test("reconciles a clean stale local copy before the next prompt", async () => {
       canonicalSessionId: envelope.sessionId,
       lastEtag: "e1",
       materializedFile: fake.sessionPath,
-      lastFingerprint: JSON.stringify(envelope),
+      lastFingerprint: "local-unuploaded-turn",
       state: "ready",
     });
     fake.ctx.switchSession = async (target, options) => {

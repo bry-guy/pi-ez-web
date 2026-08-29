@@ -123,7 +123,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     const text = blocked === "active_lease"
       ? "The synchronized conversation is in use by another client."
       : blocked === "conflict"
-        ? "The synchronized conversation changed remotely. Use /sync to inspect the canonical copy; the local copy was preserved."
+        ? "The synchronized conversation changed remotely. The server copy is authoritative; refresh to open it. The local copy was preserved for recovery."
         : blocked === "setup_required"
           ? "The sync server no longer has this conversation. Run /sync attach to set it up again from this local copy."
           : blocked === "invalid"
@@ -171,7 +171,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     clearHeartbeat();
     if (released && active === lease) active = undefined;
     markBlocked(ctx, "conflict");
-    notify(ctx, "The canonical synchronized session changed while this client was offline; local data was preserved. Use /sync to open it.", "warning");
+    notify(ctx, "The canonical synchronized session changed; the server copy is authoritative and the local data was preserved for recovery.", "warning");
   };
 
   const startHeartbeat = (ctx: ExtensionContext, lease: ActiveLease) => {
@@ -709,7 +709,8 @@ export default function syncExtension(pi: ExtensionAPI) {
       return;
     }
     if (binding.leaseToken || active?.token) {
-      if (!(await completeTurn(ctx, false, true))) {
+      if (!active?.token && binding.leaseToken) resumeActive(ctx, binding);
+      if (!active?.token || !(await releaseTurn(ctx, active))) {
         notify(ctx, "Could not safely release synchronization before refreshing.", "warning");
         return { switched: false };
       }
@@ -721,12 +722,6 @@ export default function syncExtension(pi: ExtensionAPI) {
       markBlocked(ctx, "workspace_mismatch");
       showBlocked(ctx);
       return;
-    }
-    let normalized: { envelope: SessionEnvelope; path: string };
-    try {
-      normalized = await normalizeCurrent(ctx, binding);
-    } catch (error) {
-      return failCommand(ctx, error, "sync_materialization_failed", "Could not inspect the local conversation.");
     }
     let acquired;
     try {
@@ -748,11 +743,6 @@ export default function syncExtension(pi: ExtensionAPI) {
         return failCommand(ctx, error, "sync_lease_uncertain", "The conversation is current, but its refresh lease could not be released.");
       }
       notify(ctx, "The synchronized conversation is already current.", "info");
-      return { switched: false };
-    }
-    if (!binding.lastFingerprint || stableEnvelopeFingerprint(normalized.envelope) !== binding.lastFingerprint) {
-      await releaseRefreshLease().catch(() => undefined);
-      notify(ctx, "The local conversation has unsynchronized changes. It was preserved; use /sync to open the canonical copy separately.", "warning");
       return { switched: false };
     }
     try {
