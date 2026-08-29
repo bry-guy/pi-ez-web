@@ -42,6 +42,7 @@ RUN apt-get update \
       rsync \
       tar \
       unzip \
+      yadm \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \

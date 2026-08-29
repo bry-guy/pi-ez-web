@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import path from "node:path";
@@ -21,6 +22,45 @@ const UI_ONLY_CONFIG = Object.freeze({
   apiBasePath: "/api",
   label: "Preview UI · production data",
 });
+const DEFAULT_PRESTART_TIMEOUT_MS = 120_000;
+
+function prestartFailure(message) {
+  return Object.assign(new Error(message), { code: "prestart_failed" });
+}
+
+function prestartTimeout() {
+  const raw = process.env.PI_WEB_PRESTART_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_PRESTART_TIMEOUT_MS;
+  const value = Number(raw.trim());
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw prestartFailure("PI_WEB_PRESTART_TIMEOUT_MS must be a positive integer.");
+  }
+  return value;
+}
+
+export function runPrestartCommand() {
+  const command = process.env.PI_WEB_PRESTART_COMMAND;
+  if (typeof command !== "string" || !command.trim()) return;
+  const timeout = prestartTimeout();
+  console.log("pi-ez-web: running prestart command");
+  try {
+    execFileSync("/bin/sh", ["-c", command], {
+      stdio: ["ignore", "inherit", "inherit"],
+      timeout,
+      killSignal: "SIGTERM",
+    });
+  } catch (error) {
+    const detail = error?.code === "ETIMEDOUT"
+      ? `timed out after ${timeout}ms`
+      : typeof error?.status === "number"
+        ? `exited with status ${error.status}`
+        : error?.signal
+          ? `was terminated by ${error.signal}`
+          : "failed";
+    throw prestartFailure(`Prestart command ${detail}.`);
+  }
+  console.log("pi-ez-web: prestart command completed");
+}
 
 function uiOnlyEnabled() {
   return ["1", "true", "yes", "on"].includes(String(process.env.PI_WEB_UI_ONLY || "").trim().toLowerCase());
@@ -93,6 +133,7 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
 }
 
 export function startServer(port, options = {}) {
+  runPrestartCommand();
   const uiOnly = options.uiOnly ?? uiOnlyEnabled();
   const cfg = uiOnly ? null : loadConfig();
   // Git is observed live; startup must not prune worktrees or inspect/mutate
