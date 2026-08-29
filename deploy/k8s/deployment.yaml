@@ -135,18 +135,25 @@ spec:
                 set -eu
                 : "${DOTFILES_REPOSITORY:?DOTFILES_REPOSITORY is required}"
                 : "${DOTFILES_REVISION:?DOTFILES_REVISION is required}"
-                if ! printf '%s\\n' "$DOTFILES_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
-                  printf '%s\\n' 'DOTFILES_REVISION must be a 40-character lowercase commit.' >&2
+                if ! printf '%s\n' "$DOTFILES_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
+                  printf '%s\n' 'DOTFILES_REVISION must be a 40-character lowercase commit.' >&2
                   exit 2
                 fi
                 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
                 export GIT_TERMINAL_PROMPT=0
                 yadm_repo="$XDG_DATA_HOME/yadm/repo.git"
+                if [ -d "$yadm_repo" ]; then
+                  if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm rev-parse --git-dir >/dev/null 2>&1; then
+                    rm -rf "$yadm_repo"
+                  elif ! origin="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm remote get-url origin 2>/dev/null)"; then
+                    rm -rf "$yadm_repo"
+                  elif [ "$origin" != "$DOTFILES_REPOSITORY" ]; then
+                    printf '%s\n' 'The existing yadm origin does not match DOTFILES_REPOSITORY.' >&2
+                    exit 2
+                  fi
+                fi
                 if [ ! -d "$yadm_repo" ]; then
                   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm clone --no-bootstrap --no-checkout "$DOTFILES_REPOSITORY"
-                elif [ "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm remote get-url origin)" != "$DOTFILES_REPOSITORY" ]; then
-                  printf '%s\\n' 'The existing yadm origin does not match DOTFILES_REPOSITORY.' >&2
-                  exit 2
                 fi
                 if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm cat-file -e "$DOTFILES_REVISION^{commit}" 2>/dev/null; then
                   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm fetch --no-tags origin
@@ -192,7 +199,7 @@ spec:
               port: http
             periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 24
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /
