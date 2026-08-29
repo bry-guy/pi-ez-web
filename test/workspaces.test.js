@@ -86,9 +86,31 @@ test("Git contexts identify checkout and linked worktree by stable path IDs", ()
   assert.equal(checkout?.kind, "checkout");
   assert.equal(checkout?.branch, "main");
   assert.equal(checkout?.status, "clean");
+  assert.equal(checkout?.commit?.subject, "init");
+  assert.deepEqual(checkout?.statusDetails, { total: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 });
   assert.equal(worktree?.kind, "worktree");
   assert.equal(ws.contextId(repo, worktree.path), worktree.id);
   assert.deepEqual(ws.listContexts(repo).map(context => context.id), contexts.map(context => context.id));
+});
+
+test("context status counts staged, unstaged, and untracked files", () => {
+  const detailRepo = path.join(tmp, "detail-repo");
+  fs.mkdirSync(detailRepo);
+  git(detailRepo, "init", "-b", "main");
+  git(detailRepo, "config", "user.email", "t@t");
+  git(detailRepo, "config", "user.name", "t");
+  fs.writeFileSync(path.join(detailRepo, "tracked.txt"), "one\n");
+  git(detailRepo, "add", "-A");
+  git(detailRepo, "commit", "-m", "Initial detail commit");
+  fs.writeFileSync(path.join(detailRepo, "tracked.txt"), "one\ntwo\n");
+  git(detailRepo, "add", "tracked.txt");
+  fs.writeFileSync(path.join(detailRepo, "tracked.txt"), "one\ntwo\nthree\n");
+  fs.writeFileSync(path.join(detailRepo, "untracked.txt"), "new\n");
+
+  const context = ws.contextStatus({ repoPath: detailRepo, workspacePath: detailRepo });
+  assert.equal(context.commit.subject, "Initial detail commit");
+  assert.equal(context.commit.shortHash, context.commit.hash.slice(0, 7));
+  assert.deepEqual(context.statusDetails, { total: 2, staged: 1, unstaged: 1, untracked: 1, conflicts: 0 });
 });
 
 test("main is checkout-only and external main worktrees are protected", () => {

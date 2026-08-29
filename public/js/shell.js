@@ -474,7 +474,7 @@ class PiHeader extends HTMLElement {
     const branch = workspace ? this.contextLabel(workspace) : null;
     const commit = workspace?.head ? String(workspace.head) : "";
     const commitLabel = commit
-      ? `<span class="workspace-commit" title="Current commit ${esc(commit)}">@${esc(commit.slice(0, 8))}</span>`
+      ? `<span class="workspace-commit" title="Current commit ${esc(commit)}">${esc(commit.slice(0, 8))}</span>`
       : "";
     const workspaceArea = inProject && workspace ? `
       <div class="bar-sub">

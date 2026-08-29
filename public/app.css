@@ -698,6 +698,14 @@ aside.files.file-viewer .file-code, aside.files.file-viewer .file-diff-body { ma
 .session-picker-source:first-child { margin-top: 0; }
 .session-picker-source select, .session-picker-source input { width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 11.5px var(--mono); outline: 0; }
 .session-picker-source input:focus, .session-picker-source select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.session-details {
+  margin-top: 14px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+}
+.session-details-title { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.session-details-list { display: grid; gap: 5px; margin: 8px 0 0; }
+.session-detail-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: baseline; gap: 10px; font: 11.5px/1.4 var(--mono); }
+.session-detail-row dt { color: var(--faint); }
+.session-detail-row dd { min-width: 0; margin: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
 .branch-picker { position: relative; }
 .branch-picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 11.5px var(--mono); text-align: left; cursor: pointer; box-shadow: inset 0 1px 0 oklch(1 0 0 / .025); }
 .branch-picker-trigger:hover, .branch-picker-trigger:focus-visible { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }

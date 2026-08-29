@@ -48,6 +48,8 @@ function unavailableContext(project, binding) {
     externalMain: false,
     protected: false,
     head: null,
+    commit: null,
+    statusDetails: null,
     detached: false,
     sessions: [],
   };

@@ -19,7 +19,7 @@ const state = {
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
     branches: ["main", "develop", "feature/alpha", "feature/beta", "feature/gamma", "feature/delta", "feature/epsilon"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" },
     contexts: [
-      { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, head: "abcdef1234567890", sessions: [
+      { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, head: "abcdef1234567890", commit: { hash: "abcdef1234567890", shortHash: "abcdef12", subject: "Initial project commit" }, statusDetails: { total: 4, staged: 1, unstaged: 2, untracked: 1, conflicts: 0 }, sessions: [
         { id: "s1", title: "New session", when: "now", streaming: false },
         { id: "sibling", title: "Sibling session", when: "now", streaming: false },
       ] },
@@ -201,7 +201,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
-  assert.equal(root.querySelector(".workspace-commit").textContent, "@abcdef12");
+  assert.equal(root.querySelector(".workspace-commit").textContent, "abcdef12");
   assert.equal(root.querySelector(".workspace-commit").title, "Current commit abcdef1234567890");
   applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_request", requestId: "ui-1", method: "select", title: "Choose a conversation", options: ["one", "two"] });
   assert.match(root.querySelector(".extension-ui-modal").textContent, /Choose a conversation/);
@@ -270,6 +270,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
   assert.equal(root.querySelector("[data-session-name]").value, "New session");
+  const sessionDetails = root.querySelector(".session-details");
+  assert.ok(sessionDetails);
+  assert.deepEqual([...sessionDetails.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
+    ["Branch", "main"],
+    ["Commit", "abcdef12 Initial project commit"],
+    ["Workspace", "checkout · /tmp/demo"],
+    ["Status", "1 file staged, 2 files unstaged, 1 file untracked"],
+  ]);
   assert.match(root.querySelector(".session-picker-actions").textContent, /Session/);
   assert.equal([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")), false);
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));

@@ -242,6 +242,41 @@ function dirtyState(dir) {
   }
 }
 
+function gitStatusDetails(dir) {
+  try {
+    const entries = git(dir, "status", "--porcelain=v1").split(/\r?\n/).filter(Boolean);
+    let staged = 0;
+    let unstaged = 0;
+    let untracked = 0;
+    let conflicts = 0;
+    for (const entry of entries) {
+      const code = entry.slice(0, 2);
+      if (code === "??") {
+        untracked++;
+        continue;
+      }
+      if (code.includes("U") || ["AA", "DD"].includes(code)) {
+        conflicts++;
+        continue;
+      }
+      if (code[0] !== " ") staged++;
+      if (code[1] !== " ") unstaged++;
+    }
+    return { total: entries.length, staged, unstaged, untracked, conflicts };
+  } catch {
+    return null;
+  }
+}
+
+function commitDetails(dir, fallbackHash = null) {
+  try {
+    const [hash, shortHash, subject] = git(dir, "show", "-s", "--format=%H%x00%h%x00%s", "HEAD").trim().split(String.fromCharCode(0));
+    return { hash: hash || fallbackHash, shortHash: shortHash || (hash || fallbackHash || "").slice(0, 8), subject: subject || "" };
+  } catch {
+    return fallbackHash ? { hash: fallbackHash, shortHash: fallbackHash.slice(0, 8), subject: "" } : null;
+  }
+}
+
 function assertCleanCheckout(repoPath) {
   const status = dirtyState(repoPath);
   if (status.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: status.error });
@@ -317,10 +352,13 @@ export function contextStatus({ repoPath, workspacePath, record = null, primaryB
     branch: currentBranch(workspacePath) || record?.branch || null,
     primaryBranch,
   });
+  const head = currentHead(workspacePath) || record?.head || null;
   return {
     ...status,
     id: contextId(repoPath, workspacePath),
-    head: currentHead(workspacePath) || record?.head || null,
+    head,
+    commit: commitDetails(workspacePath, head),
+    statusDetails: gitStatusDetails(workspacePath),
     detached: !status.branch,
     primaryBranch,
     status: status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean",
