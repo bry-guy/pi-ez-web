@@ -736,7 +736,7 @@ aside.files.file-viewer {
 .session-picker-actions { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
 .session-picker-actions-heading { margin: 0 0 7px; }
 .session-picker-actions .workspace-actions { margin-top: 0; }
-.session-picker-action-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.session-picker-session-buttons { flex-wrap: nowrap; }
 .session-picker .session-operation-feed { margin-top: 10px; }
 
 .extension-ui-scrim {

@@ -1029,8 +1029,7 @@ class PiSessionPicker extends HTMLElement {
       const running = !!runningPickerOperation("hook", picker.sourceSessionId, label);
       return `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? `${label}ing…` : label)}</button>`;
     }).join("");
-    const hookSection = hookButtons ? `<div class="workspace-actions">${hookButtons}</div>` : "";
-    const sessionActions = `<section class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div>${hookSection}<div class="session-picker-action-buttons"><button class="settings-action quiet" data-act="close-session-picker">Cancel</button>${actionButtons}</div></section>`;
+    const sessionActions = `<section class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="workspace-actions session-picker-session-buttons">${hookButtons}${actionButtons}</div></section>`;
     const historySessions = mode === "new" ? this.flatten(project.sessions) : [];
     const historyRows = historySessions.map(session => {
       const sessionBranch = session.branch || contexts.find(item => item.id === session.contextId)?.branch || primary;

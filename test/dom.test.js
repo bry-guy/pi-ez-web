@@ -264,7 +264,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(dom.window.__fetchCalls, 1);
   assert.match(root.querySelector("[data-operation-hint='fetch']").textContent, /Fetched Git branches/);
   assert.equal(root.querySelector(".session-branch-actions [data-act='run-hook']"), null);
-  assert.equal(root.querySelector(".session-picker-actions [data-act='run-hook']").textContent, "Check");
+  const sessionButtons = root.querySelector(".session-picker-session-buttons");
+  const checkButton = root.querySelector(".session-picker-actions [data-act='run-hook']");
+  const forkButton = root.querySelector(".session-picker-actions [data-mode='fork']");
+  assert.equal(checkButton.textContent, "Check");
+  assert.equal(checkButton.parentElement, sessionButtons);
+  assert.equal(forkButton.parentElement, sessionButtons);
+  assert.equal(root.querySelector(".session-picker-actions [data-act='close-session-picker']"), null);
   const gitSection = root.querySelector(".session-branch-actions");
   const sessionSection = root.querySelector(".session-picker-actions");
   const operationFeed = root.querySelector(".session-operation-feed");
