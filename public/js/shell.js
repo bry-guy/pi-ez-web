@@ -364,7 +364,7 @@ class PiSidebar extends HTMLElement {
           <span class="count">${this.count(p.sessions)}</span>
           <button class="row-add cta-plus" data-act="new-project-session" data-id="${esc(p.id)}" title="New session in ${esc(p.name)}" aria-label="New session in ${esc(p.name)}">+</button>
         </div></div>`);
-      if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, nameMatch);
+      if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, !!q && nameMatch);
     }
     const chatRows = s.chats
       .filter(cRow => !q || fuzzyMatch(cRow.title, q))

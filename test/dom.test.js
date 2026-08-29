@@ -201,6 +201,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
+  const parentSession = store.state.projects[0].sessions[0];
+  parentSession.children = [{ id: "child", title: "Child session", children: [] }];
+  store.state.openTree[parentSession.id] = true;
+  store.notify("state");
+  assert.ok(root.querySelector("[data-id='child']"));
+  root.querySelector("[data-tree-id='s1']").click();
+  assert.equal(root.querySelector("[data-id='child']"), null, "parent sessions collapse their children");
+  parentSession.children = [];
+  store.notify("state");
   assert.equal(root.querySelector(".workspace-commit").textContent, "abcdef12");
   assert.equal(root.querySelector(".workspace-commit").title, "Current commit abcdef1234567890");
   applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_request", requestId: "ui-1", method: "select", title: "Choose a conversation", options: ["one", "two"] });
