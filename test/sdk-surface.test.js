@@ -30,6 +30,7 @@ test("pi SDK exposes the surface the real supervisor uses", async () => {
   assert.equal(typeof sdk.getAgentDir, "function");
   assert.equal(typeof sdk.SettingsManager?.fromStorage, "function");
   assert.equal(typeof sdk.DefaultResourceLoader, "function");
+  assert.equal(typeof sdk.DefaultPackageManager, "function");
   assert.equal(typeof sdk.ModelRuntime, "function");
   assert.equal(typeof sdk.ModelRuntime.create, "function");
   for (const m of ["getAvailableSnapshot", "getAvailable", "getModel", "getProviders", "getProviderAuthStatus", "checkAuth", "login", "logout", "refresh"]) {

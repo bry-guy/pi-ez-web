@@ -151,7 +151,6 @@ export function refreshState() {
     settings: s.settings || null,
     reposRoot: s.reposRoot || null,
     reposRootSource: s.reposRootSource || "default",
-    filesLoadedKey: null,
     model: active?.model || s.effectiveDefaultModel || null,
   });
   for (const project of s.projects || []) seedStreaming(project.sessions);
@@ -555,7 +554,7 @@ export function applyEvent(evt, replay = false) {
     case "session_closed": {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
-      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoadedKey: null };
+      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null };
       refreshState().then(() => {
         const s = store.state;
         if (wasChat) {

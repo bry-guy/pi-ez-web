@@ -684,6 +684,7 @@ class PiThinkingPicker extends HTMLElement {
 /* ---------------- composer ---------------- */
 class PiComposer extends HTMLElement {
   connectedCallback() {
+    this.expanded = false;
     this.innerHTML = `<div class="composer-outer"><div class="composer-pad"><div class="composer">
       <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
       <div class="composer-attachments"></div>
@@ -697,6 +698,7 @@ class PiComposer extends HTMLElement {
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <pi-thinking-picker></pi-thinking-picker>
         <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
+        <button class="composer-expand-btn hidden" type="button" title="Expand message editor" aria-label="Expand message editor" aria-expanded="false">↑</button>
         <button class="send-btn" type="button" title="Send" aria-label="Send message">↑</button>
       </div>
     </div></div></div>`;
@@ -706,12 +708,26 @@ class PiComposer extends HTMLElement {
     this.imageInput = this.querySelector(".image-input");
     this.attachBtn = this.querySelector(".attach-btn");
     this.stopBtn = this.querySelector(".stop-btn");
+    this.expandBtn = this.querySelector(".composer-expand-btn");
     this.sendBtn = this.querySelector(".send-btn");
 
     this.ta.addEventListener("input", () => {
       store.setDraft(this.ta.value);
+      this.resizeEditor();
       void this.syncCommands();
     });
+    this.expandBtn.addEventListener("click", () => {
+      this.expanded = !this.expanded;
+      this.resizeEditor();
+      if (this.expanded) {
+        this.ta.focus();
+        this.scrollToLatest();
+      }
+    });
+    this.onViewportResize = () => this.resizeEditor();
+    const view = this.ownerDocument?.defaultView;
+    view?.addEventListener("resize", this.onViewportResize);
+    view?.visualViewport?.addEventListener("resize", this.onViewportResize);
     this.attachBtn.addEventListener("click", () => this.imageInput.click());
     this.imageInput.addEventListener("change", () => {
       void this.addFiles(this.imageInput.files);
@@ -738,6 +754,12 @@ class PiComposer extends HTMLElement {
         if (e.key === "Escape") { e.preventDefault(); this.closeCommands(); return; }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveCommand(e.key === "ArrowDown" ? 1 : -1); return; }
         if (e.key === "Tab") { e.preventDefault(); this.chooseCommand(); return; }
+      }
+      if (e.key === "Escape" && this.expanded) {
+        e.preventDefault();
+        this.expanded = false;
+        this.resizeEditor();
+        return;
       }
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !mobile()) {
         e.preventDefault();
@@ -776,7 +798,63 @@ class PiComposer extends HTMLElement {
   }
   disconnectedCallback() {
     this.unsub?.();
+    const view = this.ownerDocument?.defaultView;
+    view?.removeEventListener("resize", this.onViewportResize);
+    view?.visualViewport?.removeEventListener("resize", this.onViewportResize);
     if (this.sendHoldTimer) clearTimeout(this.sendHoldTimer);
+  }
+
+  lineHeight() {
+    const styles = this.ownerDocument?.defaultView?.getComputedStyle?.(this.ta);
+    const value = Number.parseFloat(styles?.lineHeight || "");
+    return Number.isFinite(value) && value > 0 ? value : 22.5;
+  }
+
+  collapsedEditorHeight() {
+    const styles = this.ownerDocument?.defaultView?.getComputedStyle?.(this.ta);
+    const top = Number.parseFloat(styles?.paddingTop || "") || 13;
+    const bottom = Number.parseFloat(styles?.paddingBottom || "") || 5;
+    return Math.ceil(this.lineHeight() * 2 + top + bottom);
+  }
+
+  viewportHeight() {
+    const view = this.ownerDocument?.defaultView;
+    return Math.max(0, view?.visualViewport?.height || view?.innerHeight || this.ownerDocument?.documentElement?.clientHeight || 768);
+  }
+
+  maxEditorHeight(collapsed) {
+    const app = this.closest("main.col") || this.closest("pi-app");
+    const headerHeight = app?.querySelector("pi-header .bar")?.getBoundingClientRect?.().height || 0;
+    const composer = this.querySelector(".composer");
+    const composerHeight = composer?.getBoundingClientRect?.().height || 0;
+    const editorHeight = this.ta.getBoundingClientRect?.().height || collapsed;
+    const fixedHeight = Math.max(52, composerHeight > editorHeight ? composerHeight - editorHeight : 52);
+    const minChatHeight = Math.ceil(this.lineHeight() * 2 + 24);
+    const available = this.viewportHeight() - headerHeight - minChatHeight - fixedHeight;
+    const doubled = collapsed * 2.35;
+    return Math.max(collapsed, Math.min(doubled, available > 0 ? available : collapsed));
+  }
+
+  resizeEditor() {
+    if (!this.ta || !this.expandBtn) return;
+    const collapsed = this.collapsedEditorHeight();
+    const lineHeight = this.lineHeight();
+    const composer = this.querySelector(".composer");
+    this.ta.style.height = "auto";
+    const contentHeight = Math.max(this.ta.scrollHeight || 0, collapsed);
+    const overflowing = contentHeight > collapsed + Math.max(4, lineHeight * 0.35);
+    if (!overflowing) this.expanded = false;
+    const maxHeight = this.maxEditorHeight(collapsed);
+    const height = this.expanded ? Math.min(contentHeight, maxHeight) : collapsed;
+    this.ta.style.height = `${Math.ceil(height)}px`;
+    this.ta.style.maxHeight = `${Math.ceil(maxHeight)}px`;
+    this.ta.style.overflowY = contentHeight > height ? "auto" : "hidden";
+    composer?.classList.toggle("expanded", this.expanded);
+    this.expandBtn.classList.toggle("hidden", !overflowing && !this.expanded);
+    this.expandBtn.textContent = this.expanded ? "↓" : "↑";
+    this.expandBtn.title = this.expanded ? "Collapse message editor" : "Expand message editor";
+    this.expandBtn.setAttribute("aria-label", this.expandBtn.title);
+    this.expandBtn.setAttribute("aria-expanded", String(this.expanded));
   }
 
   scrollToLatest() {
@@ -941,6 +1019,8 @@ class PiComposer extends HTMLElement {
       : null;
     this.scrollToLatest();
     this.ta.value = "";
+    this.expanded = false;
+    this.resizeEditor();
     this.attachments = [];
     this.renderAttachments();
     store.setDraft("");
@@ -990,6 +1070,7 @@ class PiComposer extends HTMLElement {
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     const activeId = store.activeKey();
     const draft = store.draft(activeId);
+    if (activeId !== this.draftSessionId) this.expanded = false;
     if (activeId !== this.draftSessionId || (this.ta.value !== draft && document.activeElement !== this.ta)) this.ta.value = draft;
     this.draftSessionId = activeId;
     if (activeId !== this.commandSessionId) {
@@ -1011,6 +1092,7 @@ class PiComposer extends HTMLElement {
     this.stopBtn.classList.toggle("hidden", !t.streaming);
     // Keep Send available during a turn so it can steer or queue a follow-up.
     this.sendBtn.disabled = compacting;
+    this.resizeEditor();
   }
 }
 

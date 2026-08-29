@@ -99,6 +99,15 @@ function featureBranchForName(value) {
 class PiSettings extends HTMLElement {
   connectedCallback() {
     this.feedback = null;
+    this.onDocumentKeydown = e => {
+      if (e.key === "Escape" && store.state.view === "settings"
+        && !store.state.logsOpen && !store.state.repoPickerOpen && !store.state.sessionPicker
+        && !store.state.confirm && !store.state.extensionUi) {
+        e.preventDefault();
+        store.set({ view: "chat" });
+      }
+    };
+    document.addEventListener("keydown", this.onDocumentKeydown);
     this.unsub = store.subscribe(w => { if (w === "state") this.render(); });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("change", e => {
@@ -114,6 +123,7 @@ class PiSettings extends HTMLElement {
   }
   disconnectedCallback() {
     this.unsub?.();
+    document.removeEventListener("keydown", this.onDocumentKeydown);
     clearTimeout(this.flowTimer);
     clearTimeout(this.feedbackTimer);
   }
@@ -127,12 +137,12 @@ class PiSettings extends HTMLElement {
     this.render();
   }
   async onClick(e) {
+    if (e.target.closest("[data-act='close-settings']")) { store.set({ view: "chat" }); return; }
     if (e.target.closest("[data-act='open-logs']")) { store.set({ logsOpen: true, logsError: null }); return; }
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
     if (e.target.closest("[data-act='save-sync-settings']")) return this.saveSyncSettings();
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
-    if (e.target.closest("[data-act='refresh-pi-configuration']")) return this.refreshPiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
     const login = e.target.closest("[data-auth-login]");
@@ -213,21 +223,16 @@ class PiSettings extends HTMLElement {
     const profile = this.querySelector("[data-setting='piProfile']")?.value.trim() || null;
     const pi = {
       profile,
-      profileSource: current.profileSource === "auto" && profile === (current.profile || "")
-        ? "auto"
-        : profile ? "explicit" : "disabled",
+      profileSource: profile
+        ? current.profileSource === "auto" && profile === (current.profile || "") ? "auto" : "explicit"
+        : "auto",
       packages: lines("[data-setting='piPackages']"),
       extensions: lines("[data-setting='piExtensions']"),
     };
-    await this.applyPiConfiguration(pi, "saved");
-  }
-  async refreshPiConfiguration() {
-    const pi = store.state.piConfiguration?.config;
-    if (!pi) return;
-    await this.applyPiConfiguration(pi, "refreshed");
+    await this.applyPiConfiguration(pi, "applied");
   }
   async applyPiConfiguration(pi, verb) {
-    const operation = beginOperation("pi-profile", verb === "refreshed" ? "Refresh Pi resources" : "Reload Pi resources", "", "Request started.");
+    const operation = beginOperation("pi-profile", "Apply Pi resources", "", "Request started.");
     try {
       const result = await api.settingsPatch({ pi, operationId: operation.id, activeSessionId: store.activeKey() });
       completeOperation(operation, result);
@@ -235,7 +240,7 @@ class PiSettings extends HTMLElement {
       const profileError = result.piConfiguration?.profile?.error;
       const message = profileError
         ? `Pi configuration ${verb}, but the profile could not be loaded: ${profileError}`
-        : `Pi profile ${verb}. Packages and skills reload when a session loads.`;
+        : `Pi profile ${verb}. Resources are active for the selected session and load for other sessions when they open.`;
       this.setFeedback(message, profileError ? "error" : "success");
     } catch (err) {
       completeOperation(operation, {}, err);
@@ -332,32 +337,34 @@ class PiSettings extends HTMLElement {
     }
   }
   providerCard(provider) {
-    if (provider.id === "openai" && !provider.configured) return "";
+    const name = provider.id === "openai-codex"
+      ? "OpenAI — ChatGPT"
+      : provider.id === "openai"
+        ? "OpenAI — API"
+        : provider.name;
     const status = provider.configured
       ? `Connected${provider.sourceLabel ? ` · ${provider.sourceLabel}` : ""}`
       : "Not connected";
+    const models = provider.availableModels || 0;
     const login = provider.source === "environment" ? "" : provider.authMethods?.map(method => {
       const label = provider.id === "openai-codex" && method.id === "oauth"
         ? "Sign in with ChatGPT"
         : provider.id === "anthropic" && method.id === "oauth"
           ? "Sign in with Anthropic"
           : method.id === "api_key"
-            ? `Use ${provider.name} API key`
+            ? `Use ${provider.id === "openai" ? "OpenAI" : provider.id === "anthropic" ? "Anthropic" : name} API key`
             : method.label;
-      return `
-      <button class="settings-action" data-auth-login="${esc(provider.id)}" data-auth-type="${esc(method.id)}">
-        ${esc(provider.configured ? `Reconnect · ${label}` : label)}
-      </button>`;
+      return `<button class="settings-action" data-auth-login="${esc(provider.id)}" data-auth-type="${esc(method.id)}">${esc(provider.configured ? `Reconnect · ${label}` : label)}</button>`;
     }).join("") || "";
     const logout = provider.canLogout
       ? `<button class="settings-action quiet" data-auth-logout="${esc(provider.id)}">Disconnect</button>` : "";
     return `<div class="settings-card provider-card">
       <div class="provider-card-head">
-        <div><div class="sr-title">${esc(provider.name)}</div><div class="sr-sub">${esc(status)} · ${provider.availableModels || 0} available model${provider.availableModels === 1 ? "" : "s"}</div></div>
-        <span class="status-dot ${provider.configured ? "" : "off"}"></span>
+        <div><div class="sr-title">${esc(name)}</div><div class="sr-sub">${esc(status)} · ${models} available model${models === 1 ? "" : "s"}</div></div>
+        <span class="status-dot ${provider.configured ? "" : "off"}" aria-label="${provider.configured ? "Connected" : "Not connected"}"></span>
       </div>
       ${provider.error ? `<div class="provider-error">${esc(provider.error.message || "Provider status unavailable.")}</div>` : ""}
-      <div class="provider-actions">${login}${logout}</div>
+      <div class="provider-actions">${login}${logout || (!login ? `<span class="provider-action-note">No browser login available</span>` : "")}</div>
     </div>`;
   }
   authFlowCard() {
@@ -380,7 +387,7 @@ class PiSettings extends HTMLElement {
     </div>`;
   }
   render() {
-    const providers = (store.state.providers || []).filter(provider => provider.id !== "openai" || provider.configured);
+    const providers = store.state.providers || [];
     const settings = store.state.settings || {};
     const syncState = store.state.sync || {};
     const syncSettings = settings.sync || {};
@@ -402,6 +409,7 @@ class PiSettings extends HTMLElement {
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
+    const profileInputValue = piConfig.profileSource === "auto" ? "" : piConfig.profile || "";
     const profileStatus = ["loaded", "cached"].includes(piState.profile?.status)
       ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}${piState.profile.ref ? ` @ ${piState.profile.ref}` : ""}${piState.profile.commit ? ` · ${piState.profile.commit.slice(0, 12)}` : ""}`
       : piState.profile?.status === "error"
@@ -421,8 +429,12 @@ class PiSettings extends HTMLElement {
       ? `<details class="pi-loaded-list"><summary>Loaded skills (${loadedSkills.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedSkills, "No skills loaded.")}</div></details>`
       : "";
     const skillCount = Array.isArray(piState.runtime?.skills) ? loadedSkills.length : (piState.runtime?.skills || 0);
+    const packageStatus = piState.runtime?.packageStatus;
+    const packageSummary = packageStatus?.configured
+      ? ` ${packageStatus.loaded} of ${packageStatus.configured} configured package${packageStatus.configured === 1 ? "" : "s"} active${packageStatus.failed ? `; ${packageStatus.failed} skipped` : ""}.`
+      : "";
     const runtimeSummary = piState.runtime
-      ? `${loadedExtensions.length} extension${loadedExtensions.length === 1 ? "" : "s"}, ${skillCount} skill${skillCount === 1 ? "" : "s"}, and ${piState.runtime.prompts || 0} prompts loaded${piState.runtime.loadedAt ? ` at ${new Date(piState.runtime.loadedAt).toLocaleTimeString()}` : ""}.`
+      ? `${loadedExtensions.length} extension${loadedExtensions.length === 1 ? "" : "s"}, ${skillCount} skill${skillCount === 1 ? "" : "s"}, and ${piState.runtime.prompts || 0} prompts loaded${piState.runtime.loadedAt ? ` at ${new Date(piState.runtime.loadedAt).toLocaleTimeString()}` : ""}.${packageSummary}`
       : "Resources load when a session runtime is attached.";
     const piProblems = [
       ...(piState.warnings || []),
@@ -434,13 +446,13 @@ class PiSettings extends HTMLElement {
     const feedback = this.feedback
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
-    const piOperation = operationFeedback("pi-profile", "Reloading Pi resources…");
+    const piOperation = operationFeedback("pi-profile", "Applying Pi resources…");
     const repositoryOperation = operationFeedback("repository-settings", "Saving repository settings…");
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
     this.innerHTML = `<div class="col-pad">
-      <div class="screen-title-row"><div class="screen-title">Settings</div><button class="settings-action quiet" data-act="open-logs">Logs</button></div>
+      <div class="screen-title-row"><div class="screen-title">Settings</div><div class="settings-title-actions"><button class="settings-action quiet" data-act="open-logs">Logs</button><button class="ghost-btn settings-close" data-act="close-settings" title="Close settings" aria-label="Close settings">×</button></div></div>
       ${feedback}
       <section class="settings-section">
         <div class="settings-section-title">AI providers</div>
@@ -451,19 +463,19 @@ class PiSettings extends HTMLElement {
         <div class="settings-section-title">Pi profile & extensions</div>
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Profile settings</div><div class="sr-sub">Leave this automatic to use the configured GitHub user's <span class="settings-mono">dotfiles</span> repository. Explicit paths and HTTPS URLs override it. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and trusted resources.</div></div>
-            <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(piConfig.profile || "")}" placeholder="https://github.com/owner/dotfiles">
+            <div class="sr-main"><div class="sr-title">Dotfiles profile</div><div class="sr-sub">Leave this blank to use the configured GitHub user's <span class="settings-mono">dotfiles</span> repository. An explicit path or HTTPS URL overrides it. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
+            <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(profileInputValue)}" placeholder="https://github.com/owner/dotfiles">
           </div>
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Additional packages</div><div class="sr-sub">One Pi npm/git package source per line. Pi installs missing packages automatically.</div></div>
+            <div class="sr-main"><div class="sr-title">Additional packages</div><div class="sr-sub">Optional packages added on top of the profile. Enter one Pi npm/git package source per line; missing packages install on Apply.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piPackages" rows="4" placeholder="npm:context-mode&#10;git:github.com/owner/pi-extension">${esc((piConfig.packages || []).join("\n"))}</textarea>
           </div>
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">One package source or server-local extension path per line. Relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
+            <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">Optional server-local extension files or directories, one path per line. These are not package names; relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div>
           <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${extensionList}${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-action quiet" data-act="refresh-pi-configuration">Refresh profile</button><button class="settings-save" data-act="save-pi-configuration">Save & reload</button>${piOperation}</div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">Apply fetches the profile, installs missing packages, and reloads idle sessions. Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-save" data-act="save-pi-configuration">Apply</button>${piOperation}</div></div>
         </div>
       </section>
       <section class="settings-section">
@@ -527,15 +539,27 @@ class PiFiles extends HTMLElement {
     this.requestId = 0;
     this.treeScroll = new Map();
     this.viewerScroll = new Map();
+    this.lastRenderSignature = null;
+    this.viewerOpen = false;
+    this.focusReturnPath = null;
     this.unsub = store.subscribe(w => {
       if (["state", "files", "file"].includes(w)) this.render();
     });
+    this.onDocumentKeydown = e => {
+      if (e.key === "Escape" && store.state.filePath) {
+        e.preventDefault();
+        this.close();
+      }
+    };
+    document.addEventListener("keydown", this.onDocumentKeydown);
     this.addEventListener("click", e => {
+      const scrim = e.target.closest("[data-file-viewer-scrim]");
+      if (scrim && e.target === scrim) { this.close(); return; }
       if (e.target.closest("[data-act='close']")) { this.close(); return; }
       const dir = e.target.closest("[data-dir]");
       if (dir) {
         store.state.openDirs[dir.dataset.dir] = !store.state.openDirs[dir.dataset.dir];
-        this.render();
+        this.render(true);
         return;
       }
       const file = e.target.closest("[data-file]");
@@ -557,7 +581,10 @@ class PiFiles extends HTMLElement {
     });
     this.render();
   }
-  disconnectedCallback() { this.unsub?.(); }
+  disconnectedCallback() {
+    this.unsub?.();
+    document.removeEventListener("keydown", this.onDocumentKeydown);
+  }
 
   currentContextId() {
     const project = store.project();
@@ -589,6 +616,44 @@ class PiFiles extends HTMLElement {
     if (viewer && store.state.filePath) viewer.scrollTop = this.viewerScroll.get(this.viewerScrollKey()) ?? 0;
   }
 
+  renderSignature() {
+    const s = store.state;
+    const viewing = !!s.filePath;
+    const openDirs = viewing ? "" : Object.entries(s.openDirs || {})
+      .filter(([, open]) => open)
+      .map(([path]) => path)
+      .sort()
+      .join("\\0");
+    return [
+      s.filesOpen,
+      store.inProject(),
+      this.closest("pi-app")?.filesKey?.() || null,
+      viewing ? null : s.files,
+      viewing ? null : s.fileTargets,
+      viewing ? null : s.fileTarget,
+      s.filePath,
+      s.fileView,
+      viewing ? null : s.filesLoading,
+      s.fileLoading,
+      s.fileError,
+      openDirs,
+    ];
+  }
+
+  sameRenderSignature(signature) {
+    return this.lastRenderSignature
+      && signature.length === this.lastRenderSignature.length
+      && signature.every((value, index) => value === this.lastRenderSignature[index]);
+  }
+
+  focusFileTrigger() {
+    if (!this.focusReturnPath) return;
+    const trigger = [...this.querySelectorAll("[data-file]")]
+      .find(node => node.dataset.file === this.focusReturnPath);
+    trigger?.focus();
+    this.focusReturnPath = null;
+  }
+
   availableTargets() {
     const targets = store.state.fileTargets;
     const primary = store.project()?.defaultBranch || store.project()?.primaryBranch || "main";
@@ -608,11 +673,12 @@ class PiFiles extends HTMLElement {
   changeTarget(target) {
     if (!this.availableTargets().includes(target) || target === store.state.fileTarget) return;
     this.requestId++;
-    store.set({ fileTarget: target, files: [], filesLoadedKey: null, filePath: null, fileView: null, fileLoading: false, fileError: null });
+    store.set({ fileTarget: target, files: [], filesLoadedKey: null, filePath: null, fileView: null, fileLoading: false, filesLoading: true, fileError: null });
   }
 
   async openFile(filePath, target = store.state.fileTarget || "none") {
     const projectId = store.state.projectId;
+    this.focusReturnPath = filePath;
     const contextId = this.currentContextId();
     if (!projectId || !contextId || !filePath) return;
     if (!this.availableTargets().includes(target)) target = "none";
@@ -631,10 +697,11 @@ class PiFiles extends HTMLElement {
   close() {
     this.requestId++;
     if (store.state.filePath) {
+      this.focusReturnPath = store.state.filePath;
       store.set({ filePath: null, fileView: null, fileLoading: false, fileError: null });
       return;
     }
-    store.set({ filesOpen: false, filePath: null, fileView: null, fileLoading: false, fileError: null });
+    store.set({ filesOpen: false, filePath: null, fileView: null, fileLoading: false, filesLoading: false, fileError: null });
   }
 
   rows(nodes, depth, prefix, out) {
@@ -688,26 +755,41 @@ class PiFiles extends HTMLElement {
     const body = diffMode ? this.renderDiff(view.diff, target) : content;
     const title = diffMode ? "Diff" : "Current file";
     const meta = !diffMode && view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : "";
-    this.innerHTML = `<aside class="files file-viewer">
-      <div class="files-head file-viewer-head">
-        <div class="file-title-wrap"><div class="sec-label">File</div><div class="file-path" title="${esc(s.filePath || "")}">${esc(s.filePath || "")}</div></div>
-        <button class="ghost-btn" data-act="close" title="Back to files" aria-label="Back to files">×</button>
-      </div>
-      ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
-      <div class="file-view-scroll">
-        <section class="file-section"><div class="file-section-head"><span>${title}</span>${meta}</div>${body}</section>
-      </div>
-    </aside>`;
+    this.innerHTML = `<div class="file-viewer-scrim" data-file-viewer-scrim>
+      <aside class="files file-viewer" role="dialog" aria-modal="true" aria-label="File preview">
+        <div class="files-head file-viewer-head">
+          <div class="file-title-wrap"><div class="sec-label">File</div><div class="file-path" title="${esc(s.filePath || "")}">${esc(s.filePath || "")}</div></div>
+          <button class="ghost-btn" data-act="close" title="Close file preview" aria-label="Close file preview">×</button>
+        </div>
+        ${s.fileError ? `<div class="file-error">${esc(s.fileError)}</div>` : ""}
+        <div class="file-view-scroll">
+          <section class="file-section"><div class="file-section-head"><span>${title}</span>${meta}</div>${body}</section>
+        </div>
+      </aside>
+    </div>`;
   }
 
-  render() {
+  render(force = false) {
+    const signature = this.renderSignature();
+    if (!force && this.sameRenderSignature(signature)) return;
+    this.lastRenderSignature = signature;
     this.captureScroll();
-    if (!(store.inProject() && store.state.filesOpen)) { this.innerHTML = ""; return; }
-    if (store.state.filePath) {
-      this.renderViewer();
-      this.restoreScroll();
+    if (!(store.inProject() && store.state.filesOpen)) {
+      this.viewerOpen = false;
+      this.innerHTML = "";
       return;
     }
+    if (store.state.filePath) {
+      const closeButton = this.querySelector(".file-viewer [data-act='close']");
+      const newlyOpened = !this.viewerOpen;
+      const shouldFocusClose = newlyOpened || document.activeElement === closeButton;
+      this.renderViewer();
+      this.viewerOpen = true;
+      this.restoreScroll();
+      if (shouldFocusClose) this.querySelector(".file-viewer [data-act='close']")?.focus();
+      return;
+    }
+    this.viewerOpen = false;
     const out = [];
     this.rows(store.state.files, 0, "", out);
     const targets = this.availableTargets();
@@ -720,9 +802,10 @@ class PiFiles extends HTMLElement {
       </div>
       <div class="file-target-row file-tree-target" role="group" aria-label="Diff target"><label for="file-target">Diff target</label><select id="file-target" class="file-target" aria-label="Diff target">${this.targetOptions(selectedTarget)}</select></div>
       ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
-      <div class="files-scroll">${out.join("")}</div>
+      <div class="files-scroll">${out.length ? out.join("") : `<div class="file-empty">${store.state.filesLoading ? "Loading files…" : "No files found."}</div>`}</div>
     </aside>`;
     this.restoreScroll();
+    this.focusFileTrigger();
   }
 }
 
@@ -1712,7 +1795,9 @@ class PiApp extends HTMLElement {
     });
     this.addEventListener("toggle-files", () => {
       const open = !store.state.filesOpen;
-      store.set({ filesOpen: open, fileError: null, filePath: null, fileView: null, fileLoading: false });
+      const key = this.filesKey();
+      const cached = key && store.state.filesLoadedKey === key;
+      store.set({ filesOpen: open, fileError: null, filePath: null, fileView: null, fileLoading: false, filesLoading: open && !cached });
       if (!open) return;
       this.ensureFiles(true);
     });
@@ -1720,8 +1805,11 @@ class PiApp extends HTMLElement {
     this.onResize = () => this.sync();
     window.addEventListener("resize", this.onResize);
     this.gitRefreshTimer = setInterval(() => {
-      // Keep picker state stable while users choose a branch; Fetch updates it explicitly.
-      if (store.inProject() && !store.state.sessionPicker && !store.state.confirm) void refreshState().catch(() => {});
+      // Do not update workspace state while a picker or confirmation is active.
+      if (store.inProject() && !store.state.sessionPicker && !store.state.confirm) {
+        void refreshState().catch(() => {});
+        if (store.state.filesOpen) void this.ensureFiles(true);
+      }
     }, 3500);
     this.gitRefreshTimer.unref?.();
     this.sync();
@@ -1740,37 +1828,65 @@ class PiApp extends HTMLElement {
     return `${p.id}:${node?.contextId || node?.workspacePath || p.contexts?.[0]?.id || ""}:${store.state.fileTarget}`;
   }
 
+  sameFileData(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
   async ensureFiles(force = false) {
     if (!(store.inProject() && store.state.filesOpen)) return;
     const key = this.filesKey();
     if (!key) return;
-    if (this.activeFilesKey && this.activeFilesKey !== key) {
+    const keyChanged = !!this.activeFilesKey && this.activeFilesKey !== key;
+    if (keyChanged) {
       store.state.filePath = null;
       store.state.fileView = null;
       store.state.fileLoading = false;
+      store.state.filesLoading = false;
       store.notify("file");
     }
     this.activeFilesKey = key;
-    if (!force && (key === store.state.filesLoadedKey || key === this.loadingFilesKey)) return;
+    if (this.loadingFilesKey === key) return;
+    const initialLoad = store.state.filesLoadedKey !== key;
+    if (!force && !initialLoad) return;
     this.loadingFilesKey = key;
-    store.state.files = [];
-    store.state.filesLoadedKey = null;
-    store.state.fileError = null;
-    store.notify("files");
+    if (initialLoad) {
+      store.state.files = [];
+      store.state.filesLoadedKey = null;
+      store.state.fileError = null;
+      store.state.filesLoading = true;
+      store.notify("files");
+    }
     const node = store.findSession(store.state.sessionId);
     try {
       const result = await api.files(store.state.projectId, node?.contextId || store.project()?.contexts?.[0]?.id, store.state.fileTarget);
       if (this.filesKey() === key) {
-        store.state.files = result.tree || [];
-        store.state.fileTargets = result.targets || store.state.fileTargets;
-        store.state.fileTarget = result.target || store.state.fileTarget;
+        const nextFiles = Array.isArray(result.tree) ? result.tree : [];
+        const nextTargets = Array.isArray(result.targets) ? result.targets : store.state.fileTargets;
+        const nextTarget = result.target ?? store.state.fileTarget;
+        const filesChanged = !this.sameFileData(store.state.files, nextFiles);
+        const targetsChanged = !this.sameFileData(store.state.fileTargets, nextTargets);
+        const targetChanged = store.state.fileTarget !== nextTarget;
+        const changed = filesChanged
+          || targetsChanged
+          || targetChanged
+          || store.state.filesLoadedKey !== key
+          || store.state.filesLoading
+          || store.state.fileError !== null;
+        if (filesChanged) store.state.files = nextFiles;
+        if (targetsChanged) store.state.fileTargets = nextTargets;
+        if (targetChanged) store.state.fileTarget = nextTarget;
         store.state.filesLoadedKey = key;
-        store.notify("files");
+        store.state.filesLoading = false;
+        store.state.fileError = null;
+        if (changed) store.notify("files");
       }
     } catch (err) {
       if (this.filesKey() === key) {
-        store.state.fileError = `Could not load files: ${err.error || err.message || err}`;
-        store.notify("files");
+        const message = `Could not load files: ${err.error || err.message || err}`;
+        const changed = store.state.filesLoading || store.state.fileError !== message;
+        store.state.filesLoading = false;
+        store.state.fileError = message;
+        if (changed) store.notify("files");
       }
     } finally {
       if (this.loadingFilesKey === key) this.loadingFilesKey = null;
@@ -1779,7 +1895,7 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
-    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.workspaceSettingsOpen || store.state.extensionUi);
+    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.workspaceSettingsOpen || store.state.extensionUi || store.state.filePath);
     document.body?.classList.toggle("modal-open", modalOpen);
     const previewBanner = this.querySelector("[data-preview-banner]");
     const preview = store.state.uiConfig?.preview === true;

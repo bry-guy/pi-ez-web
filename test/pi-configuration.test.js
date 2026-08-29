@@ -99,6 +99,11 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   });
   assert.equal(settingsManager.getSessionDir(), undefined);
 
+  const packageSubset = await configuration.createSettingsManager(cwd, agentDir, SettingsManager, {
+    packageSources: ["npm:profile-package"],
+  });
+  assert.deepEqual(packageSubset.settingsManager.getGlobalSettings().packages, ["npm:profile-package"]);
+
   const packageFree = await configuration.createSettingsManager(cwd, agentDir, SettingsManager, { loadPackages: false });
   assert.deepEqual(packageFree.settingsManager.getGlobalSettings().packages, []);
   assert.deepEqual(packageFree.settingsManager.getProjectSettings().packages, []);
@@ -115,6 +120,7 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
 
   const state = await configuration.state();
   assert.equal(state.profile.status, "loaded");
+  assert.equal(state.profile.packageCount, 2);
   assert.equal(state.config.profile, profileDir);
 });
 

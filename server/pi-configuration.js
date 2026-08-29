@@ -633,19 +633,23 @@ export class PiConfiguration {
     // legacy peer resolution avoids auto-installing Pi's host dependencies.
     // An explicitly supplied profile npmCommand remains authoritative.
     if (!Object.hasOwn(overlay, "npmCommand")) overlay.npmCommand = [...DEFAULT_NPM_COMMAND];
+    profile.packageCount = Array.isArray(overlay.packages) ? overlay.packages.length : 0;
     return { piConfig: clone(piConfig), profile, settings: overlay, inline, warnings };
   }
 
-  async createSettingsManager(cwd, agentDir, SettingsManager, { loadPackages = true } = {}) {
+  async createSettingsManager(cwd, agentDir, SettingsManager, { loadPackages = true, packageSources } = {}) {
     const resolved = await this.resolve();
-    if (loadPackages) recoverIncompleteGitPackages(agentDir, resolved.settings);
+    const settings = packageSources === undefined
+      ? resolved.settings
+      : { ...resolved.settings, packages: clone(packageSources) };
+    if (loadPackages) recoverIncompleteGitPackages(agentDir, settings);
     const storage = new OverlaySettingsStorage(cwd, agentDir, base => ["loaded", "cached"].includes(resolved.profile.status)
-      ? mergeSettings(base, resolved.settings)
+      ? mergeSettings(base, settings)
       : addInlineResources(base, resolved.inline), !loadPackages);
     return { settingsManager: SettingsManager.fromStorage(storage), resolved };
   }
 
-  recordRuntime(resourceLoader, extensionsResult, sessionId = null, cwd = null, errors = []) {
+  recordRuntime(resourceLoader, extensionsResult, sessionId = null, cwd = null, errors = [], packageStatus = null) {
     const skillState = resourceLoader.getSkills();
     const extensionState = extensionsResult || resourceLoader.getExtensions();
     const extensionErrors = [
@@ -681,6 +685,7 @@ export class PiConfiguration {
       })),
       skillDiagnostics,
       prompts: resourceLoader.getPrompts().prompts.length,
+      ...(packageStatus ? { packageStatus: clone(packageStatus) } : {}),
     };
   }
 

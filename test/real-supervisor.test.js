@@ -294,6 +294,7 @@ test("a failed Pi package install falls back to the core session runtime", () =>
     });
     const result = JSON.parse(output.trim().split("\n").at(-1));
     assert.ok(result.commands.includes("settings"));
+    assert.deepEqual(result.pi.runtime.packageStatus, { configured: 1, loaded: 0, failed: 1 });
     assert.match(result.pi.runtime.errors.find(error => error.path === "<pi-packages>")?.error || "", /ENOENT/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -99,6 +99,7 @@ export const store = {
     fileTarget: "none",
     fileTargets: ["none", "HEAD"],
     fileLoading: false,
+    filesLoading: false,
     filesLoadedKey: null,
     // server data
     projects: [],

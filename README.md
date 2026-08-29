@@ -95,16 +95,17 @@ layered onto each web session, while `packages` and `extensions` add sources
 directly.
 Relative paths in the web config resolve from `PI_WEB_HOME`. Missing npm/git
 packages are installed by Pi into the persistent `PI_CODING_AGENT_DIR` when a
-session loads. GitHub profiles also fetch complete skill directories and
+session loads or the profile is applied. GitHub profiles also fetch complete skill directories and
 supported extension resources into a deployment-local commit snapshot;
-**Settings → Refresh profile** re-fetches them. The last successfully fetched
-remote profile and resources are cached for restart/offline fallback.
+**Settings → Apply** re-fetches the profile, installs missing packages, and
+reloads idle sessions. The last successfully fetched remote profile and
+resources are cached for restart/offline fallback.
 
 Profiles intentionally do **not** import `auth.json`, models, or transcripts:
 those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
 extensions execute as the server user with full system access, so an automatic
 GitHub dotfiles profile is also a trust decision: reference only accounts and
-repositories you trust. Refresh reloads the selected idle session runtime;
+repositories you trust. Apply reloads the selected idle session runtime;
 active streaming sessions are deferred safely. Pi-compatible tools, commands, hooks, startup events, skills, prompts, and
 portable extension dialogs work in pi-ez-web; terminal-only TUI components are
 not rendered. The real web runtime supplies browser-backed `select`, `confirm`,

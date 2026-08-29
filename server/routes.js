@@ -1373,7 +1373,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const cfg = loadConfig();
     const autoProfileChange = body.githubOwner !== undefined && normalizePiConfig(cfg.pi).profileSource === "auto";
     const reporter = body.pi !== undefined || autoProfileChange
-      ? createOperationReporter({ id: operationRequestId(c, body), kind: "pi-profile", title: "Reload Pi resources" })
+      ? createOperationReporter({ id: operationRequestId(c, body), kind: "pi-profile", title: "Apply Pi resources" })
       : null;
     reporter?.log({ type: "request", phase: "request", message: "POST /api/settings (Pi resource configuration)" });
     let nextPiConfiguration;
@@ -1467,8 +1467,8 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
         message: piConfiguration.profile?.status === "error"
           ? `Pi profile could not be loaded: ${piConfiguration.profile.error || "unknown profile error"}`
           : body.activeSessionId
-            ? "Pi resources refreshed and the selected session runtime was reloaded."
-            : "Pi resources refreshed; the new configuration is ready for the next session runtime.",
+            ? "Pi profile applied and the selected session runtime was reloaded."
+            : "Pi profile applied; the new configuration is ready for the next session runtime.",
       })
       : null;
     return c.json({

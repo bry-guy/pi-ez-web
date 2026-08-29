@@ -169,6 +169,7 @@ async function boot() {
         });
       }
       if (url.includes("/api/projects/") && (url.endsWith("/files") || url.includes("/files?"))) {
+        dom.window.__fileListCalls = (dom.window.__fileListCalls || 0) + 1;
         const target = new URL(url, "http://pi-web.test").searchParams.get("target") || "none";
         const targets = ["none", "HEAD", "main"];
         const tree = target === "none" ? [
@@ -195,7 +196,7 @@ async function boot() {
 test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
-  const { api, applyEvent } = await import("../public/js/api.js");
+  const { api, applyEvent, refreshState } = await import("../public/js/api.js");
   const { openSessionPicker, selectSession } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
@@ -239,6 +240,22 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   const send = root.querySelector(".send-btn");
   assert.equal(send.disabled, false);
+  const composerTextarea = root.querySelector(".composer textarea");
+  Object.defineProperty(composerTextarea, "scrollHeight", {
+    configurable: true,
+    get: () => composerTextarea.value.length > 20 ? 180 : 50,
+  });
+  composerTextarea.value = "A long message that wraps in the composer.";
+  composerTextarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  const composerExpand = root.querySelector(".composer-expand-btn");
+  assert.equal(composerExpand.classList.contains("hidden"), false, "long drafts show the editor expansion control");
+  composerExpand.click();
+  assert.equal(composerExpand.getAttribute("aria-expanded"), "true");
+  assert.ok(Number.parseInt(composerTextarea.style.height, 10) > 50, "expanded editor is taller than its two-line default");
+  composerTextarea.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(composerExpand.getAttribute("aria-expanded"), "false", "Escape collapses the expanded editor");
+  composerTextarea.value = "";
+  composerTextarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /Another session/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
   assert.equal(root.querySelector("pi-header [data-act='settings']"), null);
@@ -468,12 +485,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings .pi-resource-scroll").textContent, /context-mode|todo-discipline/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
   assert.match(root.querySelector("[data-setting='piPackages']").value, /npm:context-mode/);
-  const refreshProfile = root.querySelector("pi-settings [data-act='refresh-pi-configuration']");
-  assert.ok(refreshProfile);
-  refreshProfile.click();
+  const applyProfile = root.querySelector("pi-settings [data-act='save-pi-configuration']");
+  assert.ok(applyProfile);
+  assert.equal(applyProfile.textContent, "Apply");
+  assert.equal(root.querySelector("pi-settings [data-act='refresh-pi-configuration']"), null);
+  applyProfile.click();
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.match(root.querySelector("pi-settings").textContent, /Pi profile refreshed/);
-  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /OpenAI API key/);
+  assert.match(root.querySelector("pi-settings").textContent, /Pi profile applied/);
+  assert.match(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
   root.querySelector("pi-settings [data-act='save-repository-settings']").click();
@@ -491,8 +510,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   defaultToggle.focus();
   defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   assert.equal(dom.window.document.activeElement?.hasAttribute("data-model-automatic"), true, "Automatic is first in keyboard navigation");
+  defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(store.state.view, "settings", "closing the model picker does not leave Settings");
+  root.querySelector("pi-settings [data-act='close-settings']").click();
+  assert.equal(store.state.view, "chat", "Settings closes back to chat with its close control");
+  store.set({ view: "settings" });
   dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  store.set({ view: "chat" });
+  assert.equal(store.state.view, "chat", "Escape closes Settings");
 
   root.querySelector(".model-chip").click();
   assert.ok(root.querySelector(".model-popover"));
@@ -521,6 +545,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(fileTarget.selectedOptions[0].textContent, /Working tree/);
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));
   assert.ok(root.querySelector("pi-files .file-row.status-new[data-file='new.js']"));
+  const initialFileRow = root.querySelector("pi-files [data-file='README.md']");
+  const initialFileCalls = dom.window.__fileListCalls;
+  await refreshState();
+  assert.equal(dom.window.__fileListCalls, initialFileCalls, "state refresh does not invalidate the file tree");
+  assert.equal(root.querySelector("pi-files [data-file='README.md']"), initialFileRow, "state refresh preserves the file tree DOM");
+  await root.ensureFiles(true);
+  assert.equal(dom.window.__fileListCalls, initialFileCalls + 1, "explicit file revalidation still runs");
+  assert.equal(root.querySelector("pi-files [data-file='README.md']"), initialFileRow, "unchanged file data does not replace the tree DOM");
+  fileTarget = root.querySelector(".file-target");
   fileTarget.value = "HEAD";
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -540,6 +573,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-files [data-file='src/app.js']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files .file-viewer"));
+  assert.equal(root.querySelector("pi-files .file-viewer").getAttribute("role"), "dialog");
+  assert.equal(root.querySelector("pi-files .file-viewer").getAttribute("aria-modal"), "true");
+  assert.equal(dom.window.document.activeElement?.getAttribute("aria-label"), "Close file preview");
   assert.equal(root.querySelector("pi-files .file-viewer .file-target"), null);
   assert.equal(root.querySelector("pi-files [data-act='back']"), null);
   assert.equal(root.querySelector(".file-code"), null);
@@ -548,6 +584,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /HEAD/);
   root.querySelector("pi-files .file-viewer [data-act='close']").click();
   assert.equal(store.state.filePath, null);
+  assert.equal(dom.window.document.activeElement?.dataset.file, "src/app.js", "closing restores focus to the selected file");
   assert.ok(root.querySelector("pi-files .files:not(.file-viewer)"));
   assert.equal(root.querySelector(".files-scroll").scrollTop, 37);
   fileTarget = root.querySelector(".file-target");
@@ -567,7 +604,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-files [data-file='src/app.js']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(root.querySelector(".file-view-scroll").scrollTop, 73);
-  root.querySelector("pi-files .file-viewer [data-act='close']").click();
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(store.state.filePath, null, "Escape closes the file preview");
+  root.querySelector("pi-files [data-file='src/app.js']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(root.querySelector(".file-view-scroll").scrollTop, 73);
+  root.querySelector("[data-file-viewer-scrim]").click();
+  assert.equal(store.state.filePath, null, "backdrop closes the file preview");
   root.querySelector("pi-files [data-act='close']").click();
 
   const sidebar = root.querySelector("pi-sidebar");

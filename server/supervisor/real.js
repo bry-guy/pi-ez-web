@@ -25,6 +25,16 @@ function errorDetails(error) {
   return publicError(parts.join("\nCaused by: "));
 }
 
+function packageFailureMessage(error, configured, failed) {
+  const total = configured.length;
+  const count = failed.length || (total ? 1 : 0);
+  const affected = total
+    ? ` for ${count} of ${total} configured package${total === 1 ? "" : "s"}`
+    : "";
+  const detail = errorDetails(failed.at(-1)?.error || error);
+  return `Pi package setup failed${affected}; affected packages were skipped. ${detail}`;
+}
+
 export function isPackageSetupFailure(error) {
   return /\b(?:npm|pnpm|bun|git)\b[\s\S]*\b(?:failed with (?:code|signal)|ENOENT)\b/i.test(errorDetails(error));
 }
@@ -80,6 +90,8 @@ export class RealSupervisor {
     this.models = null;
     this.modelError = null;
     this.packageSetupError = null;
+    this.packageSources = null;
+    this.packageStatus = null;
     this.piConfiguration = new PiConfiguration();
   }
 
@@ -197,12 +209,14 @@ export class RealSupervisor {
       const agentDir = SDKModule.getAgentDir();
       const syncExtensionPath = await this.syncAdapter?.extensionPath?.() || null;
       const extensionPaths = [WEB_SUBAGENT_EXTENSION, ...(syncExtensionPath ? [syncExtensionPath] : [])];
-      const loadResources = async loadPackages => {
+      const resolved = await this.piConfiguration.resolve();
+      const configuredPackages = Array.isArray(resolved.settings?.packages) ? resolved.settings.packages : [];
+      const loadResources = async (loadPackages, packageSources, resolveOnly = false) => {
         const { settingsManager } = await this.piConfiguration.createSettingsManager(
           cwd,
           agentDir,
           SDKModule.SettingsManager,
-          { loadPackages },
+          { loadPackages, ...(packageSources !== undefined ? { packageSources } : {}) },
         );
         const resourceLoader = new SDKModule.DefaultResourceLoader({
           cwd,
@@ -210,22 +224,63 @@ export class RealSupervisor {
           settingsManager,
           additionalExtensionPaths: extensionPaths,
         });
-        await resourceLoader.reload();
+        if (resolveOnly) {
+          const packageManager = new SDKModule.DefaultPackageManager({ cwd, agentDir, settingsManager });
+          await packageManager.resolve();
+        } else await resourceLoader.reload();
         return { settingsManager, resourceLoader };
       };
 
       let resources;
-      if (this.packageSetupError) {
-        resources = await loadResources(false);
+      if (this.packageSetupError && Array.isArray(this.packageSources)) {
+        try {
+          resources = await loadResources(true, this.packageSources);
+          this.packageStatus = {
+            configured: configuredPackages.length,
+            loaded: this.packageSources.length,
+            failed: Math.max(0, configuredPackages.length - this.packageSources.length),
+          };
+        } catch (error) {
+          if (!isPackageSetupFailure(error)) throw error;
+          this.packageSources = [];
+          this.packageSetupError = packageFailureMessage(error, configuredPackages, [{ error }]);
+          this.packageStatus = { configured: configuredPackages.length, loaded: 0, failed: configuredPackages.length ? 1 : 0 };
+          resources = await loadResources(false);
+        }
       } else {
         try {
           resources = await loadResources(true);
+          this.packageSources = configuredPackages;
+          this.packageSetupError = null;
+          this.packageStatus = { configured: configuredPackages.length, loaded: configuredPackages.length, failed: 0 };
         } catch (error) {
           if (!isPackageSetupFailure(error)) throw error;
-          // A broken optional package must not take the core session runtime offline.
-          this.packageSetupError = errorDetails(error);
-          console.error("pi-ez-web Pi package setup failed; continuing without packages", this.packageSetupError);
-          resources = await loadResources(false);
+          const workingPackages = [];
+          const failedPackages = [];
+          for (const source of configuredPackages) {
+            try {
+              await loadResources(true, [source], true);
+              workingPackages.push(source);
+            } catch (packageError) {
+              failedPackages.push({ source, error: packageError });
+            }
+          }
+          this.packageSources = workingPackages;
+          this.packageSetupError = packageFailureMessage(error, configuredPackages, failedPackages);
+          this.packageStatus = {
+            configured: configuredPackages.length,
+            loaded: workingPackages.length,
+            failed: failedPackages.length || (configuredPackages.length && !workingPackages.length ? 1 : 0),
+          };
+          console.error("pi-ez-web Pi package setup failed; skipping affected packages", this.packageSetupError);
+          try {
+            resources = await loadResources(true, workingPackages);
+          } catch (finalError) {
+            this.packageSources = [];
+            this.packageSetupError = packageFailureMessage(finalError, configuredPackages, [...failedPackages, { error: finalError }]);
+            this.packageStatus = { configured: configuredPackages.length, loaded: 0, failed: configuredPackages.length ? 1 : 0 };
+            resources = await loadResources(false);
+          }
         }
       }
       const { settingsManager, resourceLoader } = resources;
@@ -252,7 +307,7 @@ export class RealSupervisor {
       const packageErrors = this.packageSetupError
         ? [{ path: "<pi-packages>", error: this.packageSetupError }]
         : [];
-      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult, result.session.sessionId, cwd, packageErrors);
+      this.piConfiguration.recordRuntime(resourceLoader, result.extensionsResult, result.session.sessionId, cwd, packageErrors, this.packageStatus);
       return result;
     } catch (error) {
       const detail = errorDetails(error);
@@ -945,6 +1000,8 @@ export class RealSupervisor {
     for (const st of this.live.values()) await this._disposeLiveState(st, "reload");
     this.live.clear();
     this.packageSetupError = null;
+    this.packageSources = null;
+    this.packageStatus = null;
     this.piConfiguration.invalidate();
     report?.({ type: "phase", phase: "runtime-load", message: "Reloading Pi profile settings and resources." });
     await this.piConfiguration.state({ force: true, report });
