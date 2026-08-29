@@ -90,9 +90,10 @@ version 5 and includes capability markers for workspace and branch features.
   `main`, or `master` when that is the repository's important branch) uses the
   repository checkout; app-created non-primary branches use linked worktrees.
   Existing externally-created contexts are discovered and remain usable.
-- A session has one execution directory at a time. Switching moves only that
-  session; the session-picker Fork action creates a child conversation in the
-  selected branch. Pi's `/fork` command creates a child on the current branch.
+- A session has one execution directory at a time. Selecting a different
+  branch moves only that session; the session-picker Fork action creates a
+  child conversation in the selected branch. Pi's `/fork` command creates a
+  child on the current branch.
   Multiple sessions may share a context and the UI shows them without occupancy
   locks.
 - New branches are created from a selected committed local base, defaulting to

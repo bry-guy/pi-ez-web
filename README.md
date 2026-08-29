@@ -43,7 +43,7 @@ and skill commands. Pi's built-in slash commands are web-adapted too: model sele
 Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
 OpenAI API-key login, and the default-model selector. Project sessions provide a
 small branch workflow: choose a branch and name when starting, then use the
-session title to Switch or Fork into another branch. The same view offers local
+session title to choose a branch or fork into another branch. The same view offers local
 Merge to main, Push, and confirmed local branch deletion. Branch state,
 checkout/worktree kind, clean/dirty state, and sessions sharing a context remain
 visible. `/fork` remains Pi's built-in same-branch conversation fork. Plain chats

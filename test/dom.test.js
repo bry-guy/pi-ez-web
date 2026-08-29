@@ -229,7 +229,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   Object.assign(session, { contextId: "ctx-missing", branch: null, workspacePath: "/tmp/missing" });
   openSessionPicker("p1", { mode: "switch", sourceSessionId: "s1" });
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false, "a missing context can switch to main");
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null, "switch action is removed");
   root.querySelector("[data-act='close-session-picker']").click();
   Object.assign(session, originalSession);
   project.contexts.pop();
@@ -248,13 +248,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.set({ view: "chat" });
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.ok(root.querySelector(".session-picker"));
-  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, true);
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, true);
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
   assert.equal(root.querySelector("[data-session-name]").value, "New session");
   assert.match(root.querySelector(".session-picker-actions").textContent, /Session/);
-  assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")));
+  assert.equal([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")), false);
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));
   assert.equal(root.querySelector("pi-header [data-act='sync-session']"), null, "Sync is no longer a header action");
   assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Sync is available through slash commands only");
@@ -263,6 +263,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(dom.window.__fetchCalls, 1);
   assert.match(root.querySelector("[data-operation-hint='fetch']").textContent, /Fetched Git branches/);
+  assert.equal(root.querySelector(".session-branch-actions [data-act='run-hook']"), null);
+  assert.equal(root.querySelector(".session-picker-actions [data-act='run-hook']").textContent, "Check");
+  const gitSection = root.querySelector(".session-branch-actions");
+  const sessionSection = root.querySelector(".session-picker-actions");
+  const operationFeed = root.querySelector(".session-operation-feed");
+  assert.ok(gitSection.compareDocumentPosition(sessionSection) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(sessionSection.compareDocumentPosition(operationFeed) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
   const feedNow = Date.now() + 1000;
   store.state.operations.unshift({ id: "feed-test", kind: "fetch", title: "Fetch Git branches", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older fetch event" }, { at: feedNow, type: "result", message: "Latest fetch event" }] });
   store.notify("state");
@@ -322,10 +329,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".branch-picker-pinned"), null);
   assert.ok(root.querySelector("[data-act='select-session-branch'][data-branch='__new__']"));
   root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
-  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").disabled, false);
-  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, false);
-  root.querySelector("[data-act='apply-session-branch'][data-mode='switch']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
   assert.equal(store.findSession("s1", store.state.projects[0].sessions).branch, "develop");
   assert.match(root.querySelector("pi-header .workspace-branch").textContent, /develop/);
   assert.match(store.state.operations.find(operation => operation.kind === "switch-session").events.at(-1).message, /Switched session s1 to develop/);
@@ -745,7 +750,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.set({ workspaceSettingsOpen: false });
   root.querySelector("pi-header [data-act='workspace-settings']")?.click();
   assert.ok(root.querySelector(".session-picker"));
-  assert.ok(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"));
+  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
   root.querySelector("[data-act='close-session-picker']")?.click();
 
   dom.window.__holdMerge = true;
