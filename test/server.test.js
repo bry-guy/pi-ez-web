@@ -465,6 +465,18 @@ test("project creation: first session on the checkout branch", async () => {
   assert.deepEqual(p.remoteBranches, []);
 });
 
+test("project fetch runs Git fetch and reports an operation", async () => {
+  const response = await post(`/api/projects/${projectId}/fetch`, {});
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.projectId, projectId);
+  assert.equal(body.fetched, true);
+  assert.equal(body.command, "git fetch --all --prune");
+  assert.equal(body.operation.kind, "fetch");
+  assert.equal(body.operation.status, "success");
+});
+
 test("slash command discovery supports /settings and /name", async () => {
   const commands = await (await get(`/api/sessions/${firstSessionId}/commands`)).json();
   const commandNames = commands.commands.map(command => command.name);

@@ -207,6 +207,8 @@ header.bar {
   display: flex; align-items: center; min-width: 0; margin-top: 1px;
   font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
+.bar-status { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; margin-top: 3px; }
+.workspace-commit { color: var(--faint); font: 10px var(--mono); white-space: nowrap; cursor: help; }
 .bar-operation-hint {
   display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px;
   color: var(--muted); font: 10.5px/1.35 var(--mono);
@@ -701,7 +703,6 @@ aside.files.file-viewer {
 .session-branch-actions { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
 .session-context-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 2px 8px; color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .session-context-heading .settings-action { padding: 4px 8px; font-size: 10px; text-transform: none; letter-spacing: normal; }
-.session-context-heading-actions { display: flex; align-items: center; gap: 6px; }
 .session-picker .workspace-actions { justify-content: flex-end; }
 .session-history { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
 .session-history-heading { margin: 0 2px 8px; }

@@ -19,7 +19,7 @@ const state = {
     id: "p1", name: "demo", repoPath: "/tmp/demo", branch: "main",
     branches: ["main", "develop", "feature/alpha", "feature/beta", "feature/gamma", "feature/delta", "feature/epsilon"], remoteBranches: ["origin/feature/remote-ui"], worktrees: { main: "/tmp/demo" },
     contexts: [
-      { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, sessions: [
+      { id: "ctx-main", branch: "main", path: "/tmp/demo", kind: "checkout", dirty: false, status: "clean", ahead: 0, behind: 0, head: "abcdef1234567890", sessions: [
         { id: "s1", title: "New session", when: "now", streaming: false },
         { id: "sibling", title: "Sibling session", when: "now", streaming: false },
       ] },
@@ -108,13 +108,10 @@ async function boot() {
         if (dom.window.__holdMerge) return new Promise(resolve => { dom.window.__resolveMerge = () => resolve(dom.window.__mergeFails ? json({ error: "http_502" }, false, 502) : json({ ok: true, merged: "feat/ship", into: "main", deleted: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Merged feat/ship into main." }] } })); });
         return json({ ok: true, merged: "feat/ship", into: "main", deleted: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Merged feat/ship into main." }] } });
       }
-      if (url === "/api/sessions/s1/sync" && options.method === "POST") {
-        state.projects[0].sessions[0].synchronized = true;
-        state.projects[0].sessions[0].syncState = "available";
-        state.projects[0].contexts[0].sessions[0].synchronized = true;
-        state.projects[0].contexts[0].sessions[0].syncState = "available";
-        const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-op";
-        return json({ ok: true, sessionId: "s1", created: true, synchronized: true, syncState: "available", operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Conversation synchronized successfully." }] } });
+      if (url === "/api/projects/p1/fetch" && options.method === "POST") {
+        dom.window.__fetchCalls = (dom.window.__fetchCalls || 0) + 1;
+        const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-fetch";
+        return json({ ok: true, projectId: "p1", fetched: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Fetched Git branches." }] } });
       }
       if (url === "/api/sessions/s1/sync/refresh" && options.method === "POST") {
         dom.window.__refreshCalls = (dom.window.__refreshCalls || 0) + 1;
@@ -203,6 +200,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
+  assert.equal(root.querySelector(".workspace-commit").textContent, "@abcdef12");
+  assert.equal(root.querySelector(".workspace-commit").title, "Current commit abcdef1234567890");
   applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_request", requestId: "ui-1", method: "select", title: "Choose a conversation", options: ["one", "two"] });
   assert.match(root.querySelector(".extension-ui-modal").textContent, /Choose a conversation/);
   root.querySelector("[data-extension-ui-option='1']").click();
@@ -258,28 +257,32 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Workspace")));
   assert.ok([...root.querySelectorAll(".session-context-heading")].some(node => node.textContent.includes("Git")));
   assert.equal(root.querySelector("pi-header [data-act='sync-session']"), null, "Sync is no longer a header action");
-  assert.equal(root.querySelector(".session-picker [data-act='sync-session']").textContent, "sync");
-  root.querySelector(".session-picker [data-act='sync-session']").click();
+  assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Sync is available through slash commands only");
+  assert.equal(root.querySelector(".session-picker [data-act='fetch-branches']").textContent, "Fetch");
+  root.querySelector(".session-picker [data-act='fetch-branches']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(root.querySelector(".operation-modal"), null, "operations no longer open a terminal modal");
-  assert.match(root.querySelector("[data-operation-hint='sync']").textContent, /Conversation synchronized/);
-  assert.equal(root.querySelector(".session-picker [data-act='sync-session']"), null, "Enrolled sessions do not offer sync again");
+  assert.equal(dom.window.__fetchCalls, 1);
+  assert.match(root.querySelector("[data-operation-hint='fetch']").textContent, /Fetched Git branches/);
   const feedNow = Date.now() + 1000;
-  store.state.operations.unshift({ id: "feed-test", kind: "sync", title: "Synchronize this conversation", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older sync event" }, { at: feedNow, type: "result", message: "Latest sync event" }] });
+  store.state.operations.unshift({ id: "feed-test", kind: "fetch", title: "Fetch Git branches", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older fetch event" }, { at: feedNow, type: "result", message: "Latest fetch event" }] });
   store.notify("state");
   let feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
   assert.ok(feedEvents.length >= 2);
-  assert.equal(feedEvents.at(-1).textContent, "Latest sync event");
+  assert.equal(feedEvents.at(-1).textContent, "Latest fetch event");
+  const currentProject = store.state.projects.find(item => item.id === "p1");
+  const currentSession = store.findSession("s1", currentProject.sessions);
+  Object.assign(currentSession, { synchronized: true, syncState: "available" });
+  Object.assign(currentProject.contexts[0].sessions[0], { synchronized: true, syncState: "available" });
+  store.notify("state");
+  assert.ok(root.querySelector("pi-header .bar-main .sync-badge"));
+  assert.equal(root.querySelector("header.bar > .sync-badge"), null, "Sync status stays in the title group");
   root.querySelector("[data-act='close-session-picker']").click();
-  assert.equal(root.querySelector("pi-header [data-act='refresh-sync']").textContent, "Refresh");
-  root.querySelector("pi-header [data-act='refresh-sync']").click();
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(dom.window.__refreshCalls, 1);
+  assert.equal(root.querySelector("pi-header [data-act='refresh-sync']"), null, "Sync refresh is available through slash commands only");
   selectSession("p1", "sibling");
   await new Promise(resolve => setTimeout(resolve, 20));
   selectSession("p1", "s1");
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(dom.window.__refreshCalls, 2);
+  assert.equal(dom.window.__refreshCalls, 1);
   dom.window.__holdRefresh = true;
   const firstRefresh = api.refreshSyncSession("s1");
   const secondRefresh = api.refreshSyncSession("s1");
@@ -287,10 +290,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   dom.window.__resolveRefresh();
   await Promise.all([firstRefresh, secondRefresh]);
   dom.window.__holdRefresh = false;
-  assert.equal(dom.window.__refreshCalls, 3);
+  assert.equal(dom.window.__refreshCalls, 2);
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
-  assert.equal(feedEvents.at(-1).textContent, "Latest sync event", "picker logs survive close and reopen");
+  assert.equal(feedEvents.at(-1).textContent, "Latest fetch event", "picker logs survive close and reopen");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='pull-branch']"));

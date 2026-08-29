@@ -470,6 +470,27 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     return c.json({ id: project.id, sessionId, repoPath, cloned, contextId: context?.id || null, branch: context?.branch || null, workspacePath: context?.path || repoPath, setup: null, setupNeeded });
   });
 
+  api.post("/projects/:id/fetch", async c => {
+    const id = c.req.param("id");
+    const project = loadConfig().projects.find(item => item.id === id);
+    if (!project) return err(c, 404, "no_such_project");
+    const body = (await c.req.json().catch(() => ({}))) || {};
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), kind: "fetch", title: "Fetch Git branches" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/projects/${id}/fetch` });
+    try {
+      const result = await ws.fetchRepositoryAsync(project.repoPath, { report: reporter.log });
+      const operation = reporter.finish({ httpStatus: 200, message: "Fetched Git branches." });
+      return c.json({ ok: true, projectId: id, ...result, operation });
+    } catch (e) {
+      if (e.code === "git_fetch_failed") {
+        const operation = reporter.finish({ status: "error", httpStatus: 409, message: e.detail || e.message || e.code });
+        return err(c, 409, e.code, { detail: e.detail, operation });
+      }
+      reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
+      throw e;
+    }
+  });
+
   api.post("/projects/:id/sessions", async c => {
     const project = loadConfig().projects.find(p => p.id === c.req.param("id"));
     if (!project) return err(c, 404, "no_such_project");
@@ -741,8 +762,8 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   });
   api.post("/sessions/:id/sync", syncSession);
   api.post("/sessions/:id/sync/refresh", refreshSyncSession);
-  // Keep the action name easy for non-browser clients while the UI uses the
-  // noun “Synchronize”. Both routes use the configured Pi sync integration.
+  // Keep the action name easy for non-browser clients. Both routes use the
+  // configured Pi sync integration.
   api.post("/sessions/:id/enroll", syncSession);
 
   api.get("/sessions/:id/commands", async c => {

@@ -115,6 +115,16 @@ function runGitProcess(cwd, args, report) {
   });
 }
 
+export async function fetchRepositoryAsync(repoPath, { report = null } = {}) {
+  const args = ["fetch", "--all", "--prune"];
+  try {
+    const stdout = await runGitProcess(repoPath, args, report);
+    return { command: `git ${args.join(" ")}`, stdout, stderr: "", fetched: true };
+  } catch (error) {
+    throw gitFailure("git_fetch_failed", error, "Git fetch failed");
+  }
+}
+
 export function prepareMain(repoPath, { fetch = true, primaryBranch = null, report = null } = {}) {
   primaryBranch ||= defaultBranch(repoPath);
   const external = mainExternalWorktree(repoPath, primaryBranch);

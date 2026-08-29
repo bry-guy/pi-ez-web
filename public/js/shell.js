@@ -425,8 +425,6 @@ class PiHeader extends HTMLElement {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
       void refreshState().catch(() => {});
-    } else if (act === "refresh-sync") {
-      void refreshSyncConversation();
     } else if (act === "close-workspace-settings") {
       store.set({ workspaceSettingsOpen: false });
     } else if (act === "files") {
@@ -451,7 +449,7 @@ class PiHeader extends HTMLElement {
 
   contextLabel(context) {
     if (context?.kind === "unavailable") return "Unavailable context";
-    return context?.branch || `detached @ ${(context?.head || "unknown").slice(0, 8)}`;
+    return context?.branch || "detached HEAD";
   }
 
   render() {
@@ -471,18 +469,18 @@ class PiHeader extends HTMLElement {
     const extensionStatus = activeSession?.id && store.state.extensionStatuses[activeSession.id]?.["pi-sync"]
       ? `<span class="extension-status" title="Pi extension status">${esc(store.state.extensionStatuses[activeSession.id]["pi-sync"])}</span>`
       : "";
-    const refreshOperation = activeSession?.id ? operationForScope("sync-refresh", { sessionId: activeSession.id }) : null;
-    const localBusy = !!activeSession?.id && (store.transcript(activeSession.id).streaming || store.transcript(activeSession.id).compacting || activeSession.compacting);
-    const syncRefreshButton = activeSession?.synchronized && !s.sessionPicker
-      ? `<button class="ghost-btn" data-act="refresh-sync" title="Refresh synchronized conversation" ${localBusy || refreshOperation?.status === "running" ? "disabled" : ""}>Refresh</button>`
-      : "";
+    const statusArea = syncStatus || extensionStatus ? `<div class="bar-status">${syncStatus}${extensionStatus}</div>` : "";
     const workspace = inProject ? this.sessionContext() : null;
     const branch = workspace ? this.contextLabel(workspace) : null;
+    const commit = workspace?.head ? String(workspace.head) : "";
+    const commitLabel = commit
+      ? `<span class="workspace-commit" title="Current commit ${esc(commit)}">@${esc(commit.slice(0, 8))}</span>`
+      : "";
     const workspaceArea = inProject && workspace ? `
       <div class="bar-sub">
         <button class="workspace-trigger" data-act="workspace-settings" title="Show Git context" aria-label="Show Git context for ${esc(p.name)} ${esc(branch)}">
           <span class="workspace-repo">${esc(p.name)}</span><span class="workspace-divider">·</span>
-          <span class="workspace-branch">${esc(branch)}</span>${this.workspaceLabels(workspace)}
+          <span class="workspace-branch">${esc(branch)}</span>${commitLabel}${this.workspaceLabels(workspace)}
         </button>
       </div>` : "";
     const operationScope = {
@@ -510,8 +508,8 @@ class PiHeader extends HTMLElement {
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     this.innerHTML = `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
-      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${operationArea}</div>
-      ${syncStatus}${extensionStatus}${syncRefreshButton}${filesBtn}
+      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${statusArea}${operationArea}</div>
+      ${filesBtn}
     </header>`;
   }
 
