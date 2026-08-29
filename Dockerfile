@@ -47,31 +47,31 @@ RUN apt-get update \
 RUN set -eux; \
     tmpdir="$(mktemp -d)"; \
     trap 'rm -rf "$tmpdir"' EXIT; \
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
       "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64-musl.tar.gz" \
       --output "$tmpdir/mise.tar.gz"; \
     printf '%s  %s\n' "$MISE_SHA256" "$tmpdir/mise.tar.gz" | sha256sum --check --strict; \
     tar --extract --gzip --file "$tmpdir/mise.tar.gz" --directory "$tmpdir"; \
     install --mode 0755 "$tmpdir/mise/bin/mise" /usr/local/bin/mise; \
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
       "https://github.com/jdx/fnox/releases/download/${FNOX_VERSION}/fnox-x86_64-unknown-linux-musl.tar.gz" \
       --output "$tmpdir/fnox.tar.gz"; \
     printf '%s  %s\n' "$FNOX_SHA256" "$tmpdir/fnox.tar.gz" | sha256sum --check --strict; \
     tar --extract --gzip --file "$tmpdir/fnox.tar.gz" --directory "$tmpdir"; \
     install --mode 0755 "$tmpdir/fnox" /usr/local/bin/fnox; \
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
       "https://cache.agilebits.com/dist/1P/op2/pkg/${OP_VERSION}/op_linux_amd64_${OP_VERSION}.zip" \
       --output "$tmpdir/op.zip"; \
     printf '%s  %s\n' "$OP_SHA256" "$tmpdir/op.zip" | sha256sum --check --strict; \
     unzip -q "$tmpdir/op.zip" -d "$tmpdir/op"; \
     install --mode 0755 "$tmpdir/op/op" /usr/local/bin/op; \
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
       "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_amd64.zip" \
       --output "$tmpdir/tofu.zip"; \
     printf '%s  %s\n' "$OPENTOFU_SHA256" "$tmpdir/tofu.zip" | sha256sum --check --strict; \
     unzip -q "$tmpdir/tofu.zip" -d "$tmpdir/tofu"; \
     install --mode 0755 "$tmpdir/tofu/tofu" /usr/local/bin/tofu; \
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
       --output "$tmpdir/kubectl"; \
     printf '%s  %s\n' "$KUBECTL_SHA256" "$tmpdir/kubectl" | sha256sum --check --strict; \
