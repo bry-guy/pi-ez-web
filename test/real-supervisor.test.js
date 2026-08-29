@@ -42,6 +42,28 @@ test("model-less session attachment resolves the configured default before creat
   assert.deepEqual(attached, ["session-1", "/tmp", "openai-codex/gpt-5.6-luna"]);
 });
 
+test("messages reconcile synchronized sessions before a normal prompt", async () => {
+  const prompted = [];
+  const session = {
+    model: { provider: "test", id: "model", api: "test" },
+    isStreaming: false,
+    prompt: async text => prompted.push(text),
+  };
+  const supervisor = new RealSupervisor({});
+  supervisor.live.set("session-1", {
+    session,
+    pendingMessages: [],
+  });
+  supervisor.syncAdapter = {
+    beforePrompt: async id => {
+      assert.equal(id, "session-1");
+      return { switched: false, sessionId: id };
+    },
+  };
+  await supervisor.message("session-1", "hello", "prompt");
+  assert.deepEqual(prompted, ["hello"]);
+});
+
 test("compaction events become visible status activities", () => {
   const events = [];
   const supervisor = new RealSupervisor({ emit: (id, type, data) => events.push({ id, type, data }) });

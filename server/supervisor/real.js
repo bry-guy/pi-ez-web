@@ -342,7 +342,10 @@ export class RealSupervisor {
       this.pendingSyncHeads.delete(session.sessionId);
       await session.navigateTree(pendingHead, { summarize: false });
     }
-    return this.live.get(session.sessionId);
+    const sync = await this.syncAdapter?.beforePrompt?.(session.sessionId);
+    return sync?.switched
+      ? this.live.get(sync.sessionId || session.sessionId) || this.live.get(session.sessionId)
+      : this.live.get(session.sessionId);
   }
 
   _endTurnWithError(id, st, error) {
@@ -630,7 +633,12 @@ export class RealSupervisor {
   }
 
   async message(id, text, mode, images = [], clientMessageId = null) {
-    const st = await this._attachById(id);
+    let st = await this._attachById(id);
+    if (!["steer", "followUp"].includes(mode) && !String(text || "").startsWith("/")) {
+      const sync = await this.syncAdapter?.beforePrompt?.(id);
+      if (sync?.sessionId) id = sync.sessionId;
+      if (sync?.switched) st = await this._attachById(id);
+    }
     if (!isUsableModel(st.session.model)) {
       throw Object.assign(new Error("model_required"), { code: "model_required" });
     }

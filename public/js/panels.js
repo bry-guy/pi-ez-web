@@ -881,36 +881,54 @@ class PiSessionPicker extends HTMLElement {
     return `${count} file${count === 1 ? "" : "s"} ${label}`;
   }
 
-  sessionDetails(context) {
-    if (!context) return "";
-    const commit = context.commit || {};
-    const hash = commit.shortHash || commit.hash?.slice(0, 8) || context.head?.slice(0, 8) || "Unavailable";
-    const subject = String(commit.subject || "").split(/\r?\n/, 1)[0];
-    const commitValue = subject ? `${hash} ${subject}` : hash;
-    const details = context.statusDetails;
-    const statusParts = [];
-    if (details?.conflicts) statusParts.push(this.detailFileCount(details.conflicts, "conflicted"));
-    if (details?.staged) statusParts.push(this.detailFileCount(details.staged, "staged"));
-    if (details?.unstaged) statusParts.push(this.detailFileCount(details.unstaged, "unstaged"));
-    if (details?.untracked) statusParts.push(this.detailFileCount(details.untracked, "untracked"));
-    const tracking = [
-      context.ahead ? `${context.ahead} ahead` : "",
-      context.behind ? `${context.behind} behind` : "",
-    ].filter(Boolean);
-    const statusValue = statusParts.length
-      ? [...statusParts, ...tracking].join(", ")
-      : context.status === "clean"
-        ? tracking.length ? `Clean, ${tracking.join(", ")}` : "Clean"
-        : context.status === "unavailable"
-          ? "Unavailable"
-          : context.status || "Unknown";
-    const kind = context.kind === "checkout" ? "checkout" : context.kind === "worktree" ? "worktree" : "unavailable";
-    const rows = [
-      ["Branch", context.branch || "Unavailable"],
-      ["Commit", commitValue, commit.hash || context.head || ""],
-      ["Workspace", `${kind} · ${context.path || "Unavailable"}`],
-      ["Status", statusValue],
-    ];
+  sessionDetails(context, session = null) {
+    if (!context && !session?.synchronized) return "";
+    const rows = [];
+    if (context) {
+      const commit = context.commit || {};
+      const hash = commit.shortHash || commit.hash?.slice(0, 8) || context.head?.slice(0, 8) || "Unavailable";
+      const subject = String(commit.subject || "").split(/\r?\n/, 1)[0];
+      const commitValue = subject ? `${hash} ${subject}` : hash;
+      const details = context.statusDetails;
+      const statusParts = [];
+      if (details?.conflicts) statusParts.push(this.detailFileCount(details.conflicts, "conflicted"));
+      if (details?.staged) statusParts.push(this.detailFileCount(details.staged, "staged"));
+      if (details?.unstaged) statusParts.push(this.detailFileCount(details.unstaged, "unstaged"));
+      if (details?.untracked) statusParts.push(this.detailFileCount(details.untracked, "untracked"));
+      const tracking = [
+        context.ahead ? `${context.ahead} ahead` : "",
+        context.behind ? `${context.behind} behind` : "",
+      ].filter(Boolean);
+      const statusValue = statusParts.length
+        ? [...statusParts, ...tracking].join(", ")
+        : context.status === "clean"
+          ? tracking.length ? `Clean, ${tracking.join(", ")}` : "Clean"
+          : context.status === "unavailable"
+            ? "Unavailable"
+            : context.status || "Unknown";
+      const kind = context.kind === "checkout" ? "checkout" : context.kind === "worktree" ? "worktree" : "unavailable";
+      rows.push(
+        ["Branch", context.branch || "Unavailable"],
+        ["Commit", commitValue, commit.hash || context.head || ""],
+        ["Workspace", `${kind} · ${context.path || "Unavailable"}`],
+        ["Status", statusValue],
+      );
+    }
+    if (session?.synchronized) {
+      const state = { available: "Available", in_use: "In use", error: "Error" }[session.syncState] || session.syncState || "Unknown";
+      const workspace = session.syncWorkspace;
+      const upstream = workspace
+        ? `${workspace.branch}@${String(workspace.commit || "").slice(0, 8)}`
+        : "Unscoped";
+      rows.push(["Sync", state]);
+      rows.push(["Conversation", session.syncTitle && session.syncTitle !== session.syncSessionId ? session.syncTitle : "Untitled conversation"]);
+      if (session.syncSessionId) rows.push(["Sync ID", session.syncSessionId, session.syncSessionId]);
+      rows.push(["Upstream", upstream, workspace ? `${workspace.gitRemote} ${workspace.branch}@${workspace.commit}` : ""]);
+      if (session.syncState === "in_use") {
+        rows.push(["Lease", `${session.leaseHolder || "Active here"}${session.leaseExpiresAt ? ` · until ${session.leaseExpiresAt}` : ""}`]);
+      }
+      if (session.syncError?.message) rows.push(["Problem", session.syncError.message]);
+    }
     return `<section class="session-details" aria-label="Session details"><div class="session-details-title">Session details</div><dl class="session-details-list">${rows.map(([key, value, title = ""]) => `<div class="session-detail-row"><dt>${esc(key)}</dt><dd${title ? ` title="${esc(title)}"` : ""}>${esc(value)}</dd></div>`).join("")}</dl></section>`;
   }
 
@@ -1120,6 +1138,7 @@ class PiSessionPicker extends HTMLElement {
     const different = !!effectiveBranch && effectiveBranch !== picker.currentBranch;
     const context = contextFor(effectiveBranch);
     const users = context?.sessions || [];
+    const sourceSession = picker.sourceSessionId ? this.flatten(project.sessions).find(session => session.id === picker.sourceSessionId) : null;
     const userText = users.length ? users.map(user => `<span class="session-context-user ${user.streaming ? "working" : ""}"><i></i>${esc(user.title)} · ${user.streaming ? "working" : "idle"}</span>`).join("") : "No other sessions are using this branch.";
     const branchMeta = branch => {
       const item = contextFor(branch);
@@ -1130,7 +1149,7 @@ class PiSessionPicker extends HTMLElement {
     const selectedBranchLabel = isNew ? "＋ New branch…" : selected;
     const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>${branches.length} available</span></div><div class="branch-picker-scroll" aria-label="Branches">${branches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button></div>` : "";
     const branchField = `<div class="branch-picker"><button type="button" class="branch-picker-trigger" data-act="toggle-branch-menu" aria-expanded="${!!picker.branchMenuOpen}" aria-haspopup="listbox"><span>${esc(selectedBranchLabel)}</span><span class="branch-picker-caret">${picker.branchMenuOpen ? "⌃" : "⌄"}</span></button>${branchMenu}</div>`;
-    const sessionDetails = this.sessionDetails(context);
+    const sessionDetails = this.sessionDetails(context, sourceSession);
     const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
     const existing = mode !== "new";
     const current = picker.currentBranch || "";

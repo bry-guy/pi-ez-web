@@ -39,6 +39,80 @@ test("web sync commands pass through the native Pi syntax", () => {
   }
 });
 
+test("sync status exposes canonical details without exposing the lease token", async () => {
+  const adapter = new PiSyncWebAdapter({
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }),
+  });
+  adapter.bindingStore = async () => ({
+    async get() {
+      return {
+        nativeSessionId: "local-session",
+        serverUrl: "https://sync.example",
+        canonicalSessionId: "remote-session",
+        lastEtag: "e1",
+        materializedFile: "/tmp/session.jsonl",
+        leaseToken: "secret-token",
+        title: "Canonical conversation",
+        workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef" },
+        state: "ready",
+      };
+    },
+  });
+  adapter.list = async () => [{
+    sessionId: "remote-session",
+    title: "Canonical conversation",
+    createdAt: "2026-01-01T00:00:00Z",
+    headEntryId: "entry-1",
+    etag: "e1",
+    leaseHolder: "pi-client",
+    leaseExpiresAt: "2026-01-01T00:02:00Z",
+    workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef" },
+  }];
+
+  const status = await adapter.status("local-session");
+  assert.deepEqual(status, {
+    synchronized: true,
+    syncSessionId: "remote-session",
+    syncTitle: "Canonical conversation",
+    syncWorkspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef" },
+    syncState: "in_use",
+    leaseHolder: "pi-client",
+    leaseExpiresAt: "2026-01-01T00:02:00Z",
+  });
+  assert.equal("leaseToken" in status, false);
+  assert.equal(await adapter.stickyName("local-session"), "Canonical conversation");
+});
+
+test("blank synchronized titles do not block the first local name", async () => {
+  const adapter = new PiSyncWebAdapter({
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }),
+  });
+  adapter.bindingStore = async () => ({
+    async get() {
+      return { nativeSessionId: "local-session", canonicalSessionId: "remote-session", title: "", serverUrl: "https://sync.example", lastEtag: "e1", materializedFile: "/tmp/session.jsonl" };
+    },
+  });
+  assert.equal(await adapter.stickyName("local-session"), undefined);
+});
+
+test("beforePrompt delegates stale-session reconciliation to the extension", async () => {
+  const previous = { sessionFile: "/tmp/old.jsonl" };
+  const current = { sessionFile: "/tmp/new.jsonl" };
+  const supervisor = {
+    live: new Map([["local-session", { session: previous }]]),
+    async command(id, text) {
+      assert.equal(id, "local-session");
+      assert.equal(text, "/sync reconcile");
+      this.live.set(id, { session: current });
+    },
+  };
+  const adapter = new PiSyncWebAdapter({
+    supervisor,
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }),
+  });
+  assert.deepEqual(await adapter.beforePrompt("local-session"), { switched: true, sessionId: "local-session" });
+});
+
 test("browser enrollment dispatches /sync attach without an endpoint argument", async () => {
   const commands = [];
   let statusCalls = 0;

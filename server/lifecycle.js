@@ -21,16 +21,42 @@ export function findProjectByWorkspace(wsPath) {
   return null;
 }
 
-// Close one session. This is archival only and is allowed during a turn;
+function descendantsOf(sup, sessionId) {
+  if (typeof sup?.allSessions !== "function") return [];
+  return Promise.resolve(sup.allSessions()).then(sessions => {
+    const children = new Map();
+    for (const session of sessions || []) {
+      if (!session?.id || !session.parentSessionId) continue;
+      const siblings = children.get(session.parentSessionId) || [];
+      siblings.push(session.id);
+      children.set(session.parentSessionId, siblings);
+    }
+    const seen = new Set([sessionId]);
+    const queue = [sessionId];
+    const descendants = [];
+    while (queue.length) {
+      for (const child of children.get(queue.shift()) || []) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        descendants.push(child);
+        queue.push(child);
+      }
+    }
+    return descendants;
+  });
+}
+
+// Close a session and its descendants. This is archival only and is allowed during a turn;
 // stopping a turn remains an explicit user action.
-export async function closeSession(_sup, hub, sessionId, { report = null } = {}) {
+export async function closeSession(sup, hub, sessionId, { report = null } = {}) {
   report?.({ type: "phase", phase: "archive-read", message: "Reading the archived-session marker." });
   const closed = loadClosed();
-  closed.add(sessionId);
+  const sessionIds = [sessionId, ...(await descendantsOf(sup, sessionId))];
+  for (const id of sessionIds) closed.add(id);
   report?.({ type: "phase", phase: "archive-write", message: "Writing the archived-session marker." });
   saveClosed(closed);
   report?.({ type: "phase", phase: "session-event", message: "Emitting the session-closed event." });
-  hub.emit(sessionId, "session_closed", { sessionId });
+  for (const id of sessionIds) hub.emit(id, "session_closed", { sessionId: id });
   return { closed: true, archived: true };
 }
 
