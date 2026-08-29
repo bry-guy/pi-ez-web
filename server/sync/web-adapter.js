@@ -46,6 +46,18 @@ export class PiSyncWebAdapter {
     return text;
   }
 
+  async beforePrompt(sessionId) {
+    if (!this.config().serverUrl || !this.supervisor?.command) return { switched: false };
+    const before = this.supervisor.live?.get?.(sessionId)?.session?.sessionFile;
+    try { await this.supervisor.command(sessionId, "/sync reconcile"); }
+    catch { return { switched: false }; }
+    const after = this.supervisor.live?.get?.(sessionId);
+    return {
+      switched: !!after && after.session?.sessionFile !== before,
+      sessionId: after?.session?.sessionId || sessionId,
+    };
+  }
+
   resetExtensionPath() {
     this.extensionPathPromise = null;
     this.extensionError = null;

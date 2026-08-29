@@ -87,7 +87,10 @@ existing coordinator tests until extension-only end-to-end validation replaces
 them.
 
 The initial cutover gives prompt turns and explicit sync operations the
-extension-owned lifecycle. Existing web-only durable operations that do not
+extension-owned lifecycle. Before a normal prompt, the web host asks the
+extension to reconcile the local binding: an unchanged local copy is refreshed
+from a newer canonical snapshot before the prompt runs, while genuine local
+changes remain a conflict. Existing web-only durable operations that do not
 enter Pi's prompt lifecycle remain local until a later prompt or explicit
 synchronization operation. Automatic focus refresh is disabled in this path so
 those local entries are not silently replaced.
@@ -95,9 +98,9 @@ those local entries are not silently replaced.
 The web's existing sync endpoints remain as thin compatibility surfaces:
 manual enrollment and refresh invoke `/sync attach` and `/sync refresh` through
 the actual extension, while status reads the extension binding and server
-metadata without exposing lease tokens to browsers. Refresh is explicit in the
-extension-owned path; automatic focus refresh is disabled so web-only local
-entries are not silently replaced before they are included in a later turn.
+metadata without exposing lease tokens to browsers. Refresh remains available
+explicitly; automatic focus refresh is disabled so web-only local entries are
+not silently replaced before they are included in a later turn.
 
 ## Sticky names
 

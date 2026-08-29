@@ -95,6 +95,24 @@ test("blank synchronized titles do not block the first local name", async () => 
   assert.equal(await adapter.stickyName("local-session"), undefined);
 });
 
+test("beforePrompt delegates stale-session reconciliation to the extension", async () => {
+  const previous = { sessionFile: "/tmp/old.jsonl" };
+  const current = { sessionFile: "/tmp/new.jsonl" };
+  const supervisor = {
+    live: new Map([["local-session", { session: previous }]]),
+    async command(id, text) {
+      assert.equal(id, "local-session");
+      assert.equal(text, "/sync reconcile");
+      this.live.set(id, { session: current });
+    },
+  };
+  const adapter = new PiSyncWebAdapter({
+    supervisor,
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }),
+  });
+  assert.deepEqual(await adapter.beforePrompt("local-session"), { switched: true, sessionId: "local-session" });
+});
+
 test("browser enrollment dispatches /sync attach without an endpoint argument", async () => {
   const commands = [];
   let statusCalls = 0;

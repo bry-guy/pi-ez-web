@@ -711,7 +711,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (binding.leaseToken || active?.token) {
       if (!(await completeTurn(ctx, false, true))) {
         notify(ctx, "Could not safely release synchronization before refreshing.", "warning");
-        return;
+        return { switched: false };
       }
       binding = await store.get(currentSessionId);
       if (!binding) return;
@@ -748,12 +748,12 @@ export default function syncExtension(pi: ExtensionAPI) {
         return failCommand(ctx, error, "sync_lease_uncertain", "The conversation is current, but its refresh lease could not be released.");
       }
       notify(ctx, "The synchronized conversation is already current.", "info");
-      return;
+      return { switched: false };
     }
     if (!binding.lastFingerprint || stableEnvelopeFingerprint(normalized.envelope) !== binding.lastFingerprint) {
       await releaseRefreshLease().catch(() => undefined);
       notify(ctx, "The local conversation has unsynchronized changes. It was preserved; use /sync to open the canonical copy separately.", "warning");
-      return;
+      return { switched: false };
     }
     try {
       await releaseRefreshLease();
@@ -793,11 +793,55 @@ export default function syncExtension(pi: ExtensionAPI) {
       });
       switched = !result.cancelled;
       if (result.cancelled) await store.set(binding);
+      return { switched, sessionId: acquired.session.sessionId };
     } catch (error) {
       await store.set(binding).catch(() => undefined);
       if (switched) throw error;
       return failCommand(ctx, error, "sync_materialization_failed", "Could not open the refreshed synchronized conversation.");
     }
+  };
+
+  const releaseCleanLease = async (ctx: ExtensionCommandContext, binding: SyncBinding): Promise<SyncBinding | null> => {
+    if (!binding.leaseToken && !active?.token) return binding;
+    if (!binding.lastFingerprint) return binding;
+    let normalized;
+    try { normalized = await normalizeCurrent(ctx, binding); } catch { return null; }
+    if (stableEnvelopeFingerprint(normalized.envelope) !== binding.lastFingerprint) return binding;
+    const lease = active;
+    const token = lease?.token || binding.leaseToken;
+    if (!token) return binding;
+    clearHeartbeat();
+    try {
+      await clientFor(binding.serverUrl).release(binding.canonicalSessionId, token);
+    } catch (error) {
+      if (!(error instanceof SyncClientError) || !["lease_invalid", "lease_not_found"].includes(error.code)) {
+        if (lease) startHeartbeat(ctx, lease);
+        return null;
+      }
+    }
+    if (active === lease) active = undefined;
+    blocked = undefined;
+    const current = await store.get(binding.nativeSessionId);
+    if (current?.leaseToken === token) return persistBinding(current);
+    return current || binding;
+  };
+
+  const reconcileCurrent = async (ctx: ExtensionCommandContext) => {
+    currentSessionId = ctx.sessionManager.getSessionId();
+    const currentBinding = await store.get(currentSessionId);
+    if (!currentBinding) return { switched: false };
+    const binding = await releaseCleanLease(ctx, currentBinding);
+    if (!binding) return { switched: false };
+    const repository = await repositoryForPicker(ctx);
+    let remote;
+    try {
+      const response = await clientFor(binding.serverUrl).list({ repository: repository ?? null });
+      remote = response.sessions.find(item => item.sessionId === binding.canonicalSessionId);
+    } catch {
+      return { switched: false };
+    }
+    if (remote && binding.lastEtag && remote.etag === binding.lastEtag) return { switched: false };
+    return await refreshCurrent(ctx) || { switched: false };
   };
 
   const detachCurrent = async (ctx: ExtensionCommandContext) => {
@@ -860,6 +904,8 @@ export default function syncExtension(pi: ExtensionAPI) {
         await detachCurrent(ctx);
       } else if (command === "refresh") {
         await refreshCurrent(ctx);
+      } else if (command === "reconcile") {
+        await reconcileCurrent(ctx);
       } else if (command === "status") {
         await showStatus(ctx);
       } else if (command === "") {

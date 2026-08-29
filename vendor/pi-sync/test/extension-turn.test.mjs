@@ -660,6 +660,70 @@ test("refresh replaces an unchanged local materialization with a newer canonical
   }
 });
 
+test("reconciles a clean stale local copy before the next prompt", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [
+      ...envelope.entries,
+      { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" },
+    ],
+  };
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({ formatVersion: 1, sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: "e2", leaseHolder: null, leaseExpiresAt: null }] });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("reconcile-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { serverUrl: "http://sync.test" });
+  let switchedTarget;
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    fake.ctx.switchSession = async (target, options) => {
+      switchedTarget = target;
+      const replacement = {
+        ...fake.ctx,
+        ui: { ...fake.ctx.ui, notify: (message) => fake.notices.push(message) },
+        sessionManager: {
+          ...fake.ctx.sessionManager,
+          getSessionFile: () => target,
+          getLeafId: () => remote.headEntryId,
+          getSessionName: () => remote.title,
+        },
+        navigateTree: async () => ({ cancelled: false }),
+      };
+      await fake.handlers.get("session_start")({}, replacement);
+      await options.withSession(replacement);
+      return { cancelled: false };
+    };
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("command:sync")("reconcile", fake.ctx);
+    assert.ok(switchedTarget);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
+    assert.equal((await fake.binding()).lastEtag, "e2");
+    assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
+    assert.doesNotMatch(fake.notices.join(" "), /conflict/);
+  } finally {
+    await fake.close();
+  }
+});
+
 test("detach removes only the local binding", async () => {
   const requests = [];
   const fake = await harness(async (url, init = {}) => {
