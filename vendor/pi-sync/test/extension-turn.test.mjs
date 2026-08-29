@@ -63,6 +63,7 @@ async function harness(fetch, options = {}) {
     root,
     sessionPath,
     handlers,
+    pi,
     ctx,
     notices,
     statuses,
@@ -109,7 +110,7 @@ test("sync picker limits choices to the current Git repository", async () => {
       return Response.json({
         formatVersion: 1,
         sessions: [
-          { sessionId: "session-a", title: "same repository", createdAt: envelope.createdAt, headEntryId: "a", etag: "e1", leaseHolder: null, leaseExpiresAt: null, workspace },
+          { sessionId: "session-a", title: "same repository", createdAt: envelope.createdAt, headEntryId: "a", etag: "e1", leaseHolder: "pi-web", leaseExpiresAt: "2026-01-01T00:02:00Z", workspace },
           { sessionId: "session-b", title: "other repository", createdAt: envelope.createdAt, headEntryId: "a", etag: "e2", leaseHolder: null, leaseExpiresAt: null, workspace: { ...workspace, gitRemote: "https://github.com/other/repo.git" } },
         ],
       });
@@ -129,7 +130,7 @@ test("sync picker limits choices to the current Git repository", async () => {
   });
   try {
     await fake.handlers.get("command:sync")("", fake.ctx);
-    assert.deepEqual(choices, ["same repository — available"]);
+    assert.deepEqual(choices, ["same repository — feature/other — ● pi-web"]);
     assert.equal(new URL(requests[0].url).search, "?repository=github.com%2Fowner%2Frepo");
     const leaseRequest = requests.find((request) => request.init.method === "POST" && request.url.endsWith("/session-a/lease"));
     const leaseBody = JSON.parse(leaseRequest.init.body);
@@ -187,7 +188,7 @@ test("sync picker keeps unscoped conversations separate from Git repositories", 
       workspace: { gitRemote: "https://github.com/owner/repo.git", branch: "main", commit: "0123456789abcdef0123456789abcdef01234567" },
     });
     await fake.handlers.get("command:sync")("", fake.ctx);
-    assert.deepEqual(choices, ["unscoped — available"]);
+    assert.deepEqual(choices, ["unscoped — no branch — ○ available"]);
     assert.equal(new URL(requests[0].url).search, "?repository=none");
     const leaseRequest = requests.find((request) => request.init.method === "POST" && request.url.endsWith("/session-u/lease"));
     assert.equal(JSON.parse(leaseRequest.init.body).repository, "none");
@@ -222,10 +223,10 @@ test("does not reuse a Git repository scope from a no-Git workspace", async () =
   }
 });
 
-test("sync start reports duplicate enrollment to its host", async () => {
+test("sync attach reports duplicate enrollment to its host", async () => {
   const fake = await harness(async (_url, _init = {}) => Response.json({ error: { code: "duplicate_enrollment" } }, { status: 409 }));
   try {
-    await assert.rejects(fake.handlers.get("command:sync")("start http://sync.test", fake.ctx), error => error.code === "sync_duplicate");
+    await assert.rejects(fake.handlers.get("command:sync")("attach http://sync.test", fake.ctx), error => error.code === "sync_duplicate");
     assert.match(fake.notices.join(" "), /already exists/);
   } finally {
     await fake.close();
@@ -527,5 +528,182 @@ test("ETag conflict and active lease block without changing local state", async 
     } finally {
       await fake.close();
     }
+  }
+});
+
+test("refresh replaces an unchanged local materialization with a newer canonical snapshot", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [
+      ...envelope.entries,
+      { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" },
+    ],
+  };
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("refresh-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  });
+  let switchedTarget;
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    fake.ctx.switchSession = async (target, options) => {
+      switchedTarget = target;
+      const replacement = {
+        ...fake.ctx,
+        ui: { ...fake.ctx.ui, notify: (message) => fake.notices.push(message) },
+        sessionManager: {
+          ...fake.ctx.sessionManager,
+          getSessionFile: () => target,
+          getLeafId: () => remote.headEntryId,
+          getSessionName: () => remote.title,
+        },
+        navigateTree: async () => ({ cancelled: false }),
+      };
+      await fake.handlers.get("session_start")({}, replacement);
+      await options.withSession(replacement);
+      return { cancelled: false };
+    };
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("command:sync")("refresh", fake.ctx);
+    assert.ok(switchedTarget);
+    assert.deepEqual(requests.map(({ method }) => method), ["POST", "DELETE"]);
+    const refreshed = await fake.binding();
+    assert.equal(refreshed.lastEtag, "e2");
+    assert.equal(refreshed.materializedFile, switchedTarget);
+    assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
+    assert.match(fake.notices.join(" "), /refreshed/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("detach removes only the local binding", async () => {
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    requests.push({ path: new URL(url).pathname, method: init.method });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  });
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("command:sync")("detach", fake.ctx);
+    assert.equal(await fake.binding(), undefined);
+    assert.deepEqual(requests, []);
+    assert.match(fake.notices.join(" "), /server copy was preserved/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("opens a synchronized session without crashing on replacement errors", async () => {
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{
+          sessionId: envelope.sessionId,
+          title: "Synced session",
+          createdAt: envelope.createdAt,
+          headEntryId: envelope.headEntryId,
+          etag: "e1",
+          leaseHolder: "pi-web",
+          leaseExpiresAt: "2026-01-01T00:02:00Z",
+          workspace,
+        }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("picker-token").json();
+      return Response.json({ ...response, session: { ...response.session, workspace } });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, {
+    serverUrl: "http://sync.test",
+    select: async (_title, items) => {
+      assert.deepEqual(items, ["Synced session — feature/sync-ui — ● pi-web"]);
+      return items[0];
+    },
+  });
+  const replacementNotices = [];
+  const workspace = {
+    gitRemote: "git@github.com:bry-guy/pi-sync.git",
+    branch: "feature/sync-ui",
+    commit: "abcdef1234567",
+  };
+  fake.pi.exec = async (_command, args) => {
+    if (args.includes("--abbrev-ref")) return { stdout: `origin/${workspace.branch}\n`, code: 0 };
+    if (args[0] === "remote" && args[1] === "get-url") return { stdout: `${workspace.gitRemote}\n`, code: 0 };
+    return { stdout: "", code: 1 };
+  };
+  let switched = false;
+  let guardCancelled;
+  try {
+    fake.ctx.ui.notify = (message) => {
+      if (switched) throw new Error("stale command context used");
+      fake.notices.push(message);
+    };
+    fake.ctx.switchSession = async (target, options) => {
+      switched = true;
+      const replacement = {
+        ...fake.ctx,
+        ui: {
+          notify: (message) => replacementNotices.push(message),
+          setStatus() {},
+        },
+        sessionManager: {
+          ...fake.ctx.sessionManager,
+          getSessionFile: () => target,
+          getLeafId: () => envelope.headEntryId,
+          getSessionName: () => envelope.title,
+        },
+        navigateTree: async (_id, navigateOptions) => {
+          const result = await fake.handlers.get("session_before_tree")({
+            preparation: { userWantsSummary: navigateOptions?.summarize === true },
+            signal: new AbortController().signal,
+          }, replacement);
+          guardCancelled = result?.cancel === true;
+          if (guardCancelled) return { cancelled: true };
+          throw new Error("head restoration failed");
+        },
+      };
+      await fake.handlers.get("session_start")({}, replacement);
+      await options.withSession(replacement);
+      return { cancelled: false };
+    };
+    await fake.handlers.get("command:sync")("", fake.ctx);
+    assert.equal(guardCancelled, false);
+    assert.match(replacementNotices.join(" "), /head restoration failed/);
+    assert.equal(fake.notices.length, 0);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
+  } finally {
+    await fake.close();
   }
 });

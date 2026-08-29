@@ -137,8 +137,8 @@ function envBoolean(name, fallback) {
 
 export function syncConfig(cfg = loadConfig()) {
   const configured = normalizeSyncConfig(cfg?.sync);
-  const rawServerUrl = process.env.PI_WEB_SYNC_SERVER_URL !== undefined
-    ? String(process.env.PI_WEB_SYNC_SERVER_URL).trim()
+  const rawServerUrl = process.env.PI_SYNC_SERVER_URL !== undefined
+    ? String(process.env.PI_SYNC_SERVER_URL).trim()
     : configured.serverUrl;
   const serverUrl = rawServerUrl
     ? normalizeSyncConfig({ serverUrl: rawServerUrl }).serverUrl
@@ -154,8 +154,8 @@ export function syncSettingsState(cfg = loadConfig()) {
   return {
     serverUrl: {
       value: effective.serverUrl,
-      source: process.env.PI_WEB_SYNC_SERVER_URL !== undefined ? "PI_WEB_SYNC_SERVER_URL" : cfg.sync?.serverUrl ? "config" : "default",
-      editable: process.env.PI_WEB_SYNC_SERVER_URL === undefined,
+      source: process.env.PI_SYNC_SERVER_URL !== undefined ? "PI_SYNC_SERVER_URL" : cfg.sync?.serverUrl ? "config" : "default",
+      editable: process.env.PI_SYNC_SERVER_URL === undefined,
     },
     allConversations: {
       value: effective.allConversations,

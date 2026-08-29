@@ -10,21 +10,21 @@ import { isSyncEnrolled, loadSyncSessions, markSyncEnrolled, markSyncPending, sy
 let home;
 const previous = {
   home: process.env.PI_WEB_HOME,
-  server: process.env.PI_WEB_SYNC_SERVER_URL,
+  server: process.env.PI_SYNC_SERVER_URL,
   all: process.env.PI_WEB_SYNC_ALL_CONVERSATIONS,
 };
 
 before(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-sync-"));
   process.env.PI_WEB_HOME = home;
-  delete process.env.PI_WEB_SYNC_SERVER_URL;
+  delete process.env.PI_SYNC_SERVER_URL;
   delete process.env.PI_WEB_SYNC_ALL_CONVERSATIONS;
 });
 
 after(() => {
   if (previous.home === undefined) delete process.env.PI_WEB_HOME;
   else process.env.PI_WEB_HOME = previous.home;
-  for (const [key, value] of [["PI_WEB_SYNC_SERVER_URL", previous.server], ["PI_WEB_SYNC_ALL_CONVERSATIONS", previous.all]]) {
+  for (const [key, value] of [["PI_SYNC_SERVER_URL", previous.server], ["PI_WEB_SYNC_ALL_CONVERSATIONS", previous.all]]) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
@@ -39,14 +39,14 @@ test("sync configuration validates URLs and deployment overrides", () => {
   assert.throws(() => normalizeSyncConfig({ serverUrl: "https://sync.example/?token=secret" }, { strict: true }), error => error.code === "invalid_sync_configuration");
 
   saveConfig({ sync: { serverUrl: "https://config.example", allConversations: false } });
-  process.env.PI_WEB_SYNC_SERVER_URL = "https://environment.example";
+  process.env.PI_SYNC_SERVER_URL = "https://environment.example";
   process.env.PI_WEB_SYNC_ALL_CONVERSATIONS = "true";
   assert.deepEqual(syncConfig(loadConfig()), { serverUrl: "https://environment.example", allConversations: true });
   assert.deepEqual(syncSettingsState(loadConfig()), {
-    serverUrl: { value: "https://environment.example", source: "PI_WEB_SYNC_SERVER_URL", editable: false },
+    serverUrl: { value: "https://environment.example", source: "PI_SYNC_SERVER_URL", editable: false },
     allConversations: { value: true, source: "PI_WEB_SYNC_ALL_CONVERSATIONS", editable: false },
   });
-  delete process.env.PI_WEB_SYNC_SERVER_URL;
+  delete process.env.PI_SYNC_SERVER_URL;
   delete process.env.PI_WEB_SYNC_ALL_CONVERSATIONS;
 });
 

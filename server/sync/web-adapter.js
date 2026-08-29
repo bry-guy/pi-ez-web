@@ -43,15 +43,7 @@ export class PiSyncWebAdapter {
   }
 
   commandText(text) {
-    const value = String(text || "").trim();
-    const match = value.match(/^\/sync(?:\s+([\s\S]*))?$/i);
-    const url = this.config().serverUrl;
-    if (!match || !url) return text;
-    const args = (match[1] || "").trim();
-    if (/^https?:\/\//i.test(args) || /\shttps?:\/\//i.test(args)) return value;
-    if (!args) return `/sync open ${url}`;
-    if (["open", "start", "status"].includes(args.split(/\s+/, 1)[0].toLowerCase())) return `${value} ${url}`;
-    return value;
+    return text;
   }
 
   resetExtensionPath() {
@@ -320,7 +312,7 @@ export class PiSyncWebAdapter {
     if (!config.serverUrl) throw adapterError("Configure a sync server before enrolling conversations.", "sync_not_configured");
     if (!await this.extensionPath()) throw adapterError("The pi-sync extension is not installed on this server.", "sync_client_unavailable", 503);
     const before = await this.status(sessionId);
-    await this.supervisor.command(sessionId, `/sync start ${config.serverUrl}`);
+    await this.supervisor.command(sessionId, "/sync attach");
     this.listCache = null;
     const after = await this.status(sessionId);
     if (!after.synchronized) {

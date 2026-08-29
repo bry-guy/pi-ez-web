@@ -126,7 +126,7 @@ GitHub device login adds private repositories and stores its token in
 
 Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
 `PI_WEB_GITHUB_CLIENT_ID` (advanced server OAuth-app override),
-`PI_WEB_GITHUB_OWNER`, `PI_WEB_GITHUB_TOKEN`, `PI_WEB_SYNC_SERVER_URL`, and
+`PI_WEB_GITHUB_OWNER`, `PI_WEB_GITHUB_TOKEN`, `PI_SYNC_SERVER_URL`, and
 `PI_WEB_SYNC_ALL_CONVERSATIONS`. Sync environment values are read-only in
 Settings; without a sync server URL, conversations remain local-only. The
 preview deployment supplies the private sync service URL with
@@ -155,7 +155,7 @@ SDK runtime as the rest of the selected Pi profile. `PiSyncWebAdapter` supplies
 browser dialogs, session replacement, extension status, and the configured sync
 endpoint; the extension owns enrollment, leases, heartbeat, ETags, JSONL
 materialization, and settlement. The header Refresh action invokes the
-extension's explicit handoff pull; automatic focus refresh is disabled for the
+extension's explicit `/sync refresh` handoff pull; automatic focus refresh is disabled for the
 extension-owned path so local web-only entries are not silently replaced. Unenrolled sessions remain local-only unless
 `allConversations` is enabled. Synchronized names are sticky and Git upstream,
 branch, and pushed-commit pointers travel with the canonical session. When Git

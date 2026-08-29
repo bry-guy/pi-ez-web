@@ -71,7 +71,7 @@ the runtime is a terminal TUI.
 
 The pi-sync extension is authoritative in the real web runtime:
 
-1. `/sync start` normalizes and enrolls the current native Pi session.
+1. `/sync attach` normalizes and enrolls the current native Pi session.
 2. A normal prompt is intercepted by the extension's `input` handler.
 3. The extension acquires the server lease and starts its heartbeat.
 4. Pi runs the turn locally with the configured web workspace.
@@ -93,7 +93,7 @@ synchronization operation. Automatic focus refresh is disabled in this path so
 those local entries are not silently replaced.
 
 The web's existing sync endpoints remain as thin compatibility surfaces:
-manual enrollment and refresh invoke `/sync start` and `/sync refresh` through
+manual enrollment and refresh invoke `/sync attach` and `/sync refresh` through
 the actual extension, while status reads the extension binding and server
 metadata without exposing lease tokens to browsers. Refresh is explicit in the
 extension-owned path; automatic focus refresh is disabled so web-only local
@@ -147,7 +147,7 @@ repository scoping, duplicate materialized-file selection, and the pi-sync
 extension's lease/ETag lifecycle.
 The remaining acceptance tests are:
 
-- actual pi-sync `/sync start`, prompt settlement, and `/sync refresh` through
+- actual pi-sync `/sync attach`, prompt settlement, and `/sync refresh` through
   the web SDK runtime;
 - browser `/sync` selection and `switchSession` replacement;
 - sticky names across materialization and local rename attempts;

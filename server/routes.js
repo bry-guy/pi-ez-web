@@ -1397,8 +1397,8 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     }
     if (body.sync !== undefined) {
       if (!body.sync || typeof body.sync !== "object" || Array.isArray(body.sync)) return err(c, 400, "invalid_sync_configuration", { message: "Sync configuration must be an object." });
-      if (body.sync.serverUrl !== undefined && process.env.PI_WEB_SYNC_SERVER_URL !== undefined) {
-        return err(c, 409, "setting_overridden", { field: "sync.serverUrl", source: "PI_WEB_SYNC_SERVER_URL" });
+      if (body.sync.serverUrl !== undefined && process.env.PI_SYNC_SERVER_URL !== undefined) {
+        return err(c, 409, "setting_overridden", { field: "sync.serverUrl", source: "PI_SYNC_SERVER_URL" });
       }
       if (body.sync.allConversations !== undefined && process.env.PI_WEB_SYNC_ALL_CONVERSATIONS !== undefined) {
         return err(c, 409, "setting_overridden", { field: "sync.allConversations", source: "PI_WEB_SYNC_ALL_CONVERSATIONS" });

@@ -22,20 +22,36 @@ async function waitFor(values, predicate) {
   throw new Error("timed out waiting for event");
 }
 
-test("web sync commands receive the configured server URL without changing Pi syntax", () => {
-  const previous = process.env.PI_WEB_SYNC_SERVER_URL;
-  process.env.PI_WEB_SYNC_SERVER_URL = "https://sync.example";
+test("web sync commands pass through the native Pi syntax", () => {
+  const previous = process.env.PI_SYNC_SERVER_URL;
+  process.env.PI_SYNC_SERVER_URL = "https://sync.example";
   try {
     const adapter = new PiSyncWebAdapter({ hub: new EventHub(), configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }) });
-    assert.equal(adapter.commandText("/sync"), "/sync open https://sync.example");
-    assert.equal(adapter.commandText("/sync start"), "/sync start https://sync.example");
-    assert.equal(adapter.commandText("/sync status"), "/sync status https://sync.example");
+    assert.equal(adapter.commandText("/sync"), "/sync");
+    assert.equal(adapter.commandText("/sync attach"), "/sync attach");
+    assert.equal(adapter.commandText("/sync status"), "/sync status");
+    assert.equal(adapter.commandText("/sync status https://other.example"), "/sync status https://other.example");
     assert.equal(adapter.commandText("/sync refresh"), "/sync refresh");
     assert.equal(adapter.commandText("/name example"), "/name example");
   } finally {
-    if (previous === undefined) delete process.env.PI_WEB_SYNC_SERVER_URL;
-    else process.env.PI_WEB_SYNC_SERVER_URL = previous;
+    if (previous === undefined) delete process.env.PI_SYNC_SERVER_URL;
+    else process.env.PI_SYNC_SERVER_URL = previous;
   }
+});
+
+test("browser enrollment dispatches /sync attach without an endpoint argument", async () => {
+  const commands = [];
+  let statusCalls = 0;
+  const adapter = new PiSyncWebAdapter({
+    supervisor: { command: async (...args) => commands.push(args) },
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example", allConversations: false } }),
+  });
+  adapter.extensionPath = async () => "/tmp/sync-extension.js";
+  adapter.status = async () => ({ synchronized: statusCalls++ > 0 });
+
+  const result = await adapter.enroll("session-attach");
+  assert.deepEqual(commands, [["session-attach", "/sync attach"]]);
+  assert.equal(result.created, true);
 });
 
 test("browser extension UI resolves select and confirm requests", async () => {
