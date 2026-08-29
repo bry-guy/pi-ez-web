@@ -72,6 +72,32 @@ remote Pi profile configured in `config.json` can install and execute arbitrary
 Pi packages as the service user; use only trusted HTTPS settings and package
 sources.
 
+### Trusted prestart command
+
+Set `PI_WEB_PRESTART_COMMAND` to an optional, deployment-controlled multiline
+shell command when the operator home needs initialization before Pi starts. The
+server runs it synchronously with `/bin/sh -c` before reading `config.json`,
+creating the supervisor, or listening. Its stdout and stderr go to the
+container logs, stdin is closed, and `PI_WEB_PRESTART_TIMEOUT_MS` sets the
+positive-integer timeout (120 seconds by default). A blank command is ignored;
+a timeout or nonzero exit aborts startup.
+
+The command inherits `HOME`, XDG variables, `PI_WEB_HOME`, and
+`PI_CODING_AGENT_DIR`. It is equivalent to trusted code execution as the
+service user: keep it noninteractive, idempotent, and free of secret output.
+It is not stored in `config.json`, exposed in Settings, or available through
+the API. `createApp()` callers that bypass `startServer()` are responsible for
+any equivalent initialization themselves.
+
+The command is manager-agnostic. For example, deployments may use
+`chezmoi apply`, GNU Stow, `rsync`, Nix/Home Manager, or a yadm sequence such as
+`yadm clone --no-bootstrap --no-checkout` followed by a pinned `yadm reset
+--hard`. The checked-in Kubernetes manifests use yadm and a pinned Bryan
+dotfiles repository only as a deployment example; Pi EZ Web does not require
+that repository or manager. Keep `PI_WEB_HOME` and `PI_CODING_AGENT_DIR`
+separate from the projected operator home so application state, Pi sessions,
+and credentials are not overwritten by dotfiles.
+
 ## k3s
 
 The app is currently suitable for a single-pod k3s deployment, but it is not

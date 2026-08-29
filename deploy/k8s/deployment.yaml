@@ -34,13 +34,8 @@ spec:
             - -e
             - |
               const fs = require('node:fs');
-              const { execFileSync } = require('node:child_process');
               const dirs = ['/data/pi-ez-web', '/data/pi-ez-agent', '/data/pi-ez-workspaces', '/data/pi-ez-worktrees', '/data/pi-ez-operator-home'];
               for (const dir of dirs) fs.mkdirSync(dir, { recursive: true });
-              const env = { ...process.env, HOME: '/data/pi-ez-operator-home' };
-              for (const [key, value] of [['user.name', 'Bryan Smith'], ['user.email', 'bryan@bry-guy.net'], ['credential.helper', '/usr/local/bin/pi-ez-web-git-credential-helper']]) {
-                execFileSync('git', ['config', '--global', key, value], { env, stdio: ['ignore', 'ignore', 'ignore'] });
-              }
               const config = '/data/pi-ez-web/config.json';
               let value = {};
               try {
@@ -113,6 +108,12 @@ spec:
           env:
             - name: HOME
               value: /data/pi-ez-operator-home
+            - name: XDG_CONFIG_HOME
+              value: /data/pi-ez-operator-home/.config
+            - name: XDG_DATA_HOME
+              value: /data/pi-ez-operator-home/.local/share
+            - name: XDG_CACHE_HOME
+              value: /data/pi-ez-operator-home/.cache
             - name: PI_WEB_HOME
               value: /data/pi-ez-web
             - name: PI_WEB_REPOS_ROOT
@@ -123,6 +124,50 @@ spec:
               value: Ov23livNQSEmNhsrLEeI
             - name: PI_CODING_AGENT_DIR
               value: /data/pi-ez-agent
+            - name: DOTFILES_REPOSITORY
+              value: https://github.com/bry-guy/dotfiles.git
+            - name: DOTFILES_REVISION
+              value: 10b207c5e673b0393fca1b87ff1be3608c6fefeb
+            - name: PI_WEB_PRESTART_TIMEOUT_MS
+              value: "120000"
+            - name: PI_WEB_PRESTART_COMMAND
+              value: |
+                set -eu
+                : "${DOTFILES_REPOSITORY:?DOTFILES_REPOSITORY is required}"
+                : "${DOTFILES_REVISION:?DOTFILES_REVISION is required}"
+                if ! printf '%s\n' "$DOTFILES_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
+                  printf '%s\n' 'DOTFILES_REVISION must be a 40-character lowercase commit.' >&2
+                  exit 2
+                fi
+                mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+                export GIT_TERMINAL_PROMPT=0
+                yadm_repo="$XDG_DATA_HOME/yadm/repo.git"
+                if [ -d "$yadm_repo" ]; then
+                  if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm rev-parse --git-dir >/dev/null 2>&1; then
+                    rm -rf "$yadm_repo"
+                  elif ! origin="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm remote get-url origin 2>/dev/null)"; then
+                    rm -rf "$yadm_repo"
+                  elif [ "$origin" != "$DOTFILES_REPOSITORY" ]; then
+                    printf '%s\n' 'The existing yadm origin does not match DOTFILES_REPOSITORY.' >&2
+                    exit 2
+                  fi
+                fi
+                if [ ! -d "$yadm_repo" ]; then
+                  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm clone --no-bootstrap --no-checkout "$DOTFILES_REPOSITORY"
+                fi
+                if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm cat-file -e "$DOTFILES_REVISION^{commit}" 2>/dev/null; then
+                  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm fetch --no-tags origin
+                fi
+                GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm reset --hard "$DOTFILES_REVISION"
+                GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm alt
+                test "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm rev-parse HEAD)" = "$DOTFILES_REVISION"
+                unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
+                git config --global --unset-all 'credential.https://github.com.helper' || true
+                git config --global --unset-all 'credential.https://gist.github.com.helper' || true
+                git config --global --unset-all 'url.ssh://git@github.com/.insteadOf' || true
+                git config --global --replace-all user.name 'Bryan Smith'
+                git config --global --replace-all user.email 'bryan@bry-guy.net'
+                git config --global --replace-all credential.helper /usr/local/bin/pi-ez-web-git-credential-helper
             - name: PORT
               value: "3141"
             - name: PI_WEB_MODE
@@ -154,7 +199,7 @@ spec:
               port: http
             periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 24
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /
