@@ -61,6 +61,17 @@ function statusFor(config, enrolled, extra = {}) {
   };
 }
 
+function syncDetails(value) {
+  const session = value?.envelope || value;
+  if (!session?.sessionId) return {};
+  const title = typeof session.title === "string" ? session.title.trim() : "";
+  return {
+    syncSessionId: session.sessionId,
+    syncTitle: title && title !== session.sessionId ? title : null,
+    syncWorkspace: session.workspace || null,
+  };
+}
+
 function safeMessage(error, fallback) {
   const message = clientErrorMessage(error, fallback);
   return message.length > 300 ? message.slice(0, 300) : message;
@@ -209,9 +220,11 @@ export class FakeSyncCoordinator extends BaseCoordinator {
   status(sessionId) {
     const config = this.config();
     if (!config.serverUrl) return statusFor(config, false);
-    const enrolled = this.remote.has(sessionId) || isSyncEnrolled(sessionId);
+    const remote = this.remote.get(sessionId);
+    const enrolled = !!remote || isSyncEnrolled(sessionId);
     const leaseHolder = this.leases.get(sessionId) || null;
     return statusFor(config, enrolled, {
+      ...syncDetails(remote),
       syncState: leaseHolder ? "in_use" : enrolled ? "available" : "pending",
       leaseHolder,
     });
@@ -454,6 +467,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
     }
     if (active) {
       return statusFor(config, true, {
+        ...syncDetails(active.envelope),
         syncState: active.blocked ? "error" : "in_use",
         leaseHolder: active.holder,
         leaseExpiresAt: active.expiresAt || null,
@@ -471,6 +485,7 @@ export class PiSyncCoordinator extends BaseCoordinator {
       }
       const holder = remote.leaseHolder || null;
       return statusFor(config, true, {
+        ...syncDetails(remote),
         syncState: holder ? "in_use" : "available",
         leaseHolder: holder,
         leaseExpiresAt: remote.leaseExpiresAt || null,

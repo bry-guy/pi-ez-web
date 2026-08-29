@@ -222,11 +222,23 @@ export class PiSyncWebAdapter {
     return this.store;
   }
 
+  meaningfulTitle(title, ...placeholders) {
+    if (typeof title !== "string") return "";
+    const value = title.trim();
+    return value && !placeholders.includes(value) ? value : "";
+  }
+
+  syncTitle(binding, remote = null) {
+    const remoteTitle = remote && this.meaningfulTitle(remote.title, remote.sessionId);
+    return remoteTitle || this.meaningfulTitle(binding?.title, binding?.nativeSessionId, binding?.canonicalSessionId) || null;
+  }
+
   async stickyName(sessionId) {
     if (!this.config().serverUrl) return undefined;
     try {
       const binding = await (await this.bindingStore()).get(sessionId);
-      return typeof binding?.title === "string" ? binding.title.trim() : undefined;
+      const title = binding && this.syncTitle(binding);
+      return title || undefined;
     } catch {
       return undefined;
     }
@@ -256,6 +268,14 @@ export class PiSyncWebAdapter {
     return promise;
   }
 
+  syncDetails(binding, remote = null) {
+    return {
+      syncSessionId: binding.canonicalSessionId,
+      syncTitle: this.syncTitle(binding, remote),
+      syncWorkspace: remote?.workspace || binding.workspace || null,
+    };
+  }
+
   async status(sessionId) {
     const config = this.config();
     if (!config.serverUrl) return { synchronized: false, syncState: "disabled", leaseHolder: null, leaseExpiresAt: null };
@@ -266,16 +286,18 @@ export class PiSyncWebAdapter {
     }
     const binding = await store.get(sessionId);
     if (!binding) return { synchronized: false, syncState: "pending", leaseHolder: null, leaseExpiresAt: null };
+    const details = this.syncDetails(binding);
     if (binding.state === "setup_required") {
-      return { synchronized: true, syncState: "error", leaseHolder: null, leaseExpiresAt: null, syncError: { code: "sync_session_not_found", message: "The sync server no longer has this conversation." } };
+      return { synchronized: true, ...details, syncState: "error", leaseHolder: null, leaseExpiresAt: null, syncError: { code: "sync_session_not_found", message: "The sync server no longer has this conversation." } };
     }
     try {
       const remote = (await this.list(false, binding.serverUrl || config.serverUrl)).find(item => item.sessionId === binding.canonicalSessionId);
       if (!remote) {
-        return { synchronized: true, syncState: "error", leaseHolder: null, leaseExpiresAt: null, syncError: { code: "sync_session_not_found", message: "The sync server no longer has this conversation." } };
+        return { synchronized: true, ...details, syncState: "error", leaseHolder: null, leaseExpiresAt: null, syncError: { code: "sync_session_not_found", message: "The sync server no longer has this conversation." } };
       }
       return {
         synchronized: true,
+        ...this.syncDetails(binding, remote),
         syncState: remote.leaseHolder || binding.leaseToken ? "in_use" : "available",
         leaseHolder: remote.leaseHolder || null,
         leaseExpiresAt: remote.leaseExpiresAt || null,
@@ -283,6 +305,7 @@ export class PiSyncWebAdapter {
     } catch (error) {
       return {
         synchronized: true,
+        ...details,
         syncState: "error",
         leaseHolder: null,
         leaseExpiresAt: null,

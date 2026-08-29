@@ -171,7 +171,7 @@ test("merge from a checkout session is nothing_to_merge", async () => {
   await post(`/api/sessions/${id}/close`);
 });
 
-test("closing a parent re-attaches its child at the visible tree position", async () => {
+test("closing a parent also archives its child sessions", async () => {
   const parent = await checkoutSession();
   await post(`/api/sessions/${parent}/message`, { text: "parent transcript" });
   await new Promise(resolve => setTimeout(resolve, 180));
@@ -179,6 +179,8 @@ test("closing a parent re-attaches its child at the visible tree position", asyn
   const fork = await (await post(`/api/sessions/${parent}/worktree`, { fork: true, branch: "branch/parent-child" })).json();
   await post(`/api/sessions/${parent}/close`);
   const p = await proj();
-  assert.ok(p.sessions.some(node => node.id === fork.id), JSON.stringify(p.sessions));
-  await post(`/api/sessions/${fork.id}/close`);
+  assert.equal(JSON.stringify(p.sessions).includes(parent), false, JSON.stringify(p.sessions));
+  assert.equal(JSON.stringify(p.sessions).includes(fork.id), false, JSON.stringify(p.sessions));
+  const childTranscript = await (await get(`/api/sessions/${fork.id}/transcript`)).json();
+  assert.ok(Array.isArray(childTranscript.records));
 });

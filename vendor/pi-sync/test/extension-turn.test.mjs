@@ -21,8 +21,9 @@ async function harness(fetch, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-sync-turn-"));
   const previousServerUrl = process.env.PI_SYNC_SERVER_URL;
   if (options.serverUrl) process.env.PI_SYNC_SERVER_URL = options.serverUrl;
+  const entries = options.entries || envelope.entries;
   const sessionPath = join(root, "session.jsonl");
-  await writeFile(sessionPath, `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${JSON.stringify(envelope.entries[0])}\n`);
+  await writeFile(sessionPath, `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousFetch = globalThis.fetch;
   process.env.PI_CODING_AGENT_DIR = root;
@@ -55,7 +56,8 @@ async function harness(fetch, options = {}) {
       getSessionFile: () => sessionPath,
       getSessionDir: () => root,
       getLeafId: () => envelope.headEntryId,
-      getSessionName: () => envelope.title,
+      getSessionName: () => options.sessionName ?? envelope.title,
+      getEntries: () => entries,
     },
     switchSession: async () => ({ cancelled: true }),
   };
@@ -218,6 +220,70 @@ test("does not reuse a Git repository scope from a no-Git workspace", async () =
     await fake.handlers.get("session_start")({}, fake.ctx);
     assert.equal(requests.length, 0);
     assert.match(fake.notices.join(" "), /different Git repository/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("sync picker replaces local history and names a blank canonical conversation", async () => {
+  const localEntry = { ...envelope.entries[0], message: { role: "user", content: [{ type: "text", text: "Local history" }] } };
+  const remoteId = "session-remote";
+  const remoteEntry = { ...envelope.entries[0], id: "remote-entry", message: { role: "user", content: [{ type: "text", text: "Canonical history" }] } };
+  const canonical = { ...envelope, sessionId: remoteId, title: "", headEntryId: remoteEntry.id, entries: [remoteEntry] };
+  const requests = [];
+  let switchedTarget;
+  const fake = await harness(async (url, init = {}) => {
+    const parsed = new URL(url);
+    requests.push({ path: parsed.pathname, method: init.method, init });
+    if (parsed.pathname === "/v1/sessions" && init.method === "GET") {
+      return Response.json({ formatVersion: 1, sessions: [{ sessionId: remoteId, title: "", createdAt: canonical.createdAt, headEntryId: canonical.headEntryId, etag: "e1", leaseHolder: null, leaseExpiresAt: null }] });
+    }
+    if (parsed.pathname === `/v1/sessions/${remoteId}/lease` && init.method === "POST") {
+      return Response.json({ formatVersion: 1, session: canonical, etag: "e1", lease: { token: "picker-token", holder: "pi-test", acquiredAt: canonical.createdAt, expiresAt: "2026-01-01T00:02:00Z" } });
+    }
+    if (parsed.pathname === `/v1/sessions/${remoteId}` && init.method === "PUT") {
+      const session = JSON.parse(init.body);
+      return Response.json({ formatVersion: 1, session, etag: "e2" });
+    }
+    if (parsed.pathname === `/v1/sessions/${remoteId}/lease` && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, {
+    serverUrl: "http://sync.test",
+    entries: [localEntry],
+    sessionName: "Local title",
+    select: async (_title, choices) => choices[0],
+  });
+  fake.ctx.switchSession = async (target) => {
+    switchedTarget = target;
+    return { cancelled: false };
+  };
+  try {
+    await fake.handlers.get("command:sync")("", fake.ctx);
+    const update = requests.find(request => request.method === "PUT");
+    assert.equal(JSON.parse(update.init.body).title, "Local title");
+    const materialized = await readFile(switchedTarget, "utf8");
+    assert.match(materialized, new RegExp(remoteId));
+    assert.match(materialized, /Canonical history/);
+    assert.doesNotMatch(materialized, /Local history/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("sync attach uses the current conversation title", async () => {
+  const entries = [{
+    ...envelope.entries[0],
+    message: { role: "user", content: [{ type: "text", text: "Investigate the synchronization failure in detail" }] },
+  }];
+  const requests = [];
+  const fake = await harness(async (_url, init = {}) => {
+    requests.push(init);
+    const body = JSON.parse(init.body);
+    return Response.json({ formatVersion: 1, session: body, etag: "e1" });
+  }, { entries });
+  try {
+    await fake.handlers.get("command:sync")("attach http://sync.test", fake.ctx);
+    assert.equal(JSON.parse(requests[0].body).title, "Investigate the synchronization failure in detail".slice(0, 48));
   } finally {
     await fake.close();
   }

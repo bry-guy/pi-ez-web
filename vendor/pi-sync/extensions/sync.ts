@@ -35,6 +35,27 @@ type ActiveLease = {
   timer?: ReturnType<typeof setInterval>;
 };
 
+function usefulTitle(title: unknown, ...placeholders: (string | undefined)[]): string {
+  if (typeof title !== "string") return "";
+  const value = title.trim();
+  return value && !placeholders.includes(value) ? value : "";
+}
+
+function conversationTitle(ctx: ExtensionContext): string {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const name = usefulTitle(ctx.sessionManager.getSessionName(), sessionId);
+  if (name) return name;
+  const entry = ctx.sessionManager.getEntries?.().find((candidate) => candidate.type === "message" && candidate.message?.role === "user");
+  if (!entry || entry.type !== "message" || entry.message.role !== "user") return "";
+  const content = entry.message.content;
+  const text = typeof content === "string" ? content : content.find((part) => part.type === "text")?.text || "";
+  return String(text).replace(/\s+/g, " ").trim().slice(0, 48);
+}
+
+function bindingTitle(binding?: SyncBinding): string {
+  return usefulTitle(binding?.title, binding?.nativeSessionId, binding?.canonicalSessionId);
+}
+
 export default function syncExtension(pi: ExtensionAPI) {
   const store = new BindingStore(getAgentDir());
   let deviceLabel = "pi-client";
@@ -431,10 +452,11 @@ export default function syncExtension(pi: ExtensionAPI) {
   const normalizeCurrent = async (ctx: ExtensionContext, binding?: SyncBinding): Promise<{ envelope: SessionEnvelope; path: string }> => {
     const path = ctx.sessionManager.getSessionFile();
     if (!path) throw new Error("synchronization requires a persistent Pi session");
+    const title = bindingTitle(binding) || bindingTitle(active?.binding) || conversationTitle(ctx);
     const envelope = await normalizeSessionFile(path, {
       requestedSessionId: ctx.sessionManager.getSessionId(),
       headEntryId: ctx.sessionManager.getLeafId() ?? "",
-      title: binding?.title ?? active?.binding.title ?? ctx.sessionManager.getSessionName() ?? "",
+      title,
       parentSessionId: binding?.parentSessionId ?? active?.binding.parentSessionId,
       workspace: await workspaceForCommit(ctx, binding),
     });
@@ -553,6 +575,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (!url) return failCommand(ctx, undefined, "sync_not_configured", "Set PI_SYNC_SERVER_URL before using /sync.");
     if (!ctx.hasUI) return failCommand(ctx, undefined, "sync_ui_required", "The synchronized-session picker requires Pi interactive UI.");
     const repository = await repositoryForPicker(ctx);
+    const localTitle = bindingTitle(currentBinding) || conversationTitle(ctx);
     let list;
     try {
       list = await clientFor(url).list({ repository: repository ?? null });
@@ -568,7 +591,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     }
     const rows = sessions.map((item) => ({
       item,
-      label: `${item.title || item.sessionId} — ${item.workspace?.branch ?? "no branch"} — ${item.leaseHolder ? `● ${item.leaseHolder}` : "○ available"}`,
+      label: `${usefulTitle(item.title, item.sessionId) || "Untitled conversation"} — ${item.workspace?.branch ?? "no branch"} — ${item.leaseHolder ? `● ${item.leaseHolder}` : "○ available"}`,
     }));
     const selected = await ctx.ui.select("Synchronized conversations", rows.map((row) => row.label));
     if (!selected) return;
@@ -589,6 +612,20 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (repositoryIdentity(acquired.session.workspace) !== repository) {
       await clientFor(url).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
       return failCommand(ctx, undefined, "sync_workspace_mismatch", "The selected conversation belongs to a different Git repository.");
+    }
+    if (!usefulTitle(acquired.session.title, acquired.session.sessionId) && localTitle) {
+      try {
+        const response = await clientFor(url).update(
+          acquired.session.sessionId,
+          { ...acquired.session, title: localTitle },
+          acquired.lease.token,
+          acquired.etag,
+        );
+        acquired = { ...acquired, session: response.session, etag: response.etag };
+      } catch (error) {
+        await clientFor(url).release(acquired.session.sessionId, acquired.lease.token).catch(() => undefined);
+        return failCommand(ctx, error, "sync_materialization_failed", "Could not update the synchronized conversation title.");
+      }
     }
     const sessionDir = ctx.sessionManager.getSessionDir();
     const target = join(sessionDir, `${Date.now()}_${acquired.session.sessionId}.jsonl`);
@@ -850,13 +887,12 @@ export default function syncExtension(pi: ExtensionAPI) {
       showBlocked(ctx);
       return;
     }
-    if (binding.title === undefined) {
-      binding = { ...binding, title: ctx.sessionManager.getSessionName() || "" };
+    const title = bindingTitle(binding) || conversationTitle(ctx);
+    if (binding.title !== title) {
+      binding = { ...binding, title };
       await store.set(binding);
     }
-    if (typeof binding.title === "string" && (ctx.sessionManager.getSessionName() || "") !== binding.title.trim()) {
-      pi.setSessionName?.(binding.title.trim());
-    }
+    if (title && (ctx.sessionManager.getSessionName() || "") !== title) pi.setSessionName?.(title);
     void warnWorkspace(ctx, binding);
     if (binding.leaseToken) {
       const repository = await repositoryForPicker(ctx);
@@ -871,11 +907,19 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   pi.on("session_info_changed", async (_event, ctx) => {
     if (!currentSessionId) return;
-    const binding = await store.get(currentSessionId);
-    if (typeof binding?.title !== "string") return;
-    const title = binding.title.trim();
-    if ((ctx.sessionManager.getSessionName() || "") === title) return;
-    pi.setSessionName?.(title);
+    let binding = await store.get(currentSessionId);
+    if (!binding) return;
+    const title = bindingTitle(binding);
+    if (!title) {
+      const current = conversationTitle(ctx);
+      if (current) {
+        binding = { ...binding, title: current };
+        await store.set(binding);
+        if (active?.binding.nativeSessionId === binding.nativeSessionId) active.binding = binding;
+      }
+      return;
+    }
+    if ((ctx.sessionManager.getSessionName() || "") !== title) pi.setSessionName?.(title);
   });
 
   pi.on("resources_discover", async () => {

@@ -196,6 +196,7 @@ function findNode(nodes, id) {
 // --- transcript loading: subscribe first, buffer, snapshot, apply ---
 const loading = new Set();
 const buffers = new Map();
+export function shouldBufferEvent(type) { return type !== "session_switched"; }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
   for (let attempt = 0; ; attempt++) {
@@ -356,7 +357,7 @@ export function connectSSE() {
       return;
     }
     const buf = buffers.get(evt.sessionId);
-    if (buf) { buf.push(evt); return; }
+    if (buf && shouldBufferEvent(evt.type)) { buf.push(evt); return; }
     applyEvent(evt);
   };
   es.onerror = () => {
@@ -373,7 +374,21 @@ function tOf(id) {
 }
 function byId(records, id) { return records.find(r => r.id === id); }
 
+async function openSwitchedSession(id) {
+  const { selectSessionById } = await import("./shell.js");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await refreshState();
+    if (selectSessionById(id, { skipRefresh: true })) return;
+  }
+  throw new Error("The synchronized conversation is not available locally.");
+}
+
 export function applyEvent(evt, replay = false) {
+  if (evt.type === "session_switched" && evt.toSessionId) {
+    void openSwitchedSession(evt.toSessionId)
+      .catch(error => store.setError(`Could not open the synchronized conversation: ${error.message || error}`));
+    return;
+  }
   if (evt.type === "extension_ui_request") {
     store.set({ extensionUi: { ...evt, sessionId: evt.sessionId } });
     return;
@@ -576,12 +591,6 @@ export function applyEvent(evt, replay = false) {
       break;
     }
     default: break;
-  }
-  if (evt.type === "session_switched" && evt.toSessionId) {
-    void refreshState()
-      .then(() => import("./shell.js"))
-      .then(({ selectSessionById }) => selectSessionById(evt.toSessionId, { skipRefresh: true }))
-      .catch(error => store.setError(`Could not open the synchronized conversation: ${error.message || error}`));
   }
   if (["turn_end", "bang_end"].includes(evt.type)
     && findSessionInState({ projects: store.state.projects, chats: [] }, evt.sessionId)) {

@@ -196,7 +196,9 @@ async function boot() {
 test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
-  const { api, applyEvent, refreshState } = await import("../public/js/api.js");
+  const { api, applyEvent, refreshState, shouldBufferEvent } = await import("../public/js/api.js");
+  assert.equal(shouldBufferEvent("text_delta"), true);
+  assert.equal(shouldBufferEvent("session_switched"), false);
   const { openSessionPicker, selectSession } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
   assert.ok(root.querySelector("pi-sidebar"));
@@ -309,9 +311,25 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(feedEvents.at(-1).textContent, "Latest fetch event");
   const currentProject = store.state.projects.find(item => item.id === "p1");
   const currentSession = store.findSession("s1", currentProject.sessions);
-  Object.assign(currentSession, { synchronized: true, syncState: "available" });
+  Object.assign(currentSession, {
+    synchronized: true,
+    syncState: "available",
+    syncSessionId: "sync-1",
+    syncTitle: "Canonical session",
+    syncWorkspace: { gitRemote: "https://github.com/owner/demo.git", branch: "main", commit: "0123456789abcdef" },
+  });
   Object.assign(currentProject.contexts[0].sessions[0], { synchronized: true, syncState: "available" });
   store.notify("state");
+  assert.deepEqual([...root.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
+    ["Branch", "main"],
+    ["Commit", "abcdef12 Initial project commit"],
+    ["Workspace", "checkout · /tmp/demo"],
+    ["Status", "1 file staged, 2 files unstaged, 1 file untracked"],
+    ["Sync", "Available"],
+    ["Conversation", "Canonical session"],
+    ["Sync ID", "sync-1"],
+    ["Upstream", "main@01234567"],
+  ]);
   assert.ok(root.querySelector("pi-header .bar-main .sync-badge"));
   assert.equal(root.querySelector("header.bar > .sync-badge"), null, "Sync status stays in the title group");
   root.querySelector("[data-act='close-session-picker']").click();
@@ -844,6 +862,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector(".logs-modal").textContent, /Session closed/);
   assert.doesNotMatch(root.querySelector(".logs-modal").textContent, /pi close/);
   root.querySelector("[data-act='close-logs']").click();
+
+  state.projects[0].sessions.push({ id: "sync-target", title: "Canonical session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] });
+  applyEvent({ v: 1, seq: 101, sessionId: "s1", type: "session_switched", toSessionId: "sync-target" });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(store.state.sessionId, "sync-target", "session switch events select the canonical conversation");
 
   dom.window.close();
 });
