@@ -6,7 +6,7 @@
 > **Audience:** A junior engineer implementing one reviewed ticket at a time,
 > with mandatory senior review where marked.
 >
-> **Target:** `@earendil-works/pi-coding-agent@0.84.1`, Node 22, the existing
+> **Target:** `@earendil-works/pi-coding-agent@0.84.4`, Node 22, the existing
 > zero-build browser application, and the existing Hono server.
 
 ## Outcome
@@ -240,7 +240,7 @@ showing it.
 header, register its path/metadata, and return. It must not initialize
 `ModelRuntime`.
 
-Pi 0.84.1 defers a new session file until entries are flushed. This repository
+Pi 0.84.4 defers a new session file until entries are flushed. This repository
 already uses the SDK's `_rewriteFile()` compatibility surface for bang
 persistence and asserts it in `test/sdk-surface.test.js`. Extract that behavior
 into one helper rather than duplicating it.
