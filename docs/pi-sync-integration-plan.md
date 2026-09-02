@@ -77,8 +77,11 @@ The pi-sync extension is authoritative in the real web runtime:
 4. Pi runs the turn locally with the configured web workspace.
 5. `agent_settled` normalizes and uploads the complete JSONL snapshot.
 6. The extension releases the lease.
-7. `/sync` lists sessions through the browser `select` dialog.
-8. The extension materializes the selected canonical snapshot and calls
+7. Manual `/compact` acquires the lease before changing the session and uploads
+   the new full snapshot after successful compaction; failed or cancelled
+   manual compaction releases an unchanged lease.
+8. `/sync` lists sessions through the browser `select` dialog.
+9. The extension materializes the selected canonical snapshot and calls
    `ctx.switchSession`; the web adapter replaces the active `AgentSession`.
 
 The old `PiSyncCoordinator` is not installed in this path, so there is only one
@@ -93,10 +96,10 @@ authoritative, so a stale local copy—including one with an interrupted,
 unuploaded turn—is replaced before the prompt runs. The previous materialized
 file remains on disk as a recovery copy. Lease and transport failures still
 block because they do not establish whether the server accepted the turn.
-Existing web-only durable operations that do not enter Pi's prompt lifecycle
-remain local until a later prompt or explicit synchronization operation.
-Automatic focus refresh is disabled in this path so those local entries are
-not silently replaced.
+Remaining web-only durable operations that do not enter Pi's prompt or
+compaction lifecycle remain local until a later prompt or explicit
+synchronization operation. Automatic focus refresh is disabled in this path so
+those local entries are not silently replaced.
 
 The web's existing sync endpoints remain as thin compatibility surfaces:
 manual enrollment and refresh invoke `/sync attach` and `/sync refresh` through
@@ -149,13 +152,14 @@ can acquire one when an upstream becomes available.
 
 The current tests cover browser `select`/`confirm`/`input`/`editor` request and
 cancellation, command error propagation, Git pointer sanitization and
-repository scoping, duplicate materialized-file selection, and the pi-sync
-extension's lease/ETag lifecycle.
+repository scoping, duplicate materialized-file selection, compaction
+settlement, and the pi-sync extension's lease/ETag lifecycle.
 The remaining acceptance tests are:
 
 - actual pi-sync `/sync attach`, prompt settlement, and `/sync refresh` through
   the web SDK runtime;
 - browser `/sync` selection and `switchSession` replacement;
+- actual manual and automatic compaction settlement through the web-loaded extension;
 - sticky names across materialization and local rename attempts;
 - Git pointer transfer and non-blocking mismatch notifications;
 - representative third-party extensions and skills loading unchanged.
@@ -177,7 +181,7 @@ These are intentionally not part of the initial sync cutover:
   components;
 - add an explicit `/sync rename` or `/sync flush` operation;
 - improve workspace selection and Git guidance without automatic Git changes;
-- bring direct web-only durable mutations (for example bang records and
-  compaction) into an explicit extension-owned flush lifecycle;
+- bring remaining direct web-only durable mutations (for example bang
+  records) into an explicit extension-owned flush lifecycle;
 - reduce remaining transcript/event translation where the SDK event surface is
   sufficient.
