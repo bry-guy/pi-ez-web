@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { appHome, githubConfig, loadBindings, loadConfig, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, repositorySource, saveBindings, saveConfig, worktreeRoot } from "../server/config.js";
+import { appHome, githubConfig, loadBindings, loadClosed, loadConfig, normalizeHooks, normalizePiConfig, normalizeThinkingLevel, prepareSessionVisibilityReplacement, repositorySource, saveBindings, saveClosed, saveConfig, worktreeRoot } from "../server/config.js";
 
 let tmp;
 const previousHome = process.env.PI_WEB_HOME;
@@ -100,4 +100,56 @@ test("bindings v1 strings migrate to v2 objects and round-trip", () => {
 
   saveBindings({ s2: { branch: "feat/new", workspacePath: "/tmp/new-worktree" } });
   assert.deepEqual(loadBindings(), { s2: { branch: "feat/new", workspacePath: "/tmp/new-worktree" } });
+});
+
+test("session replacement copies visibility without retiring the source", () => {
+  const source = { projectId: "p1", workspacePath: "/tmp/project-b", branch: "feature/b" };
+  const before = { source };
+  saveBindings(before);
+  saveClosed(new Set(["target"]));
+
+  const replacement = prepareSessionVisibilityReplacement("source", "target", "/tmp/target-cwd");
+  assert.equal(replacement.workspacePath, source.workspacePath);
+  const committed = replacement.commit();
+  assert.deepEqual(loadBindings(), { source, target: source });
+  assert.deepEqual([...loadClosed()], []);
+
+  committed.rollback();
+  assert.deepEqual(loadBindings(), before);
+  assert.deepEqual([...loadClosed()], ["target"]);
+
+  saveBindings(before);
+  saveClosed(new Set(["target"]));
+  const closedFile = path.join(appHome(), "closed.json");
+  const originalRename = fs.renameSync;
+  fs.renameSync = (from, to, ...args) => {
+    if (to === closedFile) throw new Error("closed write failed");
+    return originalRename(from, to, ...args);
+  };
+  try {
+    assert.throws(() => prepareSessionVisibilityReplacement("source", "target", "/tmp/project-b").commit(), /closed write failed/);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+  assert.deepEqual(loadBindings(), before);
+  assert.deepEqual([...loadClosed()], ["target"]);
+
+  saveBindings({ source, target: { projectId: "p2", workspacePath: "/tmp/other" } });
+  assert.throws(() => prepareSessionVisibilityReplacement("source", "target", "/tmp/project-b"), error => error.code === "session_binding_conflict");
+
+  saveBindings({ target: { projectId: "p2", workspacePath: "/tmp/other" } });
+  saveClosed(new Set(["target"]));
+  const unbound = prepareSessionVisibilityReplacement("source-unbound", "target", "/tmp/project-b");
+  unbound.commit();
+  assert.deepEqual(loadBindings(), { target: { projectId: "p2", workspacePath: "/tmp/other" } });
+  assert.deepEqual([...loadClosed()], []);
+
+  saveBindings({ same: { projectId: "p1", workspacePath: "/tmp/project-b" } });
+  saveClosed(new Set(["same"]));
+  prepareSessionVisibilityReplacement("same", "same", "/tmp/other").commit();
+  assert.deepEqual(loadBindings(), { same: { projectId: "p1", workspacePath: "/tmp/project-b" } });
+  assert.deepEqual([...loadClosed()], []);
+
+  saveBindings({});
+  saveClosed(new Set());
 });

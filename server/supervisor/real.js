@@ -4,7 +4,7 @@
 // streaming), so a snapshot and its replay address the same records.
 import fs from "node:fs";
 import path from "node:path";
-import { loadBindings, loadConfig } from "../config.js";
+import { loadBindings, loadConfig, prepareSessionVisibilityReplacement } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
 import { activityFromEntry, activityFromToolResult, normalizeActivity } from "../activity.js";
 import { SubagentActivityStore } from "../subagent-activity.js";
@@ -317,7 +317,7 @@ export class RealSupervisor {
     }
   }
 
-  async _attach(id, cwd, modelRef) {
+  async _attach(id, cwd, modelRef, { reconcile = true } = {}) {
     const cached = id && this.live.get(id);
     if (cached) return cached;
     const { SessionManager } = await SDK();
@@ -342,6 +342,7 @@ export class RealSupervisor {
       this.pendingSyncHeads.delete(session.sessionId);
       await session.navigateTree(pendingHead, { summarize: false });
     }
+    if (!reconcile) return this.live.get(session.sessionId);
     const sync = await this.syncAdapter?.beforePrompt?.(session.sessionId);
     return sync?.switched
       ? this.live.get(sync.sessionId || session.sessionId) || this.live.get(session.sessionId)
@@ -817,45 +818,101 @@ export class RealSupervisor {
   async _replaceLiveSession(fromId, current, targetManager, { reason, withSession, setup, selectedText } = {}) {
     const targetFile = targetManager.getSessionFile();
     const targetId = targetManager.getSessionId();
-    const targetCwd = targetManager.getCwd() || current.cwd;
+    const fallbackCwd = targetManager.getCwd() || current.cwd;
+    const visibility = prepareSessionVisibilityReplacement(fromId, targetId, fallbackCwd);
+    const targetCwd = visibility.workspacePath || fallbackCwd;
     const existingTarget = this.live.get(targetId);
     if (existingTarget && existingTarget !== current) {
       if (existingTarget.session.isStreaming) throw Object.assign(new Error("The target session is still running."), { code: "session_streaming" });
-      await this._disposeLiveState(existingTarget, reason, targetFile);
-      this.live.delete(targetId);
     }
-    if (current.session.isStreaming) await current.session.abort();
-    await this._disposeLiveState(current, reason, targetFile);
-    this.live.delete(fromId);
-    if (targetFile) {
-      this.paths.set(targetId, targetFile);
-      this.preferredPaths.set(targetId, targetFile);
+
+    const snapshot = new Map([fromId, targetId].map(id => [id, {
+      live: this.live.get(id),
+      hasPath: this.paths.has(id),
+      path: this.paths.get(id),
+      hasPreferredPath: this.preferredPaths.has(id),
+      preferredPath: this.preferredPaths.get(id),
+      hasInfo: this.info.has(id),
+      info: this.info.get(id),
+    }]));
+    const disposed = new Set();
+    let replacement;
+    let committed;
+    const restoreMaps = () => {
+      for (const [id, previous] of snapshot) {
+        if (disposed.has(id)) this.live.delete(id);
+        else if (previous.live) this.live.set(id, previous.live);
+        else this.live.delete(id);
+        if (previous.hasPath) this.paths.set(id, previous.path); else this.paths.delete(id);
+        if (previous.hasPreferredPath) this.preferredPaths.set(id, previous.preferredPath); else this.preferredPaths.delete(id);
+        if (previous.hasInfo) this.info.set(id, previous.info); else this.info.delete(id);
+      }
+    };
+    const restoreLive = async id => {
+      const previous = snapshot.get(id);
+      if (!disposed.has(id) || !previous?.live) return;
+      try {
+        await this._attach(id, this._boundCwd(id, previous.live.cwd), await this._preferredModel(id), { reconcile: false });
+      } catch {}
+    };
+
+    try {
+      if (existingTarget && existingTarget !== current) {
+        await this._disposeLiveState(existingTarget, reason, targetFile);
+        this.live.delete(targetId);
+        disposed.add(targetId);
+      }
+      if (current.session.isStreaming) await current.session.abort();
+      await this._disposeLiveState(current, reason, targetFile);
+      this.live.delete(fromId);
+      disposed.add(fromId);
+      if (targetFile) {
+        this.paths.set(targetId, targetFile);
+        this.preferredPaths.set(targetId, targetFile);
+      }
+      const runtime = await this._modelRuntime();
+      const result = await this._withSessionCreateLock(() => this._createConfiguredSession({
+        cwd: targetCwd,
+        sessionManager: targetManager,
+        modelRuntime: runtime,
+        model: undefined,
+        syncSessionId: targetId,
+        ...(targetFile ? { sessionStartEvent: {
+          type: "session_start",
+          reason,
+          ...(current.session.sessionFile ? { previousSessionFile: current.session.sessionFile } : {}),
+        } } : {}),
+      }));
+      replacement = result.session;
+      this._registerLiveSession(replacement, targetCwd);
+      if (setup) {
+        await setup(targetManager);
+        replacement.agent.state.messages = targetManager.buildSessionContext().messages;
+      }
+      await withSession?.(replacement.createReplacedSessionContext());
+      committed = visibility.commit();
+      this.hub.emit(fromId, "session_switched", {
+        fromSessionId: fromId,
+        toSessionId: targetId,
+        cwd: targetCwd,
+      });
+      return { cancelled: false, ...(selectedText !== undefined ? { selectedText } : {}) };
+    } catch (error) {
+      const replacementState = replacement && this.live.get(targetId)?.session === replacement
+        ? this.live.get(targetId)
+        : null;
+      if (replacementState) {
+        await this._disposeLiveState(replacementState, reason, targetFile);
+        if (this.live.get(targetId) === replacementState) this.live.delete(targetId);
+      } else {
+        try { replacement?.dispose?.(); } catch {}
+      }
+      try { committed?.rollback?.(); } catch {}
+      restoreMaps();
+      await restoreLive(fromId);
+      if (targetId !== fromId) await restoreLive(targetId);
+      throw error;
     }
-    const runtime = await this._modelRuntime();
-    const { session } = await this._withSessionCreateLock(() => this._createConfiguredSession({
-      cwd: targetCwd,
-      sessionManager: targetManager,
-      modelRuntime: runtime,
-      model: undefined,
-      syncSessionId: targetId,
-      ...(targetFile ? { sessionStartEvent: {
-        type: "session_start",
-        reason,
-        ...(current.session.sessionFile ? { previousSessionFile: current.session.sessionFile } : {}),
-      } } : {}),
-    }));
-    this._registerLiveSession(session, targetCwd);
-    if (setup) {
-      await setup(targetManager);
-      session.agent.state.messages = targetManager.buildSessionContext().messages;
-    }
-    await withSession?.(session.createReplacedSessionContext());
-    this.hub.emit(fromId, "session_switched", {
-      fromSessionId: fromId,
-      toSessionId: targetId,
-      cwd: targetCwd,
-    });
-    return { cancelled: false, ...(selectedText !== undefined ? { selectedText } : {}) };
   }
 
   async switchSessionFromCommand(fromId, sessionPath, options = {}) {

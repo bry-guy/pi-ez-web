@@ -296,6 +296,61 @@ export function saveBindings(b) {
   writeJson(bindingsPath(), b);
 }
 
+function bindingObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function assertSessionBindingCompatible(source, target) {
+  const sourceProject = bindingObject(source)?.projectId;
+  const targetProject = bindingObject(target)?.projectId;
+  if (sourceProject && targetProject && sourceProject !== targetProject) {
+    throw Object.assign(new Error("The replacement session belongs to a different project."), { code: "session_binding_conflict" });
+  }
+}
+
+export function prepareSessionVisibilityReplacement(sourceId, targetId, fallbackWorkspace) {
+  const initialBindings = loadBindings();
+  const source = bindingObject(initialBindings[sourceId]);
+  const target = bindingObject(initialBindings[targetId]);
+  assertSessionBindingCompatible(source, target);
+  const inherited = source
+    ? { ...source, ...(!source.workspacePath && fallbackWorkspace ? { workspacePath: fallbackWorkspace } : {}) }
+    : null;
+  const workspacePath = inherited?.workspacePath || target?.workspacePath || fallbackWorkspace || null;
+  let committed = null;
+
+  return {
+    workspacePath,
+    commit() {
+      const beforeBindings = loadBindings();
+      const beforeClosed = loadClosed();
+      assertSessionBindingCompatible(source, beforeBindings[targetId]);
+      const nextBindings = { ...beforeBindings };
+      if (inherited) nextBindings[targetId] = { ...inherited };
+      const nextClosed = new Set(beforeClosed);
+      nextClosed.delete(targetId);
+      try {
+        if (JSON.stringify(nextBindings) !== JSON.stringify(beforeBindings)) saveBindings(nextBindings);
+        if (nextClosed.size !== beforeClosed.size) saveClosed(nextClosed);
+      } catch (error) {
+        try { saveBindings(beforeBindings); } catch {}
+        try { saveClosed(beforeClosed); } catch {}
+        throw error;
+      }
+      committed = { bindings: beforeBindings, closed: beforeClosed };
+      return {
+        rollback() {
+          if (!committed) return;
+          const previous = committed;
+          committed = null;
+          saveBindings(previous.bindings);
+          saveClosed(previous.closed);
+        },
+      };
+    },
+  };
+}
+
 export function sessionSlug(firstMessage) {
   const slug = String(firstMessage || "")
     .toLowerCase()

@@ -58,6 +58,7 @@ async function boot() {
     pretendToBeVisual: true,
   });
   let narrowViewport = false;
+  let stateReads = 0;
   dom.setNarrowViewport = value => { narrowViewport = value; };
   const realSetInterval = globalThis.setInterval;
   globalThis.setInterval = (fn, ms, ...args) => {
@@ -82,7 +83,13 @@ async function boot() {
     DOMPurify: createDOMPurify(dom.window),
     fetch: async (input, options = {}) => {
       const url = String(input);
-      if (url === "/api/state") return json(state);
+      if (url === "/api/state") {
+        stateReads++;
+        if (dom.window.__addSyncTargetOnStateRefresh && stateReads > 1 && !state.projects[0].sessions.some(session => session.id === "sync-target")) {
+          state.projects[0].sessions.push({ id: "sync-target", title: "Canonical session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] });
+        }
+        return json(state);
+      }
       if (url === "/api/models") return json({ models: state.models });
       if (url.startsWith("/api/logs")) return json({ file: "logs/pi-ez-web.log", logs: [{ at: Date.now(), level: "info", source: "operation", message: "Server is ready." }] });
       if (url === "/api/events") return new Response(": connected v1\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -872,10 +879,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.doesNotMatch(root.querySelector(".logs-modal").textContent, /pi close/);
   root.querySelector("[data-act='close-logs']").click();
 
-  state.projects[0].sessions.push({ id: "sync-target", title: "Canonical session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] });
+  dom.window.__addSyncTargetOnStateRefresh = true;
+  store.set({ error: null });
   applyEvent({ v: 1, seq: 101, sessionId: "s1", type: "session_switched", toSessionId: "sync-target" });
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(store.state.sessionId, "sync-target", "session switch events select the canonical conversation");
+  assert.equal(store.state.error, null, "state refresh discovers the target without a synchronization error");
 
   dom.window.close();
 });

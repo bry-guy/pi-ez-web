@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { loadBindings, loadClosed, saveBindings, saveClosed } from "../server/config.js";
+import { projectState } from "../server/domain.js";
 import { RealSupervisor, isPackageSetupFailure } from "../server/supervisor/real.js";
 
 const script = `
@@ -62,6 +64,156 @@ test("messages reconcile synchronized sessions before a normal prompt", async ()
   };
   await supervisor.message("session-1", "hello", "prompt");
   assert.deepEqual(prompted, ["hello"]);
+});
+
+test("replacement commits project visibility before announcing the target", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-replacement-"));
+  const previousHome = process.env.PI_WEB_HOME;
+  process.env.PI_WEB_HOME = path.join(tmp, "web");
+  fs.mkdirSync(process.env.PI_WEB_HOME, { recursive: true });
+  try {
+    const sourceId = "source-session";
+    const targetId = "target-session";
+    const repo = path.join(tmp, "workspace-b");
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo, stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, "README.md"), "test\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: repo, stdio: "ignore" });
+    const sourceFile = path.join(tmp, "sessions", `${sourceId}.jsonl`);
+    const targetFile = path.join(tmp, "sessions", `${targetId}.jsonl`);
+    const sourceBinding = { projectId: "project-1", workspacePath: repo };
+    const disposed = [];
+    const events = [];
+    const targetManager = {
+      getSessionFile: () => targetFile,
+      getSessionId: () => targetId,
+      getCwd: () => path.join(tmp, "workspace-a"),
+      getBranch: () => [],
+      buildSessionContext: () => ({ messages: [] }),
+    };
+    const makeSession = (id, file, sessionManager) => ({
+      sessionId: id,
+      sessionFile: file,
+      sessionManager,
+      model: { provider: "test", id: "model", api: "test" },
+      isStreaming: false,
+      extensionRunner: { emit: async () => undefined },
+      subscribe: () => () => {},
+      dispose: () => disposed.push(id),
+      createReplacedSessionContext: () => ({}),
+      agent: { state: { messages: [] } },
+    });
+    const sourceManager = { getBranch: () => [] };
+    const current = {
+      cwd: path.join(tmp, "workspace-a"),
+      session: makeSession(sourceId, sourceFile, sourceManager),
+    };
+    const supervisor = new RealSupervisor({
+      emit: (id, type, data) => events.push({ id, type, data, bindings: loadBindings() }),
+    });
+    supervisor.live.set(sourceId, current);
+    supervisor.paths.set(sourceId, sourceFile);
+    supervisor.info.set(sourceId, { id: sourceId, path: sourceFile, cwd: current.cwd, model: "test/model" });
+    supervisor._modelRuntime = async () => ({});
+    let createdCwd;
+    supervisor._createConfiguredSession = async ({ cwd, sessionManager }) => {
+      createdCwd = cwd;
+      return { session: makeSession(targetId, targetFile, sessionManager) };
+    };
+    saveBindings({ [sourceId]: sourceBinding });
+    saveClosed(new Set([targetId]));
+
+    await supervisor._replaceLiveSession(sourceId, current, targetManager, { reason: "resume" });
+
+    assert.equal(createdCwd, sourceBinding.workspacePath);
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].bindings, { [sourceId]: sourceBinding, [targetId]: sourceBinding });
+    assert.deepEqual(loadBindings(), { [sourceId]: sourceBinding, [targetId]: sourceBinding });
+    assert.deepEqual([...loadClosed()], []);
+    assert.equal(supervisor.live.has(sourceId), false);
+    assert.equal(supervisor.live.has(targetId), true);
+    assert.deepEqual(disposed, [sourceId]);
+
+    supervisor.listSessions = async () => [];
+    supervisor.meta = async id => [sourceId, targetId].includes(id)
+      ? { id, cwd: repo, name: null, model: "test/model", parentSessionId: null }
+      : null;
+    const state = await projectState({ id: "project-1", name: "demo", repoPath: repo }, supervisor);
+    const visibleTarget = state.sessions.find(session => session.id === targetId);
+    assert.equal(visibleTarget.workspacePath, repo);
+    assert.equal(visibleTarget.contextId, state.contexts.find(context => context.path === repo).id);
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_WEB_HOME;
+    else process.env.PI_WEB_HOME = previousHome;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("failed replacement restores source bookkeeping and emits no switch", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-replacement-failure-"));
+  const previousHome = process.env.PI_WEB_HOME;
+  process.env.PI_WEB_HOME = path.join(tmp, "web");
+  fs.mkdirSync(process.env.PI_WEB_HOME, { recursive: true });
+  try {
+    const sourceId = "source-session";
+    const targetId = "target-session";
+    const sourceFile = path.join(tmp, `${sourceId}.jsonl`);
+    const targetFile = path.join(tmp, `${targetId}.jsonl`);
+    const sourceBinding = { projectId: "project-1", workspacePath: path.join(tmp, "workspace-b") };
+    const sourceManager = { getBranch: () => [] };
+    const sourceSession = {
+      sessionId: sourceId,
+      sessionFile: sourceFile,
+      sessionManager: sourceManager,
+      model: { provider: "test", id: "model", api: "test" },
+      isStreaming: false,
+      extensionRunner: { emit: async () => undefined },
+      subscribe: () => () => {},
+      dispose() {},
+    };
+    const current = { cwd: path.join(tmp, "workspace-a"), session: sourceSession };
+    const targetManager = {
+      getSessionFile: () => targetFile,
+      getSessionId: () => targetId,
+      getCwd: () => current.cwd,
+    };
+    const events = [];
+    const supervisor = new RealSupervisor({ emit: (...args) => events.push(args) });
+    supervisor.live.set(sourceId, current);
+    supervisor.paths.set(sourceId, sourceFile);
+    supervisor.info.set(sourceId, { id: sourceId, path: sourceFile, cwd: current.cwd, model: "test/model" });
+    supervisor._modelRuntime = async () => ({});
+    supervisor._createConfiguredSession = async () => { throw new Error("target setup failed"); };
+    const restored = [];
+    supervisor._attach = async (id, cwd, model, options) => {
+      restored.push({ id, cwd, model, options });
+      supervisor.live.set(id, current);
+      return current;
+    };
+    saveBindings({ [sourceId]: sourceBinding });
+    saveClosed(new Set([targetId]));
+
+    await assert.rejects(
+      supervisor._replaceLiveSession(sourceId, current, targetManager, { reason: "resume" }),
+      /target setup failed/,
+    );
+
+    assert.equal(events.length, 0);
+    assert.deepEqual(loadBindings(), { [sourceId]: sourceBinding });
+    assert.deepEqual([...loadClosed()], [targetId]);
+    assert.equal(supervisor.live.get(sourceId), current);
+    assert.equal(supervisor.paths.get(sourceId), sourceFile);
+    assert.equal(supervisor.paths.has(targetId), false);
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0].options.reconcile, false);
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_WEB_HOME;
+    else process.env.PI_WEB_HOME = previousHome;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("compaction events become visible status activities", () => {
