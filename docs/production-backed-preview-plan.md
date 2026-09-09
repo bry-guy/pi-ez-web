@@ -1,6 +1,8 @@
 # Production-backed frontend preview plan
 
-Status: preview conversion implemented in this branch; production-backed rollout remains an infra/app integration step.
+Status: deferred and superseded. The active preview is an infra-owned isolated
+full-stack workload; this document records the alternative production-backed UI
+plan for future reconsideration.
 
 ## Context
 
@@ -49,9 +51,9 @@ All application API calls remain relative `/api/...`; the browser therefore
 uses the preview origin and needs no CORS behavior. The SSE connection at
 `/api/events` follows the same production route.
 
-## Preview deployment changes
+## Historical preview deployment proposal
 
-`deploy/k8s-preview` is now a stateless UI workload:
+The previously proposed `deploy/k8s-preview` stateless UI workload would have:
 
 - Run the application image in UI-only mode.
 - Remove the state initialization init container.
@@ -63,9 +65,10 @@ uses the preview origin and needs no CORS behavior. The SSE connection at
 - Keep one replica, immutable image selection, non-root security context,
   resource limits, and static-process probes.
 
-The preview Service continues to select only the prefixed preview pod. The app
-repository remains responsible for this generic stateless workload; the infra
-repository owns the preview hostname's path routing.
+The preview Service would select only the prefixed preview pod. The proposal
+placed this generic stateless workload in the app repository and the preview
+hostname's path routing in infra; the active implementation instead keeps the
+full-stack preview in infra.
 
 Retain the current isolated preview state outside the new workload as rollback
 data during migration. This plan does not require deleting its retained PV or
@@ -126,8 +129,8 @@ must make that production-data relationship unambiguous.
 1. Refactor static asset serving into a UI-only app constructor.
 2. Add UI configuration and the production-data banner.
 3. Add proxy-routing integration tests with the mock backend.
-4. Convert `deploy/k8s-preview` to the stateless UI workload. **Done in this
-   branch.**
+4. Convert `deploy/k8s-preview` to the stateless UI workload; this proposal was
+   superseded by the infra-owned isolated full-stack preview.
 5. Land the infra path split and verify SSE through the preview hostname.
-6. Keep the old preview state retained until the new preview has passed normal
-   branch rollouts and production mutations through the alternate UI.
+6. If this design is revisited, retain the existing preview state until the new
+   preview has passed normal branch rollouts and production mutations.

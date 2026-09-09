@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -47,20 +45,9 @@ test("project hook capability is advertised by the server", () => {
   assert.match(version, /project-hooks/);
 });
 
-test("k3s deployment uses private image GitOps wiring", () => {
-  const deployment = fs.readFileSync(path.join(root, "deploy/k8s/deployment.yaml"), "utf8");
-  const previewDeployment = fs.readFileSync(path.join(root, "deploy/k8s-preview/deployment.yaml"), "utf8");
-  const kustomization = fs.readFileSync(path.join(root, "deploy/k8s/kustomization.yaml"), "utf8");
-  const application = fs.readFileSync(path.join(root, "deploy/argocd/app-pi-ez-web.yaml"), "utf8");
+test("image publication workflow publishes immutable GHCR images", () => {
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
 
-  assert.match(deployment, /imagePullSecrets:[\s\S]*name: ghcr-pull/);
-  assert.doesNotMatch(deployment, /localhost\/pi-ez-web|:latest/);
-  assert.match(previewDeployment, /PI_SYNC_SERVER_URL[\s\S]*http:\/\/pi-syncd\.pi-sync\.svc:8080/);
-  assert.match(previewDeployment, /PI_WEB_SYNC_ALL_CONVERSATIONS[\s\S]*value: "false"/);
-  assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
-  assert.match(kustomization, /digest: sha256:/);
-  assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);
   assert.match(workflow, /permissions:\n  contents: read\n  packages: write\n/);
   assert.doesNotMatch(workflow, /contents: write|id-token: write/);
   assert.match(workflow, /group: pi-ez-web-image-\$\{\{ github\.ref \}\}/);
@@ -76,23 +63,4 @@ test("k3s deployment uses private image GitOps wiring", () => {
     /Stage image in preview|deploy\/k8s(?:-preview)?\/kustomization\.yaml|preview\/pi|update-image-digest|tailscale\/github-action|git push|Verify preview artifact|Promote verified image/
   );
   assert.equal(workflow.match(/steps\.build\.outputs\.digest/g)?.length ?? 0, 0);
-});
-
-test("image digest updater supports production and preview manifests", () => {
-  const script = path.join(root, "scripts/update-image-digest.py");
-  const digest = `sha256:${"1".repeat(64)}`;
-  const image = "ghcr.io/bry-guy/pi-ez-web";
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ez-web-digest-"));
-
-  try {
-    for (const source of ["deploy/k8s/kustomization.yaml", "deploy/k8s-preview/kustomization.yaml"]) {
-      const target = path.join(temp, path.basename(path.dirname(source)), "kustomization.yaml");
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.join(root, source), target);
-      execFileSync("python3", [script, target, image, digest]);
-      assert.match(fs.readFileSync(target, "utf8"), new RegExp(`digest: ${digest}`));
-    }
-  } finally {
-    fs.rmSync(temp, { recursive: true, force: true });
-  }
 });

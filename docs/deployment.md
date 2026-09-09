@@ -13,14 +13,14 @@ docker run --rm -p 3141:3141 pi-ez-web:local
 A real deployment must provide Pi credentials and persistent storage. Keep
 these paths stable across container restarts:
 
-The repository retains `deploy/k8s-preview` as a rollback asset during the
-ownership transfer. The infra repository owns the full-stack preview Argo
-Application, immutable GHCR digest, isolated state, and Caddy route. Feature
-branch images are published by this repository's workflow; the infra release
-controller verifies the exact app SHA, OCI revision label, and digest before
-updating the infra preview manifest. Production promotion is a separate infra
-operation after preview health verification. The app workflow does not mutate
-Kubernetes manifests, the `preview/pi` ref, or production state.
+The infra repository owns the full-stack preview and production Kubernetes
+manifests, Argo Applications, immutable GHCR digests, isolated state, Caddy
+routes, and release controller. Feature branch images are published by this
+repository's workflow; the infra release controller verifies the exact app SHA,
+OCI revision label, and digest before updating the preview manifest. Production
+promotion is a separate infra operation after preview health verification. The
+app workflow does not mutate Kubernetes manifests, the `preview/pi` ref, or
+production state.
 
 For an isolated full-stack branch preview, the preview Service must receive both
 normal requests and `/api/*` (including SSE). The preview workload runs the
@@ -85,11 +85,11 @@ any equivalent initialization themselves.
 The command is manager-agnostic. For example, deployments may use
 `chezmoi apply`, GNU Stow, `rsync`, Nix/Home Manager, or a yadm sequence such as
 `yadm clone --no-bootstrap --no-checkout` followed by a pinned `yadm reset
---hard`. The checked-in Kubernetes manifests use yadm and a pinned Bryan
-dotfiles repository only as a deployment example; Pi EZ Web does not require
-that repository or manager. Keep `PI_WEB_HOME` and `PI_CODING_AGENT_DIR`
-separate from the projected operator home so application state, Pi sessions,
-and credentials are not overwritten by dotfiles.
+--hard`. The platform's Kubernetes manifests use yadm and a pinned Bryan dotfiles
+repository only as a deployment example; Pi EZ Web does not require that
+repository or manager. Keep `PI_WEB_HOME` and `PI_CODING_AGENT_DIR` separate
+from the projected operator home so application state, Pi sessions, and
+credentials are not overwritten by dotfiles.
 
 ## k3s
 
@@ -100,14 +100,13 @@ strategy) and persistent volumes for the paths above. Configure `runAsUser`
 and `fsGroup` so the `node` user can write the state, repository, and worktree
 volumes.
 
-The application repository retains `deploy/k8s/`, `deploy/k8s-preview/`, and
-`deploy/argocd/` as rollback assets during the transfer. The workflow publishes
-one immutable private GHCR image with its full source SHA and OCI revision label;
-it does not edit manifests or deploy. The infra release controller validates the
-image, stages preview, verifies `/ui-health`, and promotes the digest through
-infra-owned manifests and Argo CD. Namespace pull access, runtime/operator
-Secrets, Caddy routes, kubeconfigs, and secret-sync tasks remain platform-owned
-and are materialized out of band through fnox/1Password.
+The application repository publishes one immutable private GHCR image with
+its full source SHA and OCI revision label; it does not edit manifests or
+deploy. The infra release controller validates the image, stages preview,
+verifies `/ui-health`, and promotes the digest through infra-owned manifests and
+Argo CD. Namespace pull access, runtime/operator Secrets, Caddy routes,
+kubeconfigs, and secret-sync tasks remain platform-owned and are materialized
+out of band through fnox/1Password.
 
 A typical path is:
 
