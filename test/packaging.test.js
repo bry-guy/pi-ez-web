@@ -61,21 +61,20 @@ test("k3s deployment uses private image GitOps wiring", () => {
   assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
   assert.match(kustomization, /digest: sha256:/);
   assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);
+  assert.match(workflow, /contents: read/);
   assert.match(workflow, /packages: write/);
-  assert.match(workflow, /id-token: write/);
+  assert.doesNotMatch(workflow, /contents: write|id-token: write/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /docker\/login-action/);
-  assert.match(workflow, /Stage image in preview[\s\S]*deploy\/k8s-preview\/kustomization\.yaml/);
-  assert.match(workflow, /Verify preview artifact[\s\S]*ui-health[\s\S]*buildId/);
-  assert.match(workflow, /Promote verified image to production[\s\S]*deploy\/k8s\/kustomization\.yaml/);
-  assert.match(workflow, /tailscale\/github-action@v4/);
-  assert.match(workflow, /TAILSCALE_FEDERATED_CLIENT_ID/);
-  assert.match(workflow, /TAILSCALE_FEDERATED_AUDIENCE/);
-  assert.match(workflow, /tags: tag:ci/);
-  assert.doesNotMatch(workflow, /TAILSCALE_OAUTH_CLIENT_SECRET|oauth-secret:/);
-  assert.equal(workflow.match(/steps\.build\.outputs\.digest/g)?.length, 2);
-  assert.match(workflow, /force-with-lease=.*preview\/pi/);
-  assert.doesNotMatch(workflow, /git push --force origin/);
+  assert.match(workflow, /tag="sha-\$\{source_sha\}"/);
+  assert.match(workflow, /tag="branch-\$\{slug\}-\$\{source_sha:0:12\}"/);
+  assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ steps\.source\.outputs\.sha \}\}/);
+  assert.match(workflow, /PI_WEB_BUILD_ID=\$\{\{ steps\.source\.outputs\.sha \}\}/);
+  assert.doesNotMatch(
+    workflow,
+    /Stage image in preview|deploy\/k8s(?:-preview)?\/kustomization\.yaml|preview\/pi|update-image-digest|tailscale\/github-action|git push|Verify preview artifact|Promote verified image/
+  );
+  assert.equal(workflow.match(/steps\.build\.outputs\.digest/g)?.length ?? 0, 0);
 });
 
 test("image digest updater supports production and preview manifests", () => {

@@ -13,21 +13,14 @@ docker run --rm -p 3141:3141 pi-ez-web:local
 A real deployment must provide Pi credentials and persistent storage. Keep
 these paths stable across container restarts:
 
-The repository also contains `deploy/k8s-preview`, a frontend-only,
-production-backed preview workload. The infra repository creates an Argo CD
-Application that follows the internal `preview/pi` deployment ref and its
-immutable GHCR digest; preview resources are name-prefixed so they do not select
-the production pod. Feature branch builds replace the preview slot. Main builds
-replace it too, wait until `/ui-health` reports the source commit, then promote
-the same image digest to `deploy/k8s`. The main gate connects through
-`tailscale/github-action` using the `TAILSCALE_OAUTH_CLIENT_ID` and
-`TAILSCALE_OAUTH_CLIENT_SECRET` repository secrets. The preview runs with
-`PI_WEB_UI_ONLY=1`, mounts no
-application state or operator Secret, and serves `/ui-health` for Kubernetes
-probes. The preview origin's `/api/*` requests are routed by the infra-owned
-Caddy configuration to the production Service, while all other paths go to the
-preview UI Service. The old preview PVC/NFS export remains retained as rollback
-state and is not mounted by the new workload.
+The repository retains `deploy/k8s-preview` as a rollback asset during the
+ownership transfer. The infra repository owns the full-stack preview Argo
+Application, immutable GHCR digest, isolated state, and Caddy route. Feature
+branch images are published by this repository's workflow; the infra release
+controller verifies the exact app SHA, OCI revision label, and digest before
+updating the infra preview manifest. Production promotion is a separate infra
+operation after preview health verification. The app workflow does not mutate
+Kubernetes manifests, the `preview/pi` ref, or production state.
 
 For an isolated full-stack branch preview, the preview Service must receive both
 normal requests and `/api/*` (including SSE). The preview workload runs the
@@ -107,15 +100,14 @@ strategy) and persistent volumes for the paths above. Configure `runAsUser`
 and `fsGroup` so the `node` user can write the state, repository, and worktree
 volumes.
 
-The owned application resources live in `deploy/k8s/`, and the Argo CD
-bootstrap resources live in `deploy/argocd/`. The release workflow builds one
-private GHCR image, validates that digest in preview, records the verified digest
-in `deploy/k8s/kustomization.yaml`, and lets Argo CD reconcile the committed
-desired state. The namespace pull Secret
-and runtime/operator Secrets are materialized out of band through fnox and
-1Password; no secret values belong in Git or image layers. Site-specific
-platform wiring such as Caddy routes, kubeconfigs, and the secret-sync task
-remains in the platform repository.
+The application repository retains `deploy/k8s/`, `deploy/k8s-preview/`, and
+`deploy/argocd/` as rollback assets during the transfer. The workflow publishes
+one immutable private GHCR image with its full source SHA and OCI revision label;
+it does not edit manifests or deploy. The infra release controller validates the
+image, stages preview, verifies `/ui-health`, and promotes the digest through
+infra-owned manifests and Argo CD. Namespace pull access, runtime/operator
+Secrets, Caddy routes, kubeconfigs, and secret-sync tasks remain platform-owned
+and are materialized out of band through fnox/1Password.
 
 A typical path is:
 
