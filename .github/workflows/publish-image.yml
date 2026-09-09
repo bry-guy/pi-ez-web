@@ -12,8 +12,8 @@ permissions:
   packages: write
 
 concurrency:
-  group: pi-ez-web-${{ github.ref_name == 'main' && 'main' || 'preview' }}
-  cancel-in-progress: ${{ startsWith(github.ref_name, 'feature/') }}
+  group: pi-ez-web-image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   publish:
@@ -39,13 +39,7 @@ jobs:
           set -euo pipefail
           source_ref="$GITHUB_REF_NAME"
           source_sha="$(git rev-parse HEAD)"
-          slug="$(printf '%s' "$source_ref" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed 's/-$//')"
-          slug="${slug:-ref}"
-          if [[ "$source_ref" == main ]]; then
-            tag="sha-${source_sha}"
-          else
-            tag="branch-${slug}-${source_sha:0:12}"
-          fi
+          tag="sha-${source_sha}"
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$tag" >> "$GITHUB_OUTPUT"

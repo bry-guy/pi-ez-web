@@ -61,13 +61,14 @@ test("k3s deployment uses private image GitOps wiring", () => {
   assert.match(kustomization, /ghcr\.io\/bry-guy\/pi-ez-web/);
   assert.match(kustomization, /digest: sha256:/);
   assert.match(application, /automated:[\s\S]*prune: true[\s\S]*selfHeal: true/);
-  assert.match(workflow, /contents: read/);
-  assert.match(workflow, /packages: write/);
+  assert.match(workflow, /permissions:\n  contents: read\n  packages: write\n/);
   assert.doesNotMatch(workflow, /contents: write|id-token: write/);
+  assert.match(workflow, /group: pi-ez-web-image-\$\{\{ github\.ref \}\}/);
+  assert.match(workflow, /cancel-in-progress: true/);
+  assert.doesNotMatch(workflow, /preview|startsWith\(github\.ref_name/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /docker\/login-action/);
   assert.match(workflow, /tag="sha-\$\{source_sha\}"/);
-  assert.match(workflow, /tag="branch-\$\{slug\}-\$\{source_sha:0:12\}"/);
   assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ steps\.source\.outputs\.sha \}\}/);
   assert.match(workflow, /PI_WEB_BUILD_ID=\$\{\{ steps\.source\.outputs\.sha \}\}/);
   assert.doesNotMatch(
