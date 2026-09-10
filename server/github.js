@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { appHome, githubConfig, loadConfig } from "./config.js";
+import { atomicWrite } from "./credential-store.js";
 
 const DEVICE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -24,18 +25,6 @@ function safeJson(response) {
 
 function authPath() {
   return path.join(appHome(), "github-auth.json");
-}
-
-function atomicWrite(file, value, mode = 0o600) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode, flag: "wx" });
-    fs.renameSync(temporary, file);
-    try { fs.chmodSync(file, mode); } catch { /* permissions are best effort on non-POSIX filesystems */ }
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
 }
 
 function readStoredAuth() {

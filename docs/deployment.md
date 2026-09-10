@@ -52,6 +52,7 @@ A typical retained layout is:
 /data/pi-ez-web/config.json
 /data/pi-ez-web/bindings.json
 /data/pi-ez-web/github-auth.json
+/data/pi-ez-web/credentials/onepassword-service-account-token
 /data/pi-ez-web/chats/
 /data/pi-ez-agent/auth.json
 /data/pi-ez-agent/models.json
@@ -60,10 +61,12 @@ A typical retained layout is:
 /data/pi-ez-worktrees/
 ```
 
-Treat both `github-auth.json` and Pi's `auth.json` as secrets in backups. A
-remote Pi profile configured in `config.json` can install and execute arbitrary
-Pi packages as the service user; use only trusted HTTPS settings and package
-sources.
+Treat `github-auth.json`, the optional 1Password service-account token, and
+Pi's `auth.json` as secrets in backups. The 1Password connection is intended for
+trusted operator deployments; every shell-capable project in the same pod can
+access the token. A remote Pi profile configured in `config.json` can install
+and execute arbitrary Pi packages as the service user; use only trusted HTTPS
+settings and package sources.
 
 ### Trusted prestart command
 

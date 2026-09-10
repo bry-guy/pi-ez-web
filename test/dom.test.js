@@ -38,7 +38,7 @@ const state = {
     { id: "openai", name: "OpenAI", configured: false, availableModels: 0, authMethods: [{ id: "api_key", label: "OpenAI API key" }], canLogout: false },
   ],
   repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
-  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true } },
+  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true }, onepassword: { connected: false } },
   piConfiguration: {
     config: { profile: "https://github.com/bry-guy/dotfiles", packages: ["npm:context-mode"], extensions: [] },
     profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
@@ -98,6 +98,19 @@ async function boot() {
       if (url === "/api/github/device-login" && options.method === "POST") return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } }, true, 202);
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
+      if (url === "/api/onepassword/connect" && options.method === "POST") {
+        const body = JSON.parse(options.body || "{}");
+        dom.window.__onePasswordTokens = [...(dom.window.__onePasswordTokens || []), body.token];
+        state.settings.onepassword = { connected: true };
+        dom.window.__onePasswordResponse = { onepassword: { connected: true } };
+        return json(dom.window.__onePasswordResponse);
+      }
+      if (url === "/api/onepassword/disconnect" && options.method === "POST") {
+        state.settings.onepassword = { connected: false };
+        dom.window.__onePasswordResponse = { ok: true, onepassword: { connected: false } };
+        return json(dom.window.__onePasswordResponse);
+      }
+      if (url === "/api/onepassword/status") return json({ onepassword: state.settings.onepassword });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
       if (url.includes("/api/sessions/") && url.includes("/extension-ui/") && options.method === "POST") {
         dom.window.__extensionUiResponses = dom.window.__extensionUiResponses || [];
@@ -523,6 +536,21 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.match(root.querySelector("pi-settings").textContent, /1Password/);
+  const onePasswordInput = root.querySelector("[data-onepassword-token]");
+  onePasswordInput.value = "op_private-token";
+  root.querySelector("[data-act='connect-onepassword']").click();
+  assert.equal(onePasswordInput.value, "");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(dom.window.__onePasswordTokens, ["op_private-token"]);
+  assert.doesNotMatch(root.textContent, /op_private-token/);
+  assert.doesNotMatch(JSON.stringify(store.state), /op_private-token/);
+  assert.doesNotMatch(JSON.stringify(dom.window.__onePasswordResponse), /op_private-token/);
+  assert.match(root.querySelector("pi-settings").textContent, /Connected/);
+  root.querySelector("[data-act='disconnect-onepassword']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(root.querySelector("pi-settings").textContent, /Not connected/);
+  assert.equal(root.querySelector("[data-onepassword-token]").value, "");
   assert.equal(root.querySelectorAll("pi-settings .pi-loaded-list").length, 2);
   assert.match(root.querySelector("pi-settings .pi-resource-scroll").textContent, /context-mode|todo-discipline/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");

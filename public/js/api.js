@@ -87,6 +87,8 @@ export const api = {
   githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
+  onePasswordConnect: token => fetch("/api/onepassword/connect", { method: "POST", headers: JH, body: JSON.stringify({ token }) }).then(j),
+  onePasswordDisconnect: () => fetch("/api/onepassword/disconnect", { method: "POST" }).then(j),
   files: (projectId, contextId, target = "none") => {
     const params = new URLSearchParams({ target });
     if (contextId) params.set("contextId", contextId);

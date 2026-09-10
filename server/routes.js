@@ -12,6 +12,7 @@ import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
+import * as onepassword from "./onepassword.js";
 import { cloneRepository } from "./repositories.js";
 import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
@@ -79,6 +80,7 @@ function settingsState(cfg, github) {
       source: process.env.PI_WEB_GITHUB_OWNER ? "PI_WEB_GITHUB_OWNER" : "config",
       editable: !process.env.PI_WEB_GITHUB_OWNER,
     },
+    onepassword: onepassword.status(),
   };
 }
 
@@ -303,6 +305,21 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   api.post("/github/logout", c => {
     try { github.logout(); return c.json({ ok: true }); }
     catch (e) { if (e.code === "credential_managed_by_environment") return err(c, 409, e.code); throw e; }
+  });
+
+  api.get("/onepassword/status", c => c.json({ onepassword: onepassword.status() }));
+  api.post("/onepassword/connect", async c => {
+    const body = await c.req.json().catch(() => ({}));
+    try { return c.json({ onepassword: await onepassword.connect(body?.token) }); }
+    catch (e) {
+      const statuses = { onepassword_token_required: 400, onepassword_auth_failed: 401, onepassword_store_failed: 500 };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.code === "onepassword_token_required" || e.code === "onepassword_auth_failed" ? { message: e.message } : {});
+      throw e;
+    }
+  });
+  api.post("/onepassword/disconnect", c => {
+    try { return c.json({ ok: true, onepassword: onepassword.disconnect() }); }
+    catch (e) { if (e.code === "onepassword_disconnect_failed") return err(c, 500, e.code, { message: e.message }); throw e; }
   });
 
   api.post("/providers/:id/login", async c => {

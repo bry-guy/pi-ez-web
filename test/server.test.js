@@ -35,6 +35,15 @@ test("unknown API failures return structured JSON with a request id", async () =
   assert.equal(body.requestId, response.headers.get("x-request-id"));
 });
 
+test("1Password connection rejects missing tokens without exposing credential input", async () => {
+  const response = await post("/api/onepassword/connect", { token: "" });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(body, { error: "onepassword_token_required", message: "Enter a valid 1Password service-account token." });
+  const status = await (await get("/api/onepassword/status")).json();
+  assert.deepEqual(status, { onepassword: { connected: false } });
+});
+
 test("bare synchronization scope errors preserve their HTTP status", async () => {
   const { createApp } = await import("../server/index.js");
   const failure = Object.assign(new Error("conversation belongs to a different Git repository"), {
