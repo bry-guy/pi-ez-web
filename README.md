@@ -196,6 +196,10 @@ Project hooks are inherited from `projectHooks` and may be overridden per
 project with a `hooks` object, for example
 `"hooks": { "setup": "./script/install", "check": "./script/check" }`.
 Configured hooks remain explicit commands and may change the selected context.
+Hooks receive an allowlisted functional environment rather than arbitrary
+deployment variables, have a 120-second timeout, cap captured output, and are
+cancelled with their process group when the request ends. Treat setup commands
+as trusted code; the allowlist is hygiene, not a sandbox.
 Pi-web's config, bindings, chats, and UI state remain under `~/.pi-web-ui`;
 bindings preserve a session's execution context and are not branch state. Plain
 chats use private scratch workspaces under

@@ -15,17 +15,19 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-test("project hooks run manually and redact operator tokens", async () => {
+test("project hooks run manually with an allowlisted environment", async () => {
   const hookRepo = fixture.makeRepo("hook-repo");
   const hookFile = path.join(hookRepo, "hook-ran.txt");
   const previous = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  const previousPrivate = process.env.HOOK_PRIVATE;
   process.env.OP_SERVICE_ACCOUNT_TOKEN = "test-secret-token";
+  process.env.HOOK_PRIVATE = "not-inherited";
   try {
     const res = await fixture.createProject({
       repoPath: hookRepo,
       hooks: {
         setup: "printf setup > hook-ran.txt",
-        check: "printf check >> hook-ran.txt; printf '%s' \"$OP_SERVICE_ACCOUNT_TOKEN\"",
+        check: "printf check >> hook-ran.txt; printf '%s/%s' \"${OP_SERVICE_ACCOUNT_TOKEN:-missing}\" \"${HOOK_PRIVATE:-missing}\"",
       },
     });
     assert.equal(res.setup, null);
@@ -39,12 +41,14 @@ test("project hooks run manually and redact operator tokens", async () => {
     assert.equal(check.status, 200);
     const body = await check.json();
     assert.equal(body.ok, true);
-    assert.equal(body.stdout, "[redacted]");
+    assert.equal(body.stdout, "missing/missing");
     assert.equal(fs.readFileSync(hookFile, "utf8"), "setupcheck");
     assert.equal((await fixture.post(`/api/sessions/${res.sessionId}/hooks/missing`, {})).status, 404);
   } finally {
     if (previous === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
     else process.env.OP_SERVICE_ACCOUNT_TOKEN = previous;
+    if (previousPrivate === undefined) delete process.env.HOOK_PRIVATE;
+    else process.env.HOOK_PRIVATE = previousPrivate;
   }
 });
 

@@ -1,23 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appHome } from "./config.js";
+import { redact } from "./redaction.js";
 
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
 const MAX_READ_ENTRIES = 1000;
 const MAX_VALUE_LENGTH = 6000;
-
-function redact(value) {
-  let result = String(value ?? "")
-    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
-    .replace(/gh[oprsu]_[A-Za-z0-9_]+/g, "[redacted]")
-    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-[redacted]")
-    .replace(/(OP_SERVICE_ACCOUNT_TOKEN\s*=\s*)[^\s]+/gi, "$1[redacted]")
-    .replace(/([?&](?:token|key|code|state|access_token|refresh_token)=)[^&\s]+/gi, "$1[redacted]");
-  for (const secret of [process.env.OP_SERVICE_ACCOUNT_TOKEN, process.env.PI_WEB_GITHUB_TOKEN]) {
-    if (secret) result = result.split(secret).join("[redacted]");
-  }
-  return result.slice(0, MAX_VALUE_LENGTH);
-}
 
 function filePath() {
   return path.join(appHome(), "logs", "pi-ez-web.log");
@@ -26,14 +14,14 @@ function filePath() {
 function safeValue(value) {
   if (value == null || value === "") return undefined;
   if (typeof value === "number" || typeof value === "boolean") return value;
-  return redact(value);
+  return redact(value, { maxLength: MAX_VALUE_LENGTH });
 }
 
 export function writeLog(level, message, fields = {}) {
   const entry = {
     at: new Date().toISOString(),
     level: ["error", "warn", "info"].includes(level) ? level : "info",
-    message: redact(message),
+    message: redact(message, { maxLength: MAX_VALUE_LENGTH }),
   };
   for (const [key, value] of Object.entries(fields)) {
     const safe = safeValue(value);
