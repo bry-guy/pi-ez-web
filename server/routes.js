@@ -312,8 +312,16 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const body = await c.req.json().catch(() => ({}));
     try { return c.json({ onepassword: await onepassword.connect(body?.token) }); }
     catch (e) {
-      const statuses = { onepassword_token_required: 400, onepassword_auth_failed: 401, onepassword_store_failed: 500 };
-      if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.code === "onepassword_token_required" || e.code === "onepassword_auth_failed" ? { message: e.message } : {});
+      const statuses = {
+        onepassword_token_required: 400,
+        onepassword_auth_failed: 401,
+        onepassword_sdk_unavailable: 503,
+        onepassword_service_unavailable: 503,
+        onepassword_rate_limited: 429,
+        onepassword_validation_timeout: 504,
+        onepassword_store_failed: 500,
+      };
+      if (statuses[e.code]) return err(c, statuses[e.code], e.code, { message: e.message });
       throw e;
     }
   });

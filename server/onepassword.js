@@ -23,13 +23,17 @@ export function status(home = appHome()) {
   }
 }
 
+const RATE_LIMIT_ERROR_NAMES = new Set(["RateLimitExceededError"]);
+const NETWORK_ERROR_CODES = new Set(["ECONNABORTED", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ENETUNREACH", "ENOTFOUND", "EHOSTUNREACH", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]);
+const SDK_RUNTIME_ERROR_CODES = new Set(["ERR_DLOPEN_FAILED", "ERR_WASM_COMPILE_ERROR", "ERR_WASM_LINK_ERROR", "ERR_WASM_RUNTIME_ERROR"]);
+
 async function bounded(promise, timeoutMs) {
   let timer;
   try {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("validation_timeout")), timeoutMs);
+        timer = setTimeout(() => reject(coded("onepassword_validation_timeout", "1Password validation timed out.")), timeoutMs);
       }),
     ]);
   } finally {
@@ -37,29 +41,71 @@ async function bounded(promise, timeoutMs) {
   }
 }
 
-async function validate(token, createClient, timeoutMs) {
+async function sdkFactory(createClient, loadSdk) {
+  if (createClient !== null) {
+    if (typeof createClient === "function") return createClient;
+    throw coded("onepassword_sdk_unavailable", "1Password SDK is unavailable on this server.");
+  }
+  let sdk;
   try {
-    const factory = createClient || (await import("@1password/sdk")).default.createClient;
+    sdk = await (loadSdk || (() => import("@1password/sdk")))();
+    const factory = [sdk?.createClient, sdk?.default?.createClient].find(value => typeof value === "function");
+    if (factory) return factory;
+  } catch {}
+  throw coded("onepassword_sdk_unavailable", "1Password SDK is unavailable on this server.");
+}
+
+function errorName(error) {
+  return error?.constructor?.name || error?.name || "";
+}
+
+function validationFailure(error) {
+  const cause = error?.cause;
+  const codes = [error?.code, cause?.code];
+  const names = [error?.name, errorName(error), cause?.name, errorName(cause)];
+  const messages = [error?.message, cause?.message].filter(Boolean).join(" ");
+  if (error?.code === "onepassword_validation_timeout") return coded("onepassword_validation_timeout", "1Password validation timed out.");
+  if (error?.code === "onepassword_sdk_unavailable") return coded("onepassword_sdk_unavailable", "1Password SDK is unavailable on this server.");
+  if ([error?.status, error?.statusCode, cause?.status, cause?.statusCode].includes(429)
+    || codes.includes(429)
+    || names.some(name => RATE_LIMIT_ERROR_NAMES.has(name))) {
+    return coded("onepassword_rate_limited", "1Password is rate limited. Try again later.");
+  }
+  if (codes.some(code => NETWORK_ERROR_CODES.has(code))
+    || (names.includes("TypeError") && /fetch failed|network/i.test(messages))) {
+    return coded("onepassword_service_unavailable", "1Password service is unavailable. Try again later.");
+  }
+  if (codes.some(code => SDK_RUNTIME_ERROR_CODES.has(code))
+    || names.some(name => ["RuntimeError", "CompileError", "LinkError"].includes(name))) {
+    return coded("onepassword_sdk_unavailable", "1Password SDK is unavailable on this server.");
+  }
+  return coded("onepassword_auth_failed", "1Password authentication failed.");
+}
+
+async function validate(token, createClient, loadSdk, timeoutMs) {
+  const factory = await sdkFactory(createClient, loadSdk);
+  try {
     const client = await bounded(factory({
       auth: token,
       integrationName: "pi-ez-web",
       integrationVersion: "1.0.0",
     }), timeoutMs);
+    if (typeof client?.vaults?.list !== "function") throw coded("onepassword_sdk_unavailable", "1Password SDK is unavailable on this server.");
     await bounded(client.vaults.list(), timeoutMs);
-  } catch {
-    throw coded("onepassword_auth_failed", "1Password connection failed.");
+  } catch (error) {
+    throw validationFailure(error);
   }
 }
 
-export async function connect(rawToken, { createClient = null, home = appHome(), timeoutMs = VALIDATION_TIMEOUT_MS } = {}) {
+export async function connect(rawToken, { createClient = null, loadSdk = null, writeCredential = atomicWrite, home = appHome(), timeoutMs = VALIDATION_TIMEOUT_MS } = {}) {
   const token = typeof rawToken === "string" ? rawToken.trim() : "";
   if (!token || token.length > 4096) throw coded("onepassword_token_required", "Enter a valid 1Password service-account token.");
-  await validate(token, createClient, timeoutMs);
-  const directory = path.dirname(credentialPath(home));
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(directory, 0o700); } catch {}
+  await validate(token, createClient, loadSdk, timeoutMs);
   try {
-    atomicWrite(credentialPath(home), `${token}\n`);
+    const directory = path.dirname(credentialPath(home));
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directory, 0o700); } catch {}
+    writeCredential(credentialPath(home), `${token}\n`);
   } catch {
     throw coded("onepassword_store_failed", "1Password connection could not be stored.");
   }

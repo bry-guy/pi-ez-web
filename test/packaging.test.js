@@ -37,6 +37,10 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /openssh-client/);
   assert.match(dockerfile, /\byadm\b/);
   assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
+  assert.match(dockerfile, /node --input-type=module --eval/);
+  assert.match(dockerfile, /server\/onepassword\.js/);
+  assert.match(dockerfile, /@1password\/sdk/);
+  assert.doesNotMatch(dockerfile, /not-a-real-service-account-token/);
   assert.doesNotMatch(dockerfile, /npm install --no-save/);
 });
 

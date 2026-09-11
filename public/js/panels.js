@@ -28,6 +28,15 @@ const gitErrorMessage = error => ({
   merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
+const onePasswordErrorMessage = code => ({
+  onepassword_auth_failed: "1Password authentication failed. Check the service-account token.",
+  onepassword_sdk_unavailable: "1Password integration is unavailable on this server.",
+  onepassword_service_unavailable: "1Password service is unavailable. Try again.",
+  onepassword_rate_limited: "1Password is rate limited. Try again later.",
+  onepassword_validation_timeout: "1Password validation timed out. Try again.",
+  onepassword_store_failed: "1Password connection could not be stored.",
+}[code] || "1Password connection failed.");
+
 function operationFeedback(kinds, fallback = "Working…") {
   const operation = operationFor(kinds);
   if (!operation) return "";
@@ -351,7 +360,7 @@ class PiSettings extends HTMLElement {
       await refreshState();
       this.setFeedback("1Password connected.");
     } catch (err) {
-      this.setFeedback(err.error === "onepassword_auth_failed" ? "1Password connection failed." : `1Password connection failed: ${err.error || err.message || err}`, "error");
+      this.setFeedback(onePasswordErrorMessage(err.error), "error");
     }
   }
   async disconnectOnePassword() {

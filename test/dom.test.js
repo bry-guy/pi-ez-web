@@ -99,6 +99,9 @@ async function boot() {
       if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/onepassword/connect" && options.method === "POST") {
+        if (dom.window.__onePasswordFailure) {
+          return json({ error: dom.window.__onePasswordFailure.code, message: "internal SDK detail" }, false, dom.window.__onePasswordFailure.status);
+        }
         const body = JSON.parse(options.body || "{}");
         dom.window.__onePasswordTokens = [...(dom.window.__onePasswordTokens || []), body.token];
         state.settings.onepassword = { connected: true };
@@ -551,6 +554,23 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(root.querySelector("pi-settings").textContent, /Not connected/);
   assert.equal(root.querySelector("[data-onepassword-token]").value, "");
+  for (const failure of [
+    { code: "onepassword_auth_failed", status: 401, message: "1Password authentication failed. Check the service-account token." },
+    { code: "onepassword_sdk_unavailable", status: 503, message: "1Password integration is unavailable on this server." },
+    { code: "onepassword_service_unavailable", status: 503, message: "1Password service is unavailable. Try again." },
+    { code: "onepassword_rate_limited", status: 429, message: "1Password is rate limited. Try again later." },
+    { code: "onepassword_validation_timeout", status: 504, message: "1Password validation timed out. Try again." },
+  ]) {
+    dom.window.__onePasswordFailure = failure;
+    const input = root.querySelector("[data-onepassword-token]");
+    input.value = "op_failed-token";
+    root.querySelector("[data-act='connect-onepassword']").click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.match(root.querySelector("pi-settings").textContent, new RegExp(failure.message));
+    assert.doesNotMatch(root.querySelector("pi-settings").textContent, /internal SDK detail/);
+    assert.equal(input.value, "");
+  }
+  delete dom.window.__onePasswordFailure;
   assert.equal(root.querySelectorAll("pi-settings .pi-loaded-list").length, 2);
   assert.match(root.querySelector("pi-settings .pi-resource-scroll").textContent, /context-mode|todo-discipline/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
