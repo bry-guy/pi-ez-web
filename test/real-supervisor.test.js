@@ -6,7 +6,10 @@ import path from "node:path";
 import { test } from "node:test";
 import { loadBindings, loadClosed, saveBindings, saveClosed } from "../server/config.js";
 import { projectState } from "../server/domain.js";
+import { credentialPath } from "../server/onepassword.js";
 import { RealSupervisor, isPackageSetupFailure } from "../server/supervisor/real.js";
+
+const onePasswordSentinel = "op_private-sentinel";
 
 const script = `
   import { startServer } from './server/index.js';
@@ -24,6 +27,64 @@ const script = `
   console.log(JSON.stringify({providersStatus: providersResponse.status, providers, created, commandsStatus: commandsResponse.status, commands, messageStatus: message.status, message: await message.json(), transcript}));
   server.closeAllConnections?.(); server.close();
 `;
+
+test("existing real sessions observe onepassword connect and disconnect at bash execution time", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-bash-env-"));
+  const webHome = path.join(tmp, "web");
+  const agentDir = path.join(tmp, "pi");
+  const cwd = path.join(tmp, "cwd");
+  const previousHome = process.env.PI_WEB_HOME;
+  const previousAgent = process.env.PI_CODING_AGENT_DIR;
+  const previousToken = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  const previousPath = process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+  process.env.PI_WEB_HOME = webHome;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.OP_SERVICE_ACCOUNT_TOKEN = onePasswordSentinel;
+  process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = "/must-not-inherit";
+  fs.mkdirSync(cwd, { recursive: true });
+  const tokenFile = credentialPath(webHome);
+  let supervisor;
+  try {
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(tokenFile, `${onePasswordSentinel}\n`);
+    supervisor = new RealSupervisor({ emit() {} });
+    const { id } = await supervisor.createSession({ cwd });
+    const state = await supervisor._attach(id, cwd, undefined, { reconcile: false });
+    const bash = state.session.getToolDefinition("bash");
+    assert.ok(bash);
+    const command = "printf '%s/%s' \"${PI_WEB_ONEPASSWORD_TOKEN_FILE:-missing}\" \"${OP_SERVICE_ACCOUNT_TOKEN:-missing}\"";
+    const execute = () => bash.execute("test", { command }, undefined, undefined, undefined);
+
+    const connected = await execute();
+    const connectedText = connected.content?.map(item => item.text || "").join("") || "";
+    assert.equal(connectedText, `${tokenFile}/missing`);
+    assert.equal(JSON.stringify(connected).includes(onePasswordSentinel), false);
+
+    fs.rmSync(tokenFile);
+    const disconnected = await execute();
+    const disconnectedText = disconnected.content?.map(item => item.text || "").join("") || "";
+    assert.equal(disconnectedText, "missing/missing");
+    assert.equal(JSON.stringify(disconnected).includes(onePasswordSentinel), false);
+    const transcript = await supervisor.transcript(id);
+    assert.equal(JSON.stringify(transcript).includes(onePasswordSentinel), false);
+    const sessionFile = state.session.sessionFile;
+    assert.ok(sessionFile && fs.existsSync(sessionFile));
+    assert.equal(fs.readFileSync(sessionFile, "utf8").includes(onePasswordSentinel), false);
+  } finally {
+    if (supervisor) {
+      for (const state of supervisor.live.values()) state.session.dispose?.();
+    }
+    if (previousHome === undefined) delete process.env.PI_WEB_HOME;
+    else process.env.PI_WEB_HOME = previousHome;
+    if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgent;
+    if (previousToken === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    else process.env.OP_SERVICE_ACCOUNT_TOKEN = previousToken;
+    if (previousPath === undefined) delete process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+    else process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = previousPath;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test("package command failures are eligible for package-free runtime fallback", () => {
   assert.equal(isPackageSetupFailure(new Error("/usr/local/bin/npm --include=dev install failed with code 1")), true);

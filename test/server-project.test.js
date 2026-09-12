@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { createIsolatedServerFixture } from "./helpers/isolated-server-fixture.js";
+import { credentialPath } from "../server/onepassword.js";
 
 let fixture;
+const onePasswordSentinel = "op_private-sentinel";
 
 beforeEach(async () => {
   fixture = await createIsolatedServerFixture({ createProject: false });
@@ -49,6 +51,47 @@ test("project hooks run manually with an allowlisted environment", async () => {
     else process.env.OP_SERVICE_ACCOUNT_TOKEN = previous;
     if (previousPrivate === undefined) delete process.env.HOOK_PRIVATE;
     else process.env.HOOK_PRIVATE = previousPrivate;
+  }
+});
+
+test("project hooks use the current onepassword path without inheriting its token", async () => {
+  const hookRepo = fixture.makeRepo("onepassword-hook-repo");
+  const tokenFile = credentialPath(process.env.PI_WEB_HOME);
+  const previousToken = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  const previousPath = process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+  process.env.OP_SERVICE_ACCOUNT_TOKEN = onePasswordSentinel;
+  process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = "/must-not-inherit";
+  try {
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(tokenFile, `${onePasswordSentinel}\n`);
+    const res = await fixture.createProject({
+      repoPath: hookRepo,
+      hooks: { check: "printf '%s/%s' \"${PI_WEB_ONEPASSWORD_TOKEN_FILE:-missing}\" \"${OP_SERVICE_ACCOUNT_TOKEN:-missing}\"" },
+    });
+    const connected = await fixture.post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+    const connectedBody = await connected.json();
+    assert.equal(connectedBody.stdout, `${tokenFile}/missing`);
+    assert.equal(JSON.stringify(connectedBody).includes(onePasswordSentinel), false);
+
+    fs.rmSync(tokenFile);
+    const disconnected = await fixture.post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+    const disconnectedBody = await disconnected.json();
+    assert.equal(disconnectedBody.stdout, "missing/missing");
+    assert.equal(JSON.stringify(disconnectedBody).includes(onePasswordSentinel), false);
+
+    fs.writeFileSync(tokenFile, `${onePasswordSentinel}\n`);
+    const reconnected = await fixture.post(`/api/sessions/${res.sessionId}/hooks/check`, {});
+    const reconnectedBody = await reconnected.json();
+    assert.equal(reconnectedBody.stdout, `${tokenFile}/missing`);
+    assert.equal(JSON.stringify(reconnectedBody).includes(onePasswordSentinel), false);
+    const logs = await fixture.get("/api/logs?limit=100");
+    assert.equal(JSON.stringify(await logs.json()).includes(onePasswordSentinel), false);
+  } finally {
+    fs.rmSync(tokenFile, { force: true });
+    if (previousToken === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    else process.env.OP_SERVICE_ACCOUNT_TOKEN = previousToken;
+    if (previousPath === undefined) delete process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+    else process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = previousPath;
   }
 });
 

@@ -11,6 +11,7 @@ import { SubagentActivityStore } from "../subagent-activity.js";
 import { PiConfiguration, WEB_SUBAGENT_EXTENSION, publicError } from "../pi-configuration.js";
 import { GitHubClient } from "../github.js";
 import { settleSync } from "../sync/settlement.js";
+import * as onepassword from "../onepassword.js";
 
 function errorDetails(error) {
   const parts = [];
@@ -43,6 +44,10 @@ let sdk = null;
 async function SDK() {
   if (!sdk) sdk = await import("@earendil-works/pi-coding-agent");
   return sdk;
+}
+
+function onePasswordSpawnHook(context) {
+  return { ...context, env: onepassword.executionEnvironment(context.env) };
 }
 
 function persistManager(manager, code = "session_persistence_unavailable") {
@@ -285,12 +290,18 @@ export class RealSupervisor {
       }
       const { settingsManager, resourceLoader } = resources;
       const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
+      const bash = SDKModule.createBashToolDefinition(cwd, {
+        shellPath: settingsManager.getShellPath(),
+        commandPrefix: settingsManager.getShellCommandPrefix(),
+        spawnHook: onePasswordSpawnHook,
+      });
       const result = await SDKModule.createAgentSession({
         cwd,
         sessionManager,
         modelRuntime: runtime,
         settingsManager,
         resourceLoader,
+        customTools: [bash],
         ...(model ? { model } : {}),
         ...(!hasThinkingLevel ? { thinkingLevel: loadConfig().defaultThinkingLevel } : {}),
         ...(sessionStartEvent ? { sessionStartEvent } : {}),

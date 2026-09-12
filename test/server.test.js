@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import * as ws from "../server/workspaces.js";
 import { chatsDir, loadBindings, loadConfig, saveConfig, sessionSlug } from "../server/config.js";
+import { credentialPath } from "../server/onepassword.js";
 import {
   base,
   get,
@@ -21,6 +22,7 @@ import {
 } from "./helpers/server-fixture.js";
 
 setupServerFixture();
+const onePasswordSentinel = "op_private-sentinel";
 
 test("unknown API failures return structured JSON with a request id", async () => {
   const response = await fetch(base + "/api/projects", {
@@ -287,6 +289,45 @@ test("followUp queues; steer interrupts", async () => {
   assert.ok(ur3);
   const ts3 = await sse.wait(e => e.sessionId === id && e.type === "turn_start" && e.seq > ur3.seq);
   await sse.wait(e => e.sessionId === id && e.type === "turn_end" && e.seq > ts3.seq);
+});
+
+test("bang uses the current onepassword path without exposing its token", async () => {
+  const sse = new SSE(base + "/api/events");
+  const { id } = await (await post("/api/chats")).json();
+  const tokenFile = credentialPath(home);
+  const previousToken = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  const previousPath = process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+  process.env.OP_SERVICE_ACCOUNT_TOKEN = onePasswordSentinel;
+  process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = "/must-not-inherit";
+  try {
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(tokenFile, `${onePasswordSentinel}\n`);
+    await post(`/api/sessions/${id}/bang`, { cmd: "printf '%s/%s' \"${PI_WEB_ONEPASSWORD_TOKEN_FILE:-missing}\" \"${OP_SERVICE_ACCOUNT_TOKEN:-missing}\"" });
+    const connected = await sse.wait(e => e.sessionId === id && e.type === "bang_end");
+    assert.equal(connected.exit, 0);
+    assert.equal(connected.stdout, `${tokenFile}/missing`);
+    assert.equal(JSON.stringify(connected).includes(onePasswordSentinel), false);
+
+    fs.rmSync(tokenFile);
+    await post(`/api/sessions/${id}/bang`, { cmd: "printf '%s/%s' \"${PI_WEB_ONEPASSWORD_TOKEN_FILE:-missing}\" \"${OP_SERVICE_ACCOUNT_TOKEN:-missing}\"" });
+    const disconnected = await sse.wait(e => e.sessionId === id && e.type === "bang_end" && e.stdout === "missing/missing");
+    assert.equal(disconnected.exit, 0);
+    assert.equal(JSON.stringify(disconnected).includes(onePasswordSentinel), false);
+    assert.ok(sse.events.filter(event => event.sessionId === id).every(event => !JSON.stringify(event).includes(onePasswordSentinel)));
+    const state = await (await get("/api/state")).json();
+    assert.equal(JSON.stringify(state).includes(onePasswordSentinel), false);
+    const transcript = await (await get(`/api/sessions/${id}/transcript`)).json();
+    assert.equal(JSON.stringify(transcript).includes(onePasswordSentinel), false);
+    const logs = await (await get("/api/logs?limit=100")).json();
+    assert.equal(JSON.stringify(logs).includes(onePasswordSentinel), false);
+  } finally {
+    sse.close();
+    fs.rmSync(tokenFile, { force: true });
+    if (previousToken === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    else process.env.OP_SERVICE_ACCOUNT_TOKEN = previousToken;
+    if (previousPath === undefined) delete process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+    else process.env.PI_WEB_ONEPASSWORD_TOKEN_FILE = previousPath;
+  }
 });
 
 test("bang runs in the workspace and lands in the transcript", async () => {

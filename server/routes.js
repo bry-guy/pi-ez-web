@@ -1263,7 +1263,12 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: `No such hook: ${name}.` });
       return err(c, 404, "no_such_hook", { operation });
     }
-    const result = hookResult(await runHook(command, { cwd, signal: c.req.raw.signal, report: reporter.log }), name);
+    const result = hookResult(await runHook(command, {
+      cwd,
+      env: onepassword.executionEnvironment(),
+      signal: c.req.raw.signal,
+      report: reporter.log,
+    }), name);
     const operation = reporter.finish({ status: result.ok ? "success" : "error", httpStatus: result.ok ? 200 : 422, exit: result.exit, message: result.ok ? "Configured hook completed." : "Configured hook failed." });
     return c.json({ ...result, operation });
   });
@@ -1280,7 +1285,12 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     hub.emit(id, "bang_start", { bangId, cmd });
     const t0 = Date.now();
     const { exit, out } = await new Promise(resolve => {
-      execFile("/bin/sh", ["-c", cmd], { cwd, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
+      execFile("/bin/sh", ["-c", cmd], {
+        cwd,
+        env: onepassword.executionEnvironment(),
+        timeout: 60000,
+        maxBuffer: 4 * 1024 * 1024,
+      }, (e, stdout, stderr) => {
         resolve({ exit: e ? (e.code ?? 1) : 0, out: [stdout, stderr].filter(Boolean).join("") });
       });
     });

@@ -6,6 +6,7 @@ import { test } from "node:test";
 test("pi SDK exposes the surface the real supervisor uses", async () => {
   const sdk = await import("@earendil-works/pi-coding-agent");
   assert.equal(typeof sdk.createAgentSession, "function");
+  assert.equal(typeof sdk.createBashToolDefinition, "function");
   const SM = sdk.SessionManager;
   assert.equal(typeof SM, "function");
   for (const m of ["create", "open", "list", "forkFrom", "inMemory"]) {

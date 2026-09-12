@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { connect, credentialPath, disconnect, status } from "../server/onepassword.js";
+import { connect, credentialPath, disconnect, executionEnvironment, status } from "../server/onepassword.js";
 
 function tempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "piweb-op-"));
@@ -207,6 +207,28 @@ test("storage failures do not replace an existing connection", async () => {
         && error.message === "1Password connection could not be stored.",
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("execution environment exposes only the connected credential path", async () => {
+  const home = tempHome();
+  const source = {
+    KEEP_ME: "preserved",
+    OP_SERVICE_ACCOUNT_TOKEN: "op_private-sentinel",
+    PI_WEB_ONEPASSWORD_TOKEN_FILE: "/stale/path",
+  };
+  try {
+    const disconnected = executionEnvironment(source, home);
+    assert.deepEqual(disconnected, { KEEP_ME: "preserved" });
+    fs.mkdirSync(path.dirname(credentialPath(home)), { recursive: true });
+    fs.writeFileSync(credentialPath(home), "op_private-sentinel\n");
+    const connected = executionEnvironment(source, home);
+    assert.deepEqual(connected, { KEEP_ME: "preserved", PI_WEB_ONEPASSWORD_TOKEN_FILE: credentialPath(home) });
+    assert.equal(JSON.stringify(connected).includes("op_private-sentinel"), false);
+    fs.rmSync(credentialPath(home));
+    assert.deepEqual(executionEnvironment(source, home), { KEEP_ME: "preserved" });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

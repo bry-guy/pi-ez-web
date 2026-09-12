@@ -23,6 +23,14 @@ export function status(home = appHome()) {
   }
 }
 
+export function executionEnvironment(source = process.env, home = appHome()) {
+  const env = { ...source };
+  delete env.OP_SERVICE_ACCOUNT_TOKEN;
+  delete env.PI_WEB_ONEPASSWORD_TOKEN_FILE;
+  if (status(home).connected) env.PI_WEB_ONEPASSWORD_TOKEN_FILE = credentialPath(home);
+  return env;
+}
+
 const RATE_LIMIT_ERROR_NAMES = new Set(["RateLimitExceededError"]);
 const NETWORK_ERROR_CODES = new Set(["ECONNABORTED", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ENETUNREACH", "ENOTFOUND", "EHOSTUNREACH", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]);
 const SDK_RUNTIME_ERROR_CODES = new Set(["ERR_DLOPEN_FAILED", "ERR_WASM_COMPILE_ERROR", "ERR_WASM_LINK_ERROR", "ERR_WASM_RUNTIME_ERROR"]);
