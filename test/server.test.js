@@ -46,6 +46,26 @@ test("1Password connection rejects missing tokens without exposing credential in
   assert.deepEqual(status, { onepassword: { connected: false } });
 });
 
+test("1Password failure diagnostics are sanitized and available in logs", async () => {
+  const token = `${onePasswordSentinel}${"x".repeat(4097)}`;
+  const response = await post("/api/onepassword/connect", { token });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(body, { error: "onepassword_token_required", message: "Enter a valid 1Password service-account token." });
+  assert.equal(JSON.stringify(body).includes(onePasswordSentinel), false);
+  const requestId = response.headers.get("x-request-id");
+  assert.match(requestId || "", /^[0-9a-f-]{36}$/);
+  const logs = await (await get("/api/logs?limit=100")).json();
+  const diagnostic = logs.logs.find(entry => entry.source === "onepassword" && entry.requestId === requestId);
+  assert.ok(diagnostic);
+  assert.deepEqual({ code: diagnostic.code, stage: diagnostic.stage, httpStatus: diagnostic.httpStatus }, {
+    code: "onepassword_token_required",
+    stage: "input",
+    httpStatus: 400,
+  });
+  assert.equal(JSON.stringify(logs).includes(onePasswordSentinel), false);
+});
+
 test("bare synchronization scope errors preserve their HTTP status", async () => {
   const { createApp } = await import("../server/index.js");
   const failure = Object.assign(new Error("conversation belongs to a different Git repository"), {

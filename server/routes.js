@@ -20,7 +20,7 @@ import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { markSyncPending } from "./sync/enrollment.js";
 import { createOperationReporter, operationRequestId } from "./operations.js";
-import { readLogs, logFileName } from "./logging.js";
+import { readLogs, logFileName, writeLog } from "./logging.js";
 
 const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
 const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
@@ -321,7 +321,16 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
         onepassword_validation_timeout: 504,
         onepassword_store_failed: 500,
       };
-      if (statuses[e.code]) return err(c, statuses[e.code], e.code, { message: e.message });
+      if (statuses[e.code]) {
+        writeLog("warn", "1Password connection failed.", {
+          source: "onepassword",
+          code: e.code,
+          stage: e.onepasswordStage,
+          httpStatus: statuses[e.code],
+          requestId: c.get("requestId") || operationRequestId(c, body),
+        });
+        return err(c, statuses[e.code], e.code, { message: e.message });
+      }
       throw e;
     }
   });

@@ -48,6 +48,7 @@ test("invalid credentials do not replace an existing connection or expose the to
       () => connect("op_bad-token", { home, createClient: clientFactory([], "token op_bad-token rejected") }),
       error => error.code === "onepassword_auth_failed"
         && error.message === "1Password authentication failed."
+        && error.onepasswordStage === "client_create"
         && !error.message.includes("op_bad-token"),
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
@@ -58,12 +59,12 @@ test("invalid credentials do not replace an existing connection or expose the to
 
 test("classifies SDK failures safely without replacing an existing connection", async () => {
   const failures = [
-    { error: Object.assign(new Error("too many requests"), { name: "RateLimitExceededError" }), code: "onepassword_rate_limited", message: "1Password is rate limited. Try again later.", leak: "too many requests" },
-    { error: Object.assign(new Error("fetch failed"), { code: "ECONNRESET" }), code: "onepassword_service_unavailable", message: "1Password service is unavailable. Try again later.", leak: "fetch failed" },
-    { error: Object.assign(new Error("request failed"), { cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }) }), code: "onepassword_service_unavailable", message: "1Password service is unavailable. Try again later.", leak: "DNS lookup" },
-    { error: Object.assign(new Error("wasm trap"), { name: "RuntimeError" }), code: "onepassword_sdk_unavailable", message: "1Password SDK is unavailable on this server.", leak: "wasm trap" },
-    { error: Object.assign(new Error("raw timeout detail"), { code: "onepassword_validation_timeout" }), code: "onepassword_validation_timeout", message: "1Password validation timed out.", leak: "raw timeout" },
-    { error: Object.assign(new Error("raw SDK detail"), { code: "onepassword_sdk_unavailable" }), code: "onepassword_sdk_unavailable", message: "1Password SDK is unavailable on this server.", leak: "raw SDK" },
+    { error: Object.assign(new Error("too many requests"), { name: "RateLimitExceededError" }), code: "onepassword_rate_limited", message: "1Password is rate limited. Try again later.", leak: "too many requests", stage: "client_create" },
+    { error: Object.assign(new Error("fetch failed"), { code: "ECONNRESET" }), code: "onepassword_service_unavailable", message: "1Password service is unavailable. Try again later.", leak: "fetch failed", stage: "client_create" },
+    { error: Object.assign(new Error("request failed"), { cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }) }), code: "onepassword_service_unavailable", message: "1Password service is unavailable. Try again later.", leak: "DNS lookup", stage: "client_create" },
+    { error: Object.assign(new Error("wasm trap"), { name: "RuntimeError" }), code: "onepassword_sdk_unavailable", message: "1Password SDK is unavailable on this server.", leak: "wasm trap", stage: "client_create" },
+    { error: Object.assign(new Error("raw timeout detail"), { code: "onepassword_validation_timeout" }), code: "onepassword_validation_timeout", message: "1Password validation timed out.", leak: "raw timeout", stage: "client_create" },
+    { error: Object.assign(new Error("raw SDK detail"), { code: "onepassword_sdk_unavailable" }), code: "onepassword_sdk_unavailable", message: "1Password SDK is unavailable on this server.", leak: "raw SDK", stage: "client_create" },
   ];
   for (const failure of failures) {
     const home = tempHome();
@@ -73,6 +74,7 @@ test("classifies SDK failures safely without replacing an existing connection", 
         () => connect("op_private-token", { home, createClient: async () => { throw failure.error; } }),
         error => error.code === failure.code
           && error.message === failure.message
+          && error.onepasswordStage === failure.stage
           && !error.message.includes(failure.leak),
       );
       assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
@@ -88,7 +90,7 @@ test("empty credentials are rejected before validation", async () => {
   try {
     await assert.rejects(
       () => connect("  ", { home, createClient: async () => { called = true; } }),
-      error => error.code === "onepassword_token_required",
+      error => error.code === "onepassword_token_required" && error.onepasswordStage === "input",
     );
     assert.equal(called, false);
     assert.deepEqual(status(home), { connected: false });
@@ -104,7 +106,8 @@ test("client-creation timeouts do not replace an existing connection", async () 
     await assert.rejects(
       () => connect("op_private-token", { home, timeoutMs: 10, createClient: () => new Promise(() => {}) }),
       error => error.code === "onepassword_validation_timeout"
-        && error.message === "1Password validation timed out.",
+        && error.message === "1Password validation timed out."
+        && error.onepasswordStage === "client_create",
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
   } finally {
@@ -139,6 +142,7 @@ test("rejects an unavailable SDK without replacing an existing connection", asyn
         () => connect("op_new-token", { home, loadSdk }),
         error => error.code === "onepassword_sdk_unavailable"
           && error.message === "1Password SDK is unavailable on this server."
+          && error.onepasswordStage === "sdk_load"
           && !error.message.includes("op_new-token"),
       );
       assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
@@ -155,7 +159,8 @@ test("rejects a malformed SDK client without replacing an existing connection", 
     await assert.rejects(
       () => connect("op_new-token", { home, createClient: async () => ({}) }),
       error => error.code === "onepassword_sdk_unavailable"
-        && error.message === "1Password SDK is unavailable on this server.",
+        && error.message === "1Password SDK is unavailable on this server."
+        && error.onepasswordStage === "client_create",
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
   } finally {
@@ -173,7 +178,8 @@ test("vault-validation timeouts do not replace an existing connection", async ()
         timeoutMs: 10,
         createClient: async () => ({ vaults: { list: () => new Promise(() => {}) } }),
       }),
-      error => error.code === "onepassword_validation_timeout",
+      error => error.code === "onepassword_validation_timeout"
+        && error.onepasswordStage === "vault_list",
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
   } finally {
@@ -204,7 +210,8 @@ test("storage failures do not replace an existing connection", async () => {
         writeCredential: () => { throw new Error("disk detail"); },
       }),
       error => error.code === "onepassword_store_failed"
-        && error.message === "1Password connection could not be stored.",
+        && error.message === "1Password connection could not be stored."
+        && error.onepasswordStage === "credential_store",
     );
     assert.equal(fs.readFileSync(credentialPath(home), "utf8").trim(), "op_good-token");
   } finally {
