@@ -22,20 +22,17 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
     assert.notEqual(lock.packages[`node_modules/${dependency}`].dev, true);
   }
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
-  assert.match(dockerfile, /MISE_VERSION=v2026\.5\.15/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
   assert.match(dockerfile, /ARG PI_SYNC_BASE_COMMIT=d5c46a99a250affe206a65c42db72072aac89da8/);
   assert.equal(piSyncCommit, "d5c46a99a250affe206a65c42db72072aac89da8");
   assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
   assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
   assert.doesNotMatch(dockerfile, /git clone/);
-  assert.match(dockerfile, /FNOX_VERSION=v1\.25\.1/);
-  assert.match(dockerfile, /OP_VERSION=v2\.34\.0/);
-  assert.match(dockerfile, /OPENTOFU_VERSION=1\.11\.5/);
-  assert.match(dockerfile, /KUBECTL_VERSION=v1\.34\.5/);
-  assert.match(dockerfile, /sha256sum --check --strict/);
+  assert.doesNotMatch(dockerfile, /\b(mise|fnox|tofu|kubectl|yadm)\b/i);
+  assert.doesNotMatch(dockerfile, /\bop\b/);
+  assert.doesNotMatch(dockerfile, /MISE_|FNOX_|OP_VERSION|OPENTOFU_|KUBECTL_/);
+  assert.match(dockerfile, /build-essential/);
   assert.match(dockerfile, /openssh-client/);
-  assert.match(dockerfile, /\byadm\b/);
   assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
   assert.match(dockerfile, /node --input-type=module --eval/);
   assert.match(dockerfile, /server\/onepassword\.js/);
