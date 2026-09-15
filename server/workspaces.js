@@ -141,7 +141,7 @@ export function prepareMain(repoPath, { fetch = true, primaryBranch = null, repo
   assertCleanCheckout(repoPath);
   const remote = upstream.split("/")[0];
   try {
-    gitLogged(repoPath, ["fetch", "--prune", remote], report);
+    gitLogged(repoPath, ["fetch", "--prune", remote], report, gitCredentialEnvironment());
   } catch (error) { throw gitFailure("main_fetch_failed", error); }
   try {
     const before = currentHead(repoPath);

@@ -61,8 +61,9 @@ RUN node --input-type=module --eval 'const app = await import("./server/onepassw
 COPY public ./public
 
 RUN mkdir -p /data/pi-ez-operator-home \
-    && printf '#!/bin/sh\nexec node /app/server/git-credential-helper.js\n' > /usr/local/bin/pi-ez-web-git-credential-helper \
+    && printf '#!/bin/sh\nexec node /app/server/git-credential-helper.js "$@"\n' > /usr/local/bin/pi-ez-web-git-credential-helper \
     && chmod 0755 /usr/local/bin/pi-ez-web-git-credential-helper \
+    && git config --system credential.https://github.com.helper /usr/local/bin/pi-ez-web-git-credential-helper \
     && chown -R node:node /data
 
 USER node

@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { reposRoot, resolvePath } from "./config.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 import { validateFullName, githubError } from "./github.js";
 
 const execFileAsync = promisify(execFile);
@@ -50,34 +51,26 @@ function safeDestination(root, name) {
   return { base, destination };
 }
 
-function cloneAskpass(root) {
-  const file = path.join(root, `.pi-ez-askpass-${randomUUID()}`);
-  fs.writeFileSync(file, `#!/bin/sh\ncase "$1" in\n  *[Uu]sername*) printf '%s\\n' 'x-access-token' ;;\n  *[Pp]assword*) printf '%s\\n' "$PI_WEB_GIT_TOKEN" ;;\n  *) exit 1 ;;\nesac\n`, { mode: 0o700, flag: "wx" });
-  return file;
-}
-
-function gitOptions({ root, token, signal }) {
-  const args = ["-c", "credential.helper=", "clone", "--"];
+function gitOptions({ token, signal }) {
+  const args = token ? ["clone", "--"] : ["-c", "credential.helper=", "clone", "--"];
   // A user's global `url.*.insteadOf` can silently turn a validated public
   // HTTPS URL into SSH (or another protocol). Cloning starts in an empty temp
   // directory, so ignoring global/system Git config is safe and preserves the
   // public-HTTPS-only source boundary.
-  const env = {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_CONFIG_NOSYSTEM: "1",
-  };
-  delete env.PI_WEB_GITHUB_TOKEN;
-  const cleanup = [];
+  const source = { ...process.env };
+  delete source.PI_WEB_GITHUB_TOKEN;
+  delete source.PI_WEB_GIT_TOKEN;
+  let env;
   if (token) {
-    const askpass = cloneAskpass(root);
-    cleanup.push(() => fs.rmSync(askpass, { force: true }));
-    env.GIT_ASKPASS = askpass;
-    env.GIT_ASKPASS_REQUIRE = "force";
-    env.PI_WEB_GIT_TOKEN = token;
+    env = gitCredentialEnvironment({ ...source, PI_WEB_GITHUB_TOKEN: token });
+  } else {
+    env = { ...source, GIT_TERMINAL_PROMPT: "0" };
+    delete env.GIT_ASKPASS;
+    delete env.GIT_ASKPASS_REQUIRE;
   }
-  return { args, env, signal, cleanup };
+  env.GIT_CONFIG_GLOBAL = os.devNull;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  return { args, env, signal };
 }
 
 export function parsePublicGitUrl(raw) { return publicGitUrl(raw); }
@@ -110,10 +103,11 @@ export async function cloneRepository({ source, url, fullName, github, root = re
   if (cloneLocks.has(lockKey)) throw coded("clone_in_progress");
   if (fs.existsSync(destination)) throw coded("repository_exists");
   cloneLocks.add(lockKey);
-  fs.mkdirSync(base, { recursive: true });
-  const temporary = fs.mkdtempSync(path.join(base, `.pi-ez-clone-${randomUUID()}-`));
-  const options = gitOptions({ root: base, token, signal });
+  let temporary = null;
   try {
+    fs.mkdirSync(base, { recursive: true });
+    temporary = fs.mkdtempSync(path.join(base, `.pi-ez-clone-${randomUUID()}-`));
+    const options = gitOptions({ token, signal });
     await runGit("git", [...options.args, cloneUrl, temporary], {
       cwd: base,
       env: options.env,
@@ -130,11 +124,11 @@ export async function cloneRepository({ source, url, fullName, github, root = re
     failure.detail = redacted(error?.stderr || error?.message || error);
     throw failure;
   } finally {
-    for (const cleanup of options.cleanup) {
-      try { cleanup(); } catch { /* best effort */ }
+    try {
+      if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
+    } finally {
+      cloneLocks.delete(lockKey);
     }
-    fs.rmSync(temporary, { recursive: true, force: true });
-    cloneLocks.delete(lockKey);
   }
 }
 

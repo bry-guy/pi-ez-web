@@ -34,6 +34,8 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /build-essential/);
   assert.match(dockerfile, /openssh-client/);
   assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
+  assert.match(dockerfile, /server\/git-credential-helper\.js "\$@"/);
+  assert.match(dockerfile, /git config --system credential\.https:\/\/github\.com\.helper \/usr\/local\/bin\/pi-ez-web-git-credential-helper/);
   assert.match(dockerfile, /node --input-type=module --eval/);
   assert.match(dockerfile, /server\/onepassword\.js/);
   assert.match(dockerfile, /@1password\/sdk/);

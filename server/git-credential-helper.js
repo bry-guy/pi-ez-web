@@ -3,30 +3,27 @@
 import fs from "node:fs";
 import path from "node:path";
 
+function validToken(value) {
+  return typeof value === "string" && value.length > 0 && !/[\r\n]/.test(value) ? value : null;
+}
+
 function storedToken() {
   const authPath = path.join(process.env.PI_WEB_HOME || path.join(process.env.HOME || ".", ".pi-web-ui"), "github-auth.json");
   try {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
-    return auth?.accessToken || null;
+    return validToken(auth?.accessToken);
   } catch {
     return null;
   }
 }
 
 function effectiveToken() {
-  return process.env.PI_WEB_GITHUB_TOKEN || storedToken();
+  const environmentToken = process.env.PI_WEB_GITHUB_TOKEN;
+  if (environmentToken) return validToken(environmentToken);
+  return storedToken();
 }
 
-const protocolOperation = new Set(["get", "store", "erase"]);
-if (process.argv[2] && !protocolOperation.has(process.argv[2])) {
-  const prompt = process.argv.slice(2).join(" ");
-  if (/username/i.test(prompt)) process.stdout.write("x-access-token\n");
-  else if (/password/i.test(prompt)) {
-    const token = effectiveToken();
-    if (token) process.stdout.write(`${token}\n`);
-  }
-  process.exit(0);
-}
+if (process.argv[2] !== "get") process.exit(0);
 
 let input = "";
 process.stdin.setEncoding("utf8");
