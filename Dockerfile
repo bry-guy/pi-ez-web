@@ -56,8 +56,6 @@ RUN set -eux; \
 
 COPY server ./server
 
-RUN node --input-type=module --eval 'const app = await import("./server/onepassword.js"); const sdk = await import("@1password/sdk"); if (typeof app.connect !== "function") throw new Error("OnePassword integration failed to load"); if (typeof sdk.createClient !== "function" && typeof sdk.default?.createClient !== "function") throw new Error("OnePassword SDK client factory is unavailable");'
-
 COPY public ./public
 
 RUN mkdir -p /data/pi-ez-operator-home \

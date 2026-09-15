@@ -28,15 +28,6 @@ const gitErrorMessage = error => ({
   merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
-const onePasswordErrorMessage = code => ({
-  onepassword_auth_failed: "1Password authentication failed. Check the service-account token.",
-  onepassword_sdk_unavailable: "1Password integration is unavailable on this server.",
-  onepassword_service_unavailable: "1Password service is unavailable. Try again.",
-  onepassword_rate_limited: "1Password is rate limited. Try again later.",
-  onepassword_validation_timeout: "1Password validation timed out. Try again.",
-  onepassword_store_failed: "1Password connection could not be stored.",
-}[code] || "1Password connection failed.");
-
 function operationFeedback(kinds, fallback = "Working…") {
   const operation = operationFor(kinds);
   if (!operation) return "";
@@ -154,8 +145,6 @@ class PiSettings extends HTMLElement {
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
-    if (e.target.closest("[data-act='connect-onepassword']")) return this.connectOnePassword();
-    if (e.target.closest("[data-act='disconnect-onepassword']")) return this.disconnectOnePassword();
     const login = e.target.closest("[data-auth-login]");
     if (login) return this.startAuth(login.dataset.authLogin, login.dataset.authType);
     const logout = e.target.closest("[data-auth-logout]");
@@ -341,31 +330,6 @@ class PiSettings extends HTMLElement {
       store.setError(`GitHub disconnect failed: ${err.error || err.message || err}`);
     }
   }
-  async connectOnePassword() {
-    const input = this.querySelector("[data-onepassword-token]");
-    const token = input?.value || "";
-    if (input) input.value = "";
-    if (!token.trim()) {
-      this.setFeedback("Enter a 1Password service-account token.", "error");
-      return;
-    }
-    try {
-      await api.onePasswordConnect(token);
-      await refreshState();
-      this.setFeedback("1Password connected.");
-    } catch (err) {
-      this.setFeedback(onePasswordErrorMessage(err.error), "error");
-    }
-  }
-  async disconnectOnePassword() {
-    try {
-      await api.onePasswordDisconnect();
-      await refreshState();
-      this.setFeedback("1Password disconnected.");
-    } catch (err) {
-      this.setFeedback(`1Password disconnect failed: ${err.error || err.message || err}`, "error");
-    }
-  }
   providerCard(provider) {
     const name = provider.id === "openai-codex"
       ? "OpenAI — ChatGPT"
@@ -437,7 +401,6 @@ class PiSettings extends HTMLElement {
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
-    const onePassword = settings.onepassword || {};
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
     const profileInputValue = piConfig.profile || "";
@@ -487,20 +450,6 @@ class PiSettings extends HTMLElement {
         <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
       </section>
       ${this.authFlowCard()}
-      <section class="settings-section">
-        <div class="settings-section-title">1Password</div>
-        <div class="settings-card settings-card-spaced">
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">${onePassword.connected ? "Connected" : "Not connected"}</div><div class="sr-sub">Connect a scoped 1Password service account for explicit infra tasks. The token is stored outside config and is not added to the server environment; this trusted instance can access it.</div></div>
-            <span class="status-dot ${onePassword.connected ? "" : "off"}" aria-label="${onePassword.connected ? "Connected" : "Not connected"}"></span>
-          </div>
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Service-account token</div><div class="sr-sub">Use a service account, not your 1Password account password or Secret Key.</div></div>
-            <input class="settings-inline-input" data-onepassword-token type="password" autocomplete="new-password" placeholder="Paste token once">
-          </div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Available to explicit infra commands; all code in this trusted instance can access the stored credential.</span><div class="settings-actions"><button class="settings-save" data-act="connect-onepassword">${onePassword.connected ? "Reconnect" : "Connect"}</button>${onePassword.connected ? "<button class=\"settings-action quiet\" data-act=\"disconnect-onepassword\">Disconnect</button>" : ""}</div></div>
-        </div>
-      </section>
       <section class="settings-section">
         <div class="settings-section-title">Pi profile & extensions</div>
         <div class="settings-card settings-card-spaced">

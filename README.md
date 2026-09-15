@@ -123,12 +123,12 @@ owner, public GitHub repositories can be browsed and cloned before login;
 GitHub device login adds private repositories and stores its token in
 `PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
 `PI_CODING_AGENT_DIR/auth.json`. Never put either credential in `config.json`.
-Trusted operator deployments can connect a scoped 1Password service account from
-Settings; pi-ez-web stores that token at
-`PI_WEB_HOME/credentials/onepassword-service-account-token` with mode `0600`.
-The token is used only by explicit child commands. This is trusted-instance
-hygiene, not isolation between projects running in the same pod. The earlier
-`github-auth.json` path rule applies to GitHub OAuth state only.
+1Password is a deployment concern, not an app-managed integration. Inject any
+required source variables through the deployment environment and opt a project
+into them with the existing names-only `project.environment` mapping. pi-ez-web
+does not import, validate, store, or delete 1Password credentials. Legacy
+credential files are left untouched but ignored; retaining or backing them up
+does not revoke their credentials.
 
 Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
 `PI_WEB_GITHUB_CLIENT_ID` (advanced server OAuth-app override),

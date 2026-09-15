@@ -36,9 +36,12 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.match(dockerfile, /pi-ez-web-git-credential-helper/);
   assert.match(dockerfile, /server\/git-credential-helper\.js "\$@"/);
   assert.match(dockerfile, /git config --system credential\.https:\/\/github\.com\.helper \/usr\/local\/bin\/pi-ez-web-git-credential-helper/);
-  assert.match(dockerfile, /node --input-type=module --eval/);
-  assert.match(dockerfile, /server\/onepassword\.js/);
-  assert.match(dockerfile, /@1password\/sdk/);
+  assert.equal(pkg.dependencies["@1password/sdk"], undefined);
+  assert.equal(lock.packages[""].dependencies["@1password/sdk"], undefined);
+  assert.equal(lock.packages["node_modules/@1password/sdk"], undefined);
+  assert.equal(lock.packages["node_modules/@1password/sdk-core"], undefined);
+  assert.equal(fs.existsSync(path.join(root, "server/onepassword.js")), false);
+  assert.doesNotMatch(dockerfile, /1password|onepassword/i);
   assert.doesNotMatch(dockerfile, /not-a-real-service-account-token/);
   assert.doesNotMatch(dockerfile, /npm install --no-save/);
 });

@@ -14,6 +14,7 @@ test("hook environments keep functional paths and drop inherited secrets", () =>
     HOME: "/home/node",
     PI_WEB_HOME: "/data/pi-ez-web",
     PI_CODING_AGENT_DIR: "/data/pi-ez-agent",
+    PI_WEB_ONEPASSWORD_TOKEN_FILE: "/run/secrets/legacy-token",
     OP_SERVICE_ACCOUNT_TOKEN: "private",
     PI_WEB_GITHUB_TOKEN: "private",
     HOOK_PRIVATE: "private",
