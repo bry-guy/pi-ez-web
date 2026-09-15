@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProjectEnvironment } from "./project-environment.js";
 
 export function appHome() {
   return process.env.PI_WEB_HOME || path.join(os.homedir(), ".pi-web-ui");
@@ -214,6 +215,7 @@ export function loadConfig() {
   const projects = (Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects).map(project => {
     if (!project || typeof project !== "object" || Array.isArray(project)) return project;
     const { mode: _legacyMode, ...current } = project;
+    if (Object.hasOwn(current, "environment")) current.environment = normalizeProjectEnvironment(current.environment);
     return current;
   });
   return {
