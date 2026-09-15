@@ -1,0 +1,32 @@
+services:
+  pi-ez-web:
+    build:
+      context: .
+      args:
+        PI_WEB_BUILD_ID: local
+    image: ${PI_WEB_IMAGE:-pi-ez-web:local}
+    ports:
+      - "${PI_WEB_BIND_ADDRESS:-127.0.0.1}:${PI_WEB_PORT:-3141}:3141"
+    environment:
+      NODE_ENV: production
+      PORT: "3141"
+      PI_WEB_MODE: real
+      HOME: /data/pi-ez-operator-home
+      XDG_CONFIG_HOME: /data/pi-ez-operator-home/.config
+      XDG_DATA_HOME: /data/pi-ez-operator-home/.local/share
+      XDG_CACHE_HOME: /data/pi-ez-operator-home/.cache
+      PI_WEB_HOME: /data/pi-ez-web
+      PI_CODING_AGENT_DIR: /data/pi-ez-agent
+      PI_WEB_REPOS_ROOT: /data/repos
+    volumes:
+      - pi-ez-web-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3141/ui-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pi-ez-web-data:

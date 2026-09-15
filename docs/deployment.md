@@ -1,153 +1,202 @@
-# Container and homelab deployment
+# Deployment
 
-The repository includes a production-oriented `Dockerfile` for the real Pi
-server. It runs as the unprivileged `node` user and listens on port `3141`.
-The image installs the Pi SDK from the application's production dependencies,
-so the real supervisor can import it at runtime.
+pi-ez-web is a trusted, single-process, single-tenant service. The repository
+contains a generic image and a minimal Compose entry point; deployment systems
+may build the image or wrap it with their own secret and network tooling.
+
+## Compose quick start
+
+The checked-in Compose file builds locally, publishes only to loopback by
+default, and keeps application, Pi, repository, and worktree data in one named
+volume:
 
 ```sh
-docker build -t pi-ez-web:local .
-docker run --rm -p 3141:3141 pi-ez-web:local
+cp .env.example .env
+docker compose up --build -d
+curl --fail http://127.0.0.1:3141/ui-health
 ```
 
-A real deployment must provide Pi credentials and persistent storage. Keep
-these paths stable across container restarts:
+The first start needs no `config.json`. Add the example later, without
+overwriting existing state, with the command in
+[configuration.md](configuration.md). Stop the service with
+`docker compose down`; do not add `--volumes` unless deleting all persistent
+state is intentional.
 
-The infra repository owns the full-stack preview and production Kubernetes
-manifests, Argo Applications, immutable GHCR digests, isolated state, Caddy
-routes, and release controller. Feature branch images are published by this
-repository's workflow; the infra release controller verifies the exact app SHA,
-OCI revision label, and digest before updating the preview manifest. Production
-promotion is a separate infra operation after preview health verification. The
-app workflow does not mutate Kubernetes manifests, the `preview/pi` ref, or
-production state.
+The default service contract is:
 
-For an isolated full-stack branch preview, the preview Service must receive both
-normal requests and `/api/*` (including SSE). The preview workload runs the
-same real server image as its UI, but uses the distinct
-`pi-web-preview-state-parent-nfs` volume and `/data/.../preview` subpath. Production conversations, repositories,
-worktrees, operator credentials, and Kubernetes API access are not mounted into
-that workload. Provider authentication and Pi state belong to the preview
-volume; deleting the replaceable preview slot is the explicit reset boundary.
-The platform repository owns the Caddy route that selects this mode.
+| Item | Value |
+| --- | --- |
+| Image | Local build from this repository, tagged `pi-ez-web:local` |
+| Container user | Image `node` user, UID/GID 1000 |
+| Published port | `127.0.0.1:3141` on the host to `3141` in the container |
+| Persistent volume | `pi-ez-web-data` mounted at `/data` |
+| Application state | `/data/pi-ez-web` |
+| Pi state and transcripts | `/data/pi-ez-agent` |
+| Repositories | `/data/repos` |
+| Created worktrees | `/data/pi-ez-worktrees` when using the example config; otherwise `/data/pi-ez-operator-home/.pi/worktrees` |
+| Health check | `GET /ui-health` |
 
-- `PI_WEB_HOME` — config, bindings, closed markers, GitHub auth, cached remote Pi profile, and chat scratch space.
-- `PI_CODING_AGENT_DIR` — Pi transcripts and agent configuration/auth. Set it explicitly (for example `/data/pi-ez-agent`).
-- `reposRoot` — the checked-out repositories.
-- `worktreeRoot` — the configured root for app-created linked worktrees; existing worktrees are also discovered from Git.
+The port bind and image tag can be changed in `.env`. The Compose `.env` file
+only interpolates the Compose file; it is not a general container environment
+file. Pass credentials or project source variables through explicit service
+environment entries or a private untracked `env_file`, as described in
+[configuration.md](configuration.md).
 
-The image includes `git` and CA certificates. GitHub private clones use HTTPS
-and a temporary askpass helper; public GitHub clones use HTTPS without a token.
-Clone processes ignore global/system Git URL rewrite configuration so a validated
-HTTPS URL cannot silently become SSH. SSH keys are not managed by the app.
+## Persistence and ownership
 
-For containers, set `PI_WEB_HOME`, `PI_CODING_AGENT_DIR`, and configure
-absolute paths such as `/data/repos` and `/data/worktrees`; do not rely on the
-image user's default home paths. Repositories and worktrees must be writable by
-the service user. Never bake credentials into the image.
+Keep the `/data` volume across upgrades. The service writes atomically inside
+`$PI_WEB_HOME`, so the parent directory and the volume must be writable by
+UID/GID 1000. If replacing the named volume with host directories, create and
+own them for UID/GID 1000 before starting the container. Keep repository and
+worktree paths stable across restarts and hosts; Git worktree metadata stores
+absolute paths.
 
-A typical retained layout is:
+Back up the whole volume or, at minimum, these sensitive and stateful paths:
 
-```text
-/data/pi-ez-web/config.json
-/data/pi-ez-web/bindings.json
-/data/pi-ez-web/github-auth.json
-/data/pi-ez-web/chats/
-/data/pi-ez-agent/auth.json
-/data/pi-ez-agent/models.json
-/data/pi-ez-agent/sessions/
-/data/pi-ez-workspaces/
-/data/pi-ez-worktrees/
+- `$PI_WEB_HOME/config.json`, `bindings.json`, chats, cached Pi resources, and
+  `github-auth.json`;
+- `$PI_CODING_AGENT_DIR/auth.json`, models, and Pi session transcripts;
+- repositories and created worktrees if they are not independently backed up.
+
+Auth files, retained legacy credential files, and backups are secrets. Removing
+the app-managed OnePassword feature did not revoke or delete any old file.
+Never bake credentials into the image, config example, Compose file, URL,
+command arguments, or logs.
+
+For the checked-in Compose volume, stop the service before making a protected
+archive and store that archive outside the repository. The volume name is
+project-scoped, so discover it from the stopped service instead of assuming a
+global name. This command refuses an existing archive and does not restart the
+service if the backup fails:
+
+```sh
+set -eu
+(
+  set -eu
+  backup_dir="${PI_EZ_WEB_BACKUP_DIR:-$HOME/pi-ez-web-backups}"
+  umask 077
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  docker compose stop
+  container="$(docker compose ps -aq pi-ez-web | sed -n '1p')"
+  test -n "$container"
+  data_volume="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container")"
+  test -n "$data_volume"
+  archive="$backup_dir/pi-ez-web-data.tar.gz"
+  test ! -e "$archive"
+  docker run --rm \
+    --mount "type=volume,src=$data_volume,dst=/data,readonly" \
+    --mount "type=bind,src=$backup_dir,dst=/backup" \
+    alpine sh -c 'umask 077; set -C; tar -czf - -C /data . > /backup/pi-ez-web-data.tar.gz'
+  chmod 600 "$archive"
+)
+docker compose up -d
 ```
 
-Treat `github-auth.json` and Pi's `auth.json` as secrets in backups. 1Password
-is no longer read from `PI_WEB_HOME`; deployments provide any required source
-environment and project mappings. Legacy credential files are not deleted or
-revoked by the app, so any retained file and backup remains sensitive. A remote
-Pi profile configured in `config.json` can install and execute arbitrary Pi
-packages as the service user; use only trusted HTTPS settings and package
-sources.
+To restore, stop the service and extract the archive into an anonymous newly
+created volume, never over a live or stale volume:
 
-### Trusted prestart command
-
-Set `PI_WEB_PRESTART_COMMAND` to an optional, deployment-controlled multiline
-shell command when the operator home needs initialization before Pi starts. The
-server runs it synchronously with `/bin/sh -c` before reading `config.json`,
-creating the supervisor, or listening. Its stdout and stderr go to the
-container logs, stdin is closed, and `PI_WEB_PRESTART_TIMEOUT_MS` sets the
-positive-integer timeout (120 seconds by default). A blank command is ignored;
-a timeout or nonzero exit aborts startup.
-
-The command inherits `HOME`, XDG variables, `PI_WEB_HOME`, and
-`PI_CODING_AGENT_DIR`. It is equivalent to trusted code execution as the
-service user: keep it noninteractive, idempotent, and free of secret output.
-It is not stored in `config.json`, exposed in Settings, or available through
-the API. `createApp()` callers that bypass `startServer()` are responsible for
-any equivalent initialization themselves.
-
-The command is manager-agnostic. For example, deployments may use
-`chezmoi apply`, GNU Stow, `rsync`, Nix/Home Manager, or a yadm sequence such as
-`yadm clone --no-bootstrap --no-checkout` followed by a pinned `yadm reset
---hard`. The platform's Kubernetes manifests use yadm and a pinned Bryan dotfiles
-repository only as a deployment example; Pi EZ Web does not require that
-repository or manager. Keep `PI_WEB_HOME` and `PI_CODING_AGENT_DIR` separate
-from the projected operator home so application state, Pi sessions, and
-credentials are not overwritten by dotfiles.
-
-## k3s
-
-The app is currently suitable for a single-pod k3s deployment, but it is not
-horizontally scalable: the supervisor, SSE hub, and workspace locks are
-in-memory. Use one replica (a `StatefulSet` or a `Deployment` with a recreate
-strategy) and persistent volumes for the paths above. Configure `runAsUser`
-and `fsGroup` so the `node` user can write the state, repository, and worktree
-volumes.
-
-The application repository publishes one immutable private GHCR image with
-its full source SHA and OCI revision label; it does not edit manifests or
-deploy. The infra release controller validates the image, stages preview,
-verifies `/ui-health`, and promotes the digest through infra-owned manifests and
-Argo CD. Namespace pull access, runtime/operator Secrets, Caddy routes,
-kubeconfigs, and secret-sync tasks remain platform-owned and are materialized
-out of band through fnox/1Password.
-
-A typical path is:
-
-```text
-Tailscale -> Caddy/Ingress -> pi-ez-web Service -> one pi-ez-web pod
-                                               -> persistent state/repos/worktrees
+```sh
+set -eu
+backup_dir="${PI_EZ_WEB_BACKUP_DIR:-$HOME/pi-ez-web-backups}"
+archive="$backup_dir/pi-ez-web-data.tar.gz"
+test -r "$archive"
+docker compose down
+restore_volume="$(docker volume create)"
+docker run --rm \
+  --mount "type=volume,src=$restore_volume,dst=/data" \
+  --mount "type=bind,src=$backup_dir,dst=/backup,readonly" \
+  alpine tar -xzf /backup/pi-ez-web-data.tar.gz -C /data
+cat > compose.restore.yaml <<EOF
+services:
+  pi-ez-web:
+    volumes:
+      - restored-data:/data
+volumes:
+  restored-data:
+    external: true
+    name: $restore_volume
+EOF
+docker compose -f compose.yaml -f compose.restore.yaml up -d --no-build
 ```
 
-Caddy can proxy the service directly:
+Inspect the restored state and retain the untracked `compose.restore.yaml` for
+subsequent starts. Bare `docker compose` selects the original volume again, so
+use both files for every later backup, upgrade, rollback, stop, and start:
 
-```caddy
-pi.example.ts.net {
-    reverse_proxy pi-ez-web.default.svc.cluster.local:3141
-}
+```sh
+export COMPOSE_FILE=compose.yaml:compose.restore.yaml
+docker compose up -d --no-build
 ```
 
-Ensure the proxy permits long-lived SSE responses. GitHub device login and
-provider flow state use server-side polling, so no pi-ez-web OAuth callback route
-needs to be exposed through Caddy. Some Pi provider methods still use fixed
-loopback callbacks; for a remote deployment prefer the device-code method when
-available, or complete the provider's manual redirect/code prompt. Restrict
-access with Tailscale ACLs and, if appropriate, an additional Caddy
-authentication layer.
-The application has no built-in authentication and the agent can execute shell
-commands as its service user, so it must remain inside a trusted tailnet.
+Do not delete the original volume until the restore is verified. Never use
+`docker compose down --volumes` as a backup step.
 
-Test NFS-backed state for same-directory atomic rename, POSIX permissions,
-Pi auth-file locking, Git clone, and Git worktree add/remove. Keep mount paths
-stable because Git worktree metadata records absolute paths. Do not introduce a
-second storage tier unless an acceptance test demonstrates a concrete NFS
-failure.
+## Configuration and trusted inputs
 
-The `/api/health` endpoint reports the REST contract, capabilities, and
-commit-derived build ID for production rollout checks. UI-only previews use
-`/ui-health` for their static process and receive production health through the
-same-origin `/api/health` route. The browser polls health after SSE loss and
-reloads once a new build is healthy, which supports a single-pod GitOps rollout.
-Before treating this as a highly available service, add
-external session/event coordination and graceful shutdown/drain handling. A
-single persistent pod is the supported deployment shape today; OAuth flow
-state, SSE clients, and workspace locks are in memory.
+See [configuration.md](configuration.md) for the complete JSON and environment
+reference. In particular:
+
+- `PI_WEB_HOME`, `PI_CODING_AGENT_DIR`, and `PI_WEB_REPOS_ROOT` should be
+  explicit absolute paths in containers.
+- `project.environment` stores only destination/source variable names and
+  resolves values at command spawn. A missing source prevents the command from
+  starting; an empty source remains an intentional empty value.
+- Mappings, hooks, Pi profiles, packages, extensions, and prestart commands are
+  trusted execution inputs, not project isolation. They run as the service user.
+- A Compose `.env` entry is not passed to the service unless Compose references
+  it in `environment` or an `env_file`.
+
+## Security boundary
+
+There is no built-in authentication or sandbox. Pi, project hooks, and trusted
+extensions can execute shell commands with the service user's authority. Keep
+the default loopback binding, or put the service behind a TLS/authenticated
+reverse proxy reachable only from a trusted LAN or tailnet/VPN. Do not
+port-forward it or expose it directly to the public internet. Do not treat
+separate projects in one instance as mutually untrusted tenants.
+
+If a reverse proxy is used, proxy all paths—including `/api` and the long-lived
+SSE endpoint—and preserve streaming responses. The proxy, not pi-ez-web,
+provides authentication and public TLS.
+
+## Health, upgrades, and rollback
+
+Use `/ui-health` for a process/UI check. The full server also exposes
+`/api/health`, which reports the API contract, build ID, capabilities, and sync
+state. A successful TCP connection alone is not an application health check.
+
+Run one application process (one replica). The supervisor, SSE hub, OAuth
+flow state, and workspace locks are in memory, so horizontal replicas are not
+a supported deployment shape.
+
+For a local image upgrade, retain the previous tag and keep the data volume:
+
+```sh
+docker tag pi-ez-web:local pi-ez-web:previous
+docker compose build --pull
+docker compose up -d --no-build
+curl --fail http://127.0.0.1:3141/ui-health
+```
+
+Rollback without deleting state:
+
+```sh
+PI_WEB_IMAGE=pi-ez-web:previous docker compose up -d --no-build
+```
+
+Test upgrades against a copy of the volume when possible; validate provider
+login, Git clone/fetch, worktree creation, project hooks, and transcript
+continuity after restart.
+
+## Optional pi-sync
+
+pi-sync is optional product functionality for handing canonical chat sessions
+between laptop Pi sessions and web clients. It is not working-tree
+synchronization. It transfers session JSONL and conversation metadata, not dirty
+files, commits, patches, worktrees, stash state, or credentials.
+
+Provide `PI_SYNC_SERVER_URL` to the web process and the pi-sync extension. The
+extension also accepts `PI_SYNC_URL`; a config-only `sync.serverUrl` should not
+be assumed to configure extension attachment. Keep sync disabled unless a
+compatible sync server and client module are deliberately provisioned.

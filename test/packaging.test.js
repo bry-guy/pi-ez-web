@@ -51,6 +51,44 @@ test("project hook capability is advertised by the server", () => {
   assert.match(version, /project-hooks/);
 });
 
+test("self-hosting examples keep state persistent and secrets out of defaults", () => {
+  const compose = fs.readFileSync(path.join(root, "compose.yaml"), "utf8");
+  const envExample = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+  const config = readJson("config.example.json");
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+  const deployment = fs.readFileSync(path.join(root, "docs/deployment.md"), "utf8");
+  const configuration = fs.readFileSync(path.join(root, "docs/configuration.md"), "utf8");
+
+  assert.match(compose, /context: \./);
+  assert.ok(compose.includes("${PI_WEB_BIND_ADDRESS:-127.0.0.1}:${PI_WEB_PORT:-3141}:3141"));
+  assert.match(compose, /pi-ez-web-data:\/data/);
+  assert.doesNotMatch(compose, /^\s+name: pi-ez-web-data$/m);
+  assert.match(compose, /PI_WEB_HOME: \/data\/pi-ez-web/);
+  assert.match(compose, /PI_CODING_AGENT_DIR: \/data\/pi-ez-agent/);
+  assert.match(compose, /PI_WEB_REPOS_ROOT: \/data\/repos/);
+  assert.match(compose, /http:\/\/127\.0\.0\.1:3141\/ui-health/);
+  assert.match(envExample, /PI_WEB_BIND_ADDRESS=127\.0\.0\.1/);
+  assert.equal(config.projects.length, 0);
+  assert.equal(config.pi.profile, null);
+  assert.equal(config.pi.profileSource, "disabled");
+  assert.equal(config.sync.serverUrl, null);
+  assert.doesNotMatch(JSON.stringify(config), /token|secret|password|credential/i);
+
+  for (const text of [readme, deployment, configuration]) {
+    assert.doesNotMatch(text, /Node(?:\.js)? 20|temporary askpass|preview deployment|bry-guy|fnox|OP_SERVICE_ACCOUNT_TOKEN/i);
+  }
+  assert.match(configuration, /Compose `.env` file controls Compose interpolation only/);
+  assert.match(configuration, /project_environment_source_missing/);
+  assert.match(configuration, /set -e/);
+  assert.match(configuration, /`\/data\/pi-ez-operator-home\/.pi\/worktrees`/);
+  assert.match(deployment, /one named\s+volume/);
+  assert.match(deployment, /project-scoped/);
+  assert.match(deployment, /restore_volume="\$\(docker volume create\)"/);
+  assert.match(deployment, /external: true/);
+  assert.match(deployment, /Bare `docker compose` selects the original volume again/);
+  assert.match(deployment, /export COMPOSE_FILE=compose\.yaml:compose\.restore\.yaml/);
+});
+
 test("image publication workflow publishes immutable GHCR images", () => {
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
 
