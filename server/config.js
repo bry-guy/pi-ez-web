@@ -172,6 +172,25 @@ function readJson(p, fallback) {
     return fallback;
   }
 }
+function readConfig() {
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath(), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw Object.assign(new Error("Configuration file could not be read."), { code: "config_unreadable" });
+  }
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw Object.assign(new Error("Configuration file contains invalid JSON."), { code: "invalid_config" });
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("Configuration file must contain a JSON object."), { code: "invalid_config" });
+  }
+  return value;
+}
 function writeJson(p, obj, mode = 0o600) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   const temporary = `${p}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -189,8 +208,7 @@ export function ensureHome() {
 }
 
 export function loadConfig() {
-  const rawValue = readJson(configPath(), {});
-  const raw = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : {};
+  const raw = readConfig();
   const sources = raw.repositorySources && typeof raw.repositorySources === "object" ? raw.repositorySources : {};
   const github = sources.github && typeof sources.github === "object" ? sources.github : {};
   const projects = (Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects).map(project => {

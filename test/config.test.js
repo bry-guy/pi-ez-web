@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,98 @@ after(() => {
 test("worktree root defaults beside Pi and respects an explicit override", () => {
   assert.equal(worktreeRoot({}), path.join(os.homedir(), ".pi", "worktrees"));
   assert.equal(worktreeRoot({ worktreeRoot: "/x" }), "/x");
+});
+
+test("config loading distinguishes missing and invalid files", () => {
+  const configFile = path.join(appHome(), "config.json");
+  fs.rmSync(configFile, { force: true });
+  const defaults = loadConfig();
+  assert.deepEqual(defaults.projects, []);
+  assert.equal(fs.existsSync(configFile), false);
+
+  fs.writeFileSync(configFile, JSON.stringify({ defaultModel: "mock/fast", projects: [] }));
+  assert.equal(loadConfig().defaultModel, "mock/fast");
+
+  const assertInvalid = (raw, message) => {
+    fs.writeFileSync(configFile, raw);
+    const original = fs.readFileSync(configFile);
+    let saveReached = false;
+    assert.throws(() => {
+      const cfg = loadConfig();
+      saveReached = true;
+      cfg.defaultModel = "should-not-save";
+      saveConfig(cfg);
+    }, error => {
+      assert.equal(error.code, "invalid_config");
+      assert.equal(error.message, message);
+      assert.equal(error.cause, undefined);
+      assert.doesNotMatch(String(error), /config-sentinel/);
+      return true;
+    });
+    assert.equal(saveReached, false);
+    assert.deepEqual(fs.readFileSync(configFile), original);
+  };
+  assertInvalid(`{"secret":"config-sentinel"`, "Configuration file contains invalid JSON.");
+  assertInvalid("", "Configuration file contains invalid JSON.");
+  for (const root of [null, ["config-sentinel"], "config-sentinel", 42, true]) {
+    assertInvalid(JSON.stringify(root), "Configuration file must contain a JSON object.");
+  }
+
+  const original = fs.readFileSync(configFile);
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => {
+    if (file === configFile) throw Object.assign(new Error("read-sentinel"), { code: "EACCES" });
+    return originalReadFileSync.call(fs, file, ...args);
+  };
+  let saveReached = false;
+  try {
+    assert.throws(() => {
+      const cfg = loadConfig();
+      saveReached = true;
+      cfg.defaultModel = "should-not-save";
+      saveConfig(cfg);
+    }, error => {
+      assert.equal(error.code, "config_unreadable");
+      assert.equal(error.message, "Configuration file could not be read.");
+      assert.equal(error.cause, undefined);
+      assert.doesNotMatch(String(error), /read-sentinel|config-sentinel/);
+      return true;
+    });
+    assert.equal(saveReached, false);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+  assert.deepEqual(fs.readFileSync(configFile), original);
+  fs.rmSync(configFile, { force: true });
+});
+
+test("invalid configuration stops startup before listening", () => {
+  const configFile = path.join(appHome(), "config.json");
+  const raw = `{"secret":"startup-sentinel"`;
+  fs.writeFileSync(configFile, raw);
+  try {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { startServer } from ${JSON.stringify(new URL("../server/index.js", import.meta.url).href)};
+      try {
+        const { server } = startServer(0);
+        console.log("started");
+        server.close();
+      } catch (error) {
+        console.log(JSON.stringify({ code: error?.code, message: error?.message }));
+      }
+    `], {
+      env: { ...process.env, PI_WEB_HOME: tmp, PI_WEB_MODE: "mock", PI_WEB_UI_ONLY: "0", PI_WEB_PRESTART_COMMAND: "" },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0);
+    assert.doesNotMatch(`${child.stdout}${child.stderr}`, /started|startup-sentinel/);
+    assert.deepEqual(JSON.parse(child.stdout.trim()), { code: "invalid_config", message: "Configuration file contains invalid JSON." });
+    assert.equal(fs.readFileSync(configFile, "utf8"), raw);
+  } finally {
+    fs.rmSync(configFile, { force: true });
+  }
 });
 
 test("project hooks normalize commands and allow explicit removal", () => {
