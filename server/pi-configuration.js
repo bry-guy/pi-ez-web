@@ -21,7 +21,7 @@ const MAX_PROFILE_RESOURCE_BYTES = 256 * 1024;
 const MAX_PROFILE_RESOURCE_TOTAL = 2 * 1024 * 1024;
 const PROFILE_TIMEOUT_MS = 10_000;
 const RESOURCE_KEYS = ["extensions", "skills", "prompts", "themes"];
-const DEFAULT_NPM_COMMAND = ["/usr/local/bin/npm", "--legacy-peer-deps", "--include=dev"];
+const DEFAULT_NPM_COMMAND = ["npm", "--legacy-peer-deps", "--include=dev"];
 export const WEB_SUBAGENT_EXTENSION = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "extensions",
@@ -628,7 +628,6 @@ export class PiConfiguration {
     }
 
     const overlay = addInlineResources(settings, inline);
-    // Package setup runs in managed Git checkouts that may contain mise.toml.
     // Include dev tools because Git packages may build runtime files in prepare;
     // legacy peer resolution avoids auto-installing Pi's host dependencies.
     // An explicitly supplied profile npmCommand remains authoritative.

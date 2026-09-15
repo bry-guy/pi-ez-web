@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,7 +87,7 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   const configuration = new PiConfiguration();
   const { settingsManager } = await configuration.createSettingsManager(cwd, agentDir, SettingsManager);
   assert.deepEqual(settingsManager.getGlobalSettings().packages, ["npm:profile-package", "npm:extra-package"]);
-  assert.deepEqual(settingsManager.getNpmCommand(), ["/usr/local/bin/npm", "--legacy-peer-deps", "--include=dev"]);
+  assert.deepEqual(settingsManager.getNpmCommand(), ["npm", "--legacy-peer-deps", "--include=dev"]);
   assert.deepEqual(settingsManager.getGlobalSettings().extensions, [
     path.join(profileDir, "extension.ts"),
     path.join(process.env.PI_WEB_HOME, "web-extension.ts"),
@@ -122,6 +123,32 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   assert.equal(state.profile.status, "loaded");
   assert.equal(state.profile.packageCount, 2);
   assert.equal(state.config.profile, profileDir);
+});
+
+test("the default npm command resolves through PATH and honors profile overrides", async () => {
+  const npmBin = path.join(tmp, "npm-bin");
+  fs.mkdirSync(npmBin, { recursive: true });
+  const npm = path.join(npmBin, "npm");
+  fs.writeFileSync(npm, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { encoding: "utf8", mode: 0o755 });
+  fs.chmodSync(npm, 0o755);
+
+  const configuration = new PiConfiguration();
+  const resolved = await configuration.resolve({ profile: null, packages: [], extensions: [] });
+  assert.deepEqual(resolved.settings.npmCommand, ["npm", "--legacy-peer-deps", "--include=dev"]);
+  const executed = spawnSync(resolved.settings.npmCommand[0], resolved.settings.npmCommand.slice(1), {
+    env: { ...process.env, PATH: npmBin },
+    encoding: "utf8",
+  });
+  assert.equal(executed.error, undefined);
+  assert.equal(executed.status, 0);
+  assert.equal(executed.stderr, "");
+  assert.equal(executed.stdout, "--legacy-peer-deps\n--include=dev\n");
+
+  const explicitProfile = path.join(tmp, "explicit-npm-profile");
+  fs.mkdirSync(explicitProfile, { recursive: true });
+  fs.writeFileSync(path.join(explicitProfile, "settings.json"), JSON.stringify({ npmCommand: ["/custom/npm", "--profile-flag"] }));
+  const explicit = await configuration.resolve({ profile: explicitProfile, packages: [], extensions: [] });
+  assert.deepEqual(explicit.settings.npmCommand, ["/custom/npm", "--profile-flag"]);
 });
 
 test("an external profile loads declarative package sources and ignores its machine-local paths", async () => {
