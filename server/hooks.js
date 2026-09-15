@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { normalizeHookSets, normalizeHooks } from "./config.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 import { redact } from "./redaction.js";
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
@@ -57,6 +58,7 @@ export function runHook(command, {
   cwd,
   env = process.env,
   spawnImpl = spawn,
+  extraEnv = {},
   report = null,
   signal = null,
   timeoutMs = DEFAULT_HOOK_TIMEOUT_MS,
@@ -71,7 +73,7 @@ export function runHook(command, {
     const safeCommand = redact(command);
     const timeout = positive(timeoutMs, DEFAULT_HOOK_TIMEOUT_MS);
     const outputLimit = positive(maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
-    const hookEnv = hookEnvironment(env);
+    const hookEnv = gitCredentialEnvironment({ ...hookEnvironment(env), ...extraEnv });
     let child;
     let settled = false;
     let stopReason = null;

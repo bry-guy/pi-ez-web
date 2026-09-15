@@ -16,6 +16,8 @@ import * as onepassword from "./onepassword.js";
 import { cloneRepository } from "./repositories.js";
 import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
+import { resolveProjectEnvironment } from "./project-environment.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { markSyncPending } from "./sync/enrollment.js";
@@ -1263,7 +1265,15 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: `No such hook: ${name}.` });
       return err(c, 404, "no_such_hook", { operation });
     }
-    const result = hookResult(await runHook(command, { cwd, signal: c.req.raw.signal, report: reporter.log }), name);
+    let extraEnv;
+    try {
+      extraEnv = resolveProjectEnvironment(found.project?.environment);
+    } catch (error) {
+      if (error.code !== "project_environment_source_missing") throw error;
+      const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Project environment source is missing." });
+      return err(c, 409, error.code, { message: "Project environment source is missing.", operation });
+    }
+    const result = hookResult(await runHook(command, { cwd, extraEnv, signal: c.req.raw.signal, report: reporter.log }), name);
     const operation = reporter.finish({ status: result.ok ? "success" : "error", httpStatus: result.ok ? 200 : 422, exit: result.exit, message: result.ok ? "Configured hook completed." : "Configured hook failed." });
     return c.json({ ...result, operation });
   });
@@ -1276,11 +1286,22 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const { cmd } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
+    let env;
+    try {
+      const project = findProjectByWorkspace(cwd)?.project;
+      env = gitCredentialEnvironment({
+        ...process.env,
+        ...resolveProjectEnvironment(project?.environment),
+      });
+    } catch (error) {
+      if (error.code !== "project_environment_source_missing") throw error;
+      return err(c, 409, error.code, { message: "Project environment source is missing." });
+    }
     const bangId = newId("bg");
     hub.emit(id, "bang_start", { bangId, cmd });
     const t0 = Date.now();
     const { exit, out } = await new Promise(resolve => {
-      execFile("/bin/sh", ["-c", cmd], { cwd, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
+      execFile("/bin/sh", ["-c", cmd], { cwd, env, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
         resolve({ exit: e ? (e.code ?? 1) : 0, out: [stdout, stderr].filter(Boolean).join("") });
       });
     });

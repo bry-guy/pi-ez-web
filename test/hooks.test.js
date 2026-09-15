@@ -26,6 +26,35 @@ test("hook environments keep functional paths and drop inherited secrets", () =>
   });
 });
 
+test("hook execution overlays project values after filtering and hardens Git", async () => {
+  const before = { ...process.env };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-hook-env-"));
+  try {
+    const result = await runHook(
+      "printf '%s/%s/%s/%s/' \"$PROJECT_VALUE\" \"$PI_WEB_MODE\" \"${HOOK_PRIVATE:-missing}\" \"${GIT_ASKPASS:-missing}\"; if printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | grep -q 'password=synthetic-token'; then printf git-ok; else printf git-fail; fi",
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          PI_WEB_HOME: home,
+          HOOK_PRIVATE: "inherited",
+        },
+        extraEnv: {
+          PROJECT_VALUE: "mapped",
+          PI_WEB_MODE: "mapped-mode",
+          GIT_ASKPASS: "must-be-removed",
+          PI_WEB_GITHUB_TOKEN: "synthetic-token",
+        },
+      },
+    );
+    assert.equal(result.exit, 0);
+    assert.equal(result.stdout, "mapped/mapped-mode/missing/missing/git-ok");
+    assert.deepEqual({ ...process.env }, before);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("hook timeout terminates the child process group", async () => {
   const started = Date.now();
   const result = await runHook("sleep 5", { timeoutMs: 25 });

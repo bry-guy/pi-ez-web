@@ -167,6 +167,7 @@ async function boot() {
       }
       if (url.endsWith("/hooks/setup") && options.method === "POST") {
         dom.window.__setupStarted = true;
+        dom.window.__setupCalls = (dom.window.__setupCalls || 0) + 1;
         const operationId = options.headers?.["x-pi-operation-id"] || "test-setup";
         if (dom.window.__holdSetup) return new Promise(resolve => { dom.window.__resolveSetup = () => resolve(dom.window.__setupFails ? json({ error: "http_502" }, false, 502) : json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } })); });
         return json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } });
@@ -487,6 +488,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
   assert.equal(dom.window.__setupStarted, true, "setup starts after the returned session is selected");
+  assert.equal(dom.window.__setupCalls, 1, "automatic setup uses the existing hook endpoint");
   assert.equal(root.querySelector(".send-btn").disabled, false, "composer remains usable during setup");
   assert.ok(root.querySelector(".bar-operation-hint .operation-dot"), "background setup appears in the title hint");
   assert.equal(root.querySelector(".operation-row-hint"), null, "sidebar operation hints are removed");

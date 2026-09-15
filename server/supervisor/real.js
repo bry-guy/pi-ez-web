@@ -10,6 +10,9 @@ import { activityFromEntry, activityFromToolResult, normalizeActivity } from "..
 import { SubagentActivityStore } from "../subagent-activity.js";
 import { PiConfiguration, WEB_SUBAGENT_EXTENSION, publicError } from "../pi-configuration.js";
 import { GitHubClient } from "../github.js";
+import { findProjectByWorkspace } from "../lifecycle.js";
+import { gitCredentialEnvironment } from "../git-credentials.js";
+import { resolveProjectEnvironment } from "../project-environment.js";
 import { settleSync } from "../sync/settlement.js";
 
 function errorDetails(error) {
@@ -284,6 +287,18 @@ export class RealSupervisor {
         }
       }
       const { settingsManager, resourceLoader } = resources;
+      const bash = SDKModule.createBashToolDefinition(cwd, {
+        shellPath: settingsManager.getShellPath(),
+        commandPrefix: settingsManager.getShellCommandPrefix(),
+        spawnHook: context => {
+          const project = findProjectByWorkspace(context.cwd)?.project;
+          const projectEnvironment = resolveProjectEnvironment(project?.environment);
+          return {
+            ...context,
+            env: gitCredentialEnvironment({ ...context.env, ...projectEnvironment }),
+          };
+        },
+      });
       const hasThinkingLevel = (sessionManager.getBranch?.() || []).some(entry => entry.type === "thinking_level_change");
       const result = await SDKModule.createAgentSession({
         cwd,
@@ -291,6 +306,7 @@ export class RealSupervisor {
         modelRuntime: runtime,
         settingsManager,
         resourceLoader,
+        customTools: [bash],
         ...(model ? { model } : {}),
         ...(!hasThinkingLevel ? { thinkingLevel: loadConfig().defaultThinkingLevel } : {}),
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
