@@ -27,6 +27,14 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.equal(piSyncCommit, "d5c46a99a250affe206a65c42db72072aac89da8");
   assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
   assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
+  const piSyncBuildRun = dockerfile
+    .replace(/\\\r?\n/g, " ")
+    .split(/\r?\n/)
+    .find(line => line.startsWith("RUN set -eux;"));
+  assert.ok(piSyncBuildRun);
+  const buildAt = piSyncBuildRun.indexOf("npm run build --prefix /tmp/pi-sync");
+  const cleanAt = piSyncBuildRun.indexOf("npm cache clean --force");
+  assert.ok(buildAt >= 0 && cleanAt > buildAt);
   assert.doesNotMatch(dockerfile, /git clone/);
   assert.doesNotMatch(dockerfile, /\b(mise|fnox|tofu|kubectl|yadm)\b/i);
   assert.doesNotMatch(dockerfile, /\bop\b/);

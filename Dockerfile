@@ -52,7 +52,8 @@ RUN set -eux; \
     cp -a /tmp/pi-sync/skills node_modules/@bry-guy/pi-sync/; \
     cp -a /tmp/pi-sync/extensions node_modules/@bry-guy/pi-sync/; \
     cp /tmp/pi-sync/README.md node_modules/@bry-guy/pi-sync/; \
-    rm -rf /tmp/pi-sync
+    rm -rf /tmp/pi-sync; \
+    npm cache clean --force
 
 COPY server ./server
 
