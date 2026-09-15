@@ -40,7 +40,7 @@ const state = {
   repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
   settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true }, onepassword: { connected: false } },
   piConfiguration: {
-    config: { profile: "https://github.com/bry-guy/dotfiles", packages: ["npm:context-mode"], extensions: [] },
+    config: { profile: "https://github.com/bry-guy/dotfiles", profileSource: "explicit", packages: ["npm:context-mode"], extensions: [] },
     profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
     warnings: [],
     runtime: { extensions: [{ path: "context-mode" }], errors: [], skills: [{ name: "todo-discipline", path: "/tmp/todo/SKILL.md" }], prompts: 0 },
@@ -96,7 +96,10 @@ async function boot() {
       if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
       if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
       if (url === "/api/github/device-login" && options.method === "POST") return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } }, true, 202);
-      if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
+      if (url === "/api/github/device-login/ghf1" && !options.method) {
+        if (dom.window.__githubLoginComplete) return json({ flow: { id: "ghf1", state: "complete", account: { login: "logged-owner" } } });
+        return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
+      }
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
       if (url === "/api/onepassword/connect" && options.method === "POST") {
         if (dom.window.__onePasswordFailure) {
@@ -172,7 +175,13 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-check";
         return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "check ok" }] } });
       }
-      if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
+      if (url === "/api/settings") {
+        const patch = JSON.parse(options.body || "{}");
+        dom.window.__settingsPatches = [...(dom.window.__settingsPatches || []), patch];
+        if (patch.githubOwner !== undefined) state.settings.githubOwner.value = patch.githubOwner;
+        return json({ ok: true });
+      }
+      if (url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) {
         state.projects[0].sessions.unshift({ id: "s2", title: "Chat Name", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", model: "mock/fast", when: "now", streaming: false, children: [] });
@@ -539,6 +548,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.match(root.querySelector("pi-settings").textContent, /Optional: enter a local path or HTTPS URL/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /configured GitHub user's|Automatic GitHub dotfiles profile/);
   assert.match(root.querySelector("pi-settings").textContent, /1Password/);
   const onePasswordInput = root.querySelector("[data-onepassword-token]");
   onePasswordInput.value = "op_private-token";
@@ -585,9 +596,28 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
+
+  state.piConfiguration = {
+    config: { profile: null, profileSource: "disabled", packages: ["npm:kept"], extensions: ["./kept.ts"] },
+    profile: { status: "none", source: null, error: null },
+    warnings: [],
+    runtime: null,
+  };
+  store.set({ piConfiguration: state.piConfiguration, view: "settings" });
+  assert.equal(root.querySelector("[data-setting='piProfile']").value, "");
+  root.querySelector("pi-settings [data-act='save-pi-configuration']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(dom.window.__settingsPatches.at(-1).pi, {
+    profile: null,
+    profileSource: "disabled",
+    packages: ["npm:kept"],
+    extensions: ["./kept.ts"],
+  });
+
   root.querySelector("pi-settings [data-act='save-repository-settings']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-settings").textContent, /Repository settings saved/);
+  assert.equal(store.state.operations.some(operation => operation.kind === "repository-settings"), false);
   store.state.repositorySources.sources.find(source => source.id === "github").configured = true;
   root.querySelector("pi-settings [data-act='open-github-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -596,6 +626,34 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   root.querySelector("pi-repo-picker [data-act='close']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.repositorySources.sources.find(source => source.id === "github").configured = true;
+  state.settings.githubOwner.value = null;
+  await refreshState();
+  dom.window.__settingsPatches = [];
+  const piOperationsBeforeLogin = store.state.operations.filter(operation => operation.kind === "pi-profile").length;
+  const githubOwnerRefreshed = new Promise((resolve, reject) => {
+    let unsubscribe;
+    const timer = setTimeout(() => {
+      unsubscribe?.();
+      reject(new Error("GitHub login did not refresh the owner"));
+    }, 1000);
+    unsubscribe = store.subscribe(what => {
+      if (what !== "state" || store.state.settings?.githubOwner?.value !== "logged-owner") return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+  dom.window.__githubLoginComplete = true;
+  root.querySelector("pi-settings [data-act='open-github-picker']").click();
+  await githubOwnerRefreshed;
+  assert.equal(state.settings.githubOwner.value, "logged-owner");
+  assert.equal(store.state.settings.githubOwner.value, "logged-owner");
+  assert.deepEqual(dom.window.__settingsPatches, [{ githubOwner: "logged-owner" }]);
+  assert.equal(store.state.operations.filter(operation => operation.kind === "pi-profile").length, piOperationsBeforeLogin);
+  await root.querySelector("pi-repo-picker").dismiss();
+  dom.window.__githubLoginComplete = false;
   const defaultToggle = root.querySelector("pi-settings pi-model-picker[data-mode='default'] [data-model-toggle]");
   defaultToggle.focus();
   defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));

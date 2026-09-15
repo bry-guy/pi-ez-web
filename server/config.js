@@ -251,21 +251,9 @@ export function githubConfig(cfg = loadConfig()) {
   };
 }
 
-function githubAccountLogin() {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(appHome(), "github-auth.json"), "utf8"));
-    return typeof value?.account?.login === "string" ? value.account.login : null;
-  } catch { return null; }
-}
-
 export function effectivePiConfig(cfg = loadConfig()) {
   const pi = normalizePiConfig(cfg?.pi);
-  if (pi.profileSource === "auto") {
-    const owner = githubConfig(cfg).owner || githubAccountLogin();
-    const safeOwner = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(String(owner || "")) ? owner : null;
-    pi.profile = safeOwner ? `https://github.com/${safeOwner}/dotfiles` : null;
-  }
-  return pi;
+  return pi.profileSource === "disabled" ? { ...pi, profile: null } : pi;
 }
 
 export function worktreeRoot(cfg) {

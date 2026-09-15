@@ -212,15 +212,35 @@ test("profile load errors remain visible while inline resources stay usable", as
   assert.deepEqual(resolved.settings.packages, ["npm:fallback"]);
 });
 
-test("automatic profiles derive from the GitHub owner", () => {
-  assert.equal(
-    effectivePiConfig({ pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } }).profile,
-    "https://github.com/alice/dotfiles",
-  );
-  assert.equal(
-    effectivePiConfig({ pi: { profile: "https://example.com/settings.json", profileSource: "explicit", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } }).profile,
-    "https://example.com/settings.json",
-  );
+test("profiles require explicit configuration", async () => {
+  let fetches = 0;
+  const fetchImpl = async () => {
+    fetches++;
+    throw new Error("profile fetch should not run");
+  };
+  const ownerOnly = { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } };
+  assert.equal(effectivePiConfig(ownerOnly).profile, null);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(effectivePiConfig(ownerOnly))).profile.status, "none");
+
+  fs.writeFileSync(path.join(process.env.PI_WEB_HOME, "github-auth.json"), JSON.stringify({ account: { login: "stored-owner" } }));
+  const storedIdentityOnly = { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: null } } };
+  assert.equal(effectivePiConfig(storedIdentityOnly).profile, null);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(effectivePiConfig(storedIdentityOnly))).profile.status, "none");
+  assert.equal(fetches, 0);
+
+  const explicit = effectivePiConfig({ pi: { profile: "https://example.com/settings.json", profileSource: "explicit", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } });
+  assert.equal(explicit.profile, "https://example.com/settings.json");
+
+  const disabled = effectivePiConfig({
+    pi: { profile: "https://example.com/disabled.json", profileSource: "disabled", packages: ["npm:kept"], extensions: ["./kept.ts"] },
+    repositorySources: { github: { owner: "alice" } },
+  });
+  assert.equal(disabled.profile, null);
+  assert.equal(disabled.profileSource, "disabled");
+  assert.deepEqual(disabled.packages, ["npm:kept"]);
+  assert.deepEqual(disabled.extensions, ["./kept.ts"]);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(disabled)).profile.status, "none");
+  assert.equal(fetches, 0);
 });
 
 test("profile refresh replaces stale skills and materializes declared extensions", async () => {

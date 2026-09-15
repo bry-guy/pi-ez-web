@@ -212,15 +212,11 @@ class PiSettings extends HTMLElement {
     if (store.state.settings?.defaultRepositorySource?.editable !== false) patch.defaultRepositorySource = this.querySelector("[data-setting='defaultRepositorySource']")?.value;
     if (store.state.settings?.githubOwner?.editable !== false) patch.githubOwner = this.querySelector("[data-setting='githubOwner']")?.value.trim() || null;
     if (!Object.keys(patch).length) return;
-    const autoProfile = patch.githubOwner !== undefined && store.state.piConfiguration?.config?.profileSource === "auto";
-    const operation = autoProfile ? beginOperation("repository-settings", "Load GitHub dotfiles", "", "Request started.") : null;
     try {
-      const result = await api.settingsPatch({ ...patch, ...(operation ? { operationId: operation.id, activeSessionId: store.activeKey() } : {}) });
-      if (operation) completeOperation(operation, result);
+      await api.settingsPatch(patch);
       await refreshState();
       this.setFeedback("Repository settings saved.");
     } catch (err) {
-      if (operation) completeOperation(operation, {}, err);
       const message = err.error === "invalid_github_owner"
         ? "Enter a valid GitHub user or organization name."
         : `Repository settings failed: ${err.error || err.message || err}`;
@@ -234,9 +230,7 @@ class PiSettings extends HTMLElement {
     const profile = this.querySelector("[data-setting='piProfile']")?.value.trim() || null;
     const pi = {
       profile,
-      profileSource: profile
-        ? current.profileSource === "auto" && profile === (current.profile || "") ? "auto" : "explicit"
-        : "auto",
+      profileSource: profile ? "explicit" : current.profileSource === "disabled" ? "disabled" : "auto",
       packages: lines("[data-setting='piPackages']"),
       extensions: lines("[data-setting='piExtensions']"),
     };
@@ -446,14 +440,12 @@ class PiSettings extends HTMLElement {
     const onePassword = settings.onepassword || {};
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
-    const profileInputValue = piConfig.profileSource === "auto" ? "" : piConfig.profile || "";
+    const profileInputValue = piConfig.profile || "";
     const profileStatus = ["loaded", "cached"].includes(piState.profile?.status)
       ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}${piState.profile.ref ? ` @ ${piState.profile.ref}` : ""}${piState.profile.commit ? ` · ${piState.profile.commit.slice(0, 12)}` : ""}`
       : piState.profile?.status === "error"
         ? `Profile error: ${piState.profile.error}`
-        : piConfig.profileSource === "auto"
-          ? "Automatic GitHub dotfiles profile"
-          : "Using the deployment's Pi settings";
+        : "Using the deployment's Pi settings";
     const loadedExtensions = Array.isArray(piState.runtime?.extensions) ? piState.runtime.extensions : [];
     const loadedSkills = Array.isArray(piState.runtime?.skills) ? piState.runtime.skills : [];
     const resourceRows = (items, empty) => items.length
@@ -484,7 +476,6 @@ class PiSettings extends HTMLElement {
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
     const piOperation = operationFeedback("pi-profile", "Applying Pi resources…");
-    const repositoryOperation = operationFeedback("repository-settings", "Saving repository settings…");
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
@@ -514,7 +505,7 @@ class PiSettings extends HTMLElement {
         <div class="settings-section-title">Pi profile & extensions</div>
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Dotfiles profile</div><div class="sr-sub">Leave this blank to use the configured GitHub user's <span class="settings-mono">dotfiles</span> repository. An explicit path or HTTPS URL overrides it. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
+            <div class="sr-main"><div class="sr-title">Pi profile</div><div class="sr-sub">Optional: enter a local path or HTTPS URL. Leave blank to use only the deployment's Pi settings. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
             <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(profileInputValue)}" placeholder="https://github.com/owner/dotfiles">
           </div>
           <div class="settings-row settings-path-row">
@@ -558,7 +549,7 @@ class PiSettings extends HTMLElement {
             <input class="settings-inline-input" data-setting="githubOwner" value="${esc(owner)}" placeholder="bry-guy" ${ownerEditable ? "" : "disabled"}>
           </div>
           <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div><div class="provider-actions"><button class="settings-action" data-act="open-github-picker">${githubStatus?.authenticated ? "Manage repositories" : "Sign in with GitHub"}</button>${githubStatus?.authenticated && githubStatus.credentialSource === "stored" ? `<button class="settings-action quiet" data-github-logout>Sign out</button>` : ""}</div></div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button>${repositoryOperation}</div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div></div>
         </div>
       </section>
       <div class="settings-card">
@@ -1447,13 +1438,7 @@ class PiRepoPicker extends HTMLElement {
           const ownerUnset = !store.state.settings?.githubOwner?.value;
           this.githubFlow = null;
           if (accountLogin && ownerUnset) {
-            const operation = beginOperation("pi-profile", "Load GitHub dotfiles", "", "Request started.");
-            try {
-              const profileResult = await api.settingsPatch({ githubOwner: accountLogin, operationId: operation.id, activeSessionId: store.activeKey() });
-              completeOperation(operation, profileResult);
-            } catch (error) {
-              completeOperation(operation, {}, error);
-            }
+            try { await api.settingsPatch({ githubOwner: accountLogin }); } catch {}
           }
           await refreshState();
           this.loaded = false;

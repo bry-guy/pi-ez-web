@@ -100,6 +100,41 @@ test("state exposes the API contract and health marker", async () => {
   assert.equal(health.apiContractVersion, 5);
 });
 
+test("repository-owner changes do not reload Pi configuration", async () => {
+  const originalConfig = loadConfig();
+  const originalGithubOwner = process.env.PI_WEB_GITHUB_OWNER;
+  delete process.env.PI_WEB_GITHUB_OWNER;
+  const originalReload = supervisor.reloadPiConfiguration;
+  const originalAssertReloadable = supervisor.assertPiConfigurationReloadable;
+  let reloads = 0;
+  supervisor.assertPiConfigurationReloadable = () => {
+    throw Object.assign(new Error("configuration is busy"), { code: "pi_configuration_busy" });
+  };
+  supervisor.reloadPiConfiguration = async (...args) => {
+    reloads++;
+    return originalReload.call(supervisor, ...args);
+  };
+  try {
+    const response = await post("/api/settings", { githubOwner: "alice" });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(reloads, 0);
+    assert.equal(body.operation, undefined);
+    assert.equal(body.settings.githubOwner.value, "alice");
+
+    const piResponse = await post("/api/settings", { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] } });
+    const piBody = await piResponse.json();
+    assert.equal(piResponse.status, 409, JSON.stringify(piBody));
+    assert.equal(piBody.error, "pi_configuration_busy");
+  } finally {
+    supervisor.reloadPiConfiguration = originalReload;
+    supervisor.assertPiConfigurationReloadable = originalAssertReloadable;
+    if (originalGithubOwner === undefined) delete process.env.PI_WEB_GITHUB_OWNER;
+    else process.env.PI_WEB_GITHUB_OWNER = originalGithubOwner;
+    saveConfig(originalConfig);
+  }
+});
+
 test("repository picker uses the configured local repositories root", async () => {
   const state = await (await get("/api/state")).json();
   assert.equal(state.reposRoot, path.resolve(tmp, "local-repositories"));

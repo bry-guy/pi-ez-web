@@ -85,14 +85,14 @@ provider model. An explicit value must be a usable `provider/modelId` reference.
 
 The optional `pi` block is the simplest way to share Pi behavior with the web
 runtime. `profile` accepts a local Pi profile directory, a local `settings.json`,
-or a credential-free HTTPS URL. When `profile` is automatic and a GitHub
-owner/account is configured, pi-ez-web uses that account's `dotfiles` repository;
-an explicit profile URL or path overrides this behavior. A GitHub repository URL
-reads `.pi/agent/settings.json` from the repository's resolved default branch,
-including `main` and `master`; a GitHub blob URL can select another file, for
-example `.pi/profiles/rpiv/settings.json`. The profile's declarative settings are
-layered onto each web session, while `packages` and `extensions` add sources
-directly.
+or a credential-free HTTPS URL. Profile selection is explicit: leave `profile`
+blank to use only the deployment's Pi settings. Deployments that relied on the
+old inferred `<github-owner>/dotfiles` profile must configure it explicitly before
+upgrading. A GitHub repository URL reads `.pi/agent/settings.json` from the
+repository's resolved default branch, including `main` and `master`; a GitHub
+blob URL can select another file, for example
+`.pi/profiles/rpiv/settings.json`. The profile's declarative settings are layered
+onto each web session, while `packages` and `extensions` add sources directly.
 Relative paths in the web config resolve from `PI_WEB_HOME`. Missing npm/git
 packages are installed by Pi into the persistent `PI_CODING_AGENT_DIR` when a
 session loads or the profile is applied. GitHub profiles also fetch complete skill directories and
@@ -103,9 +103,8 @@ resources are cached for restart/offline fallback.
 
 Profiles intentionally do **not** import `auth.json`, models, or transcripts:
 those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
-extensions execute as the server user with full system access, so an automatic
-GitHub dotfiles profile is also a trust decision: reference only accounts and
-repositories you trust. Apply reloads the selected idle session runtime;
+extensions execute as the server user with full system access, so configure only
+profiles from accounts and repositories you trust. Apply reloads the selected idle session runtime;
 active streaming sessions are deferred safely. Pi-compatible tools, commands, hooks, startup events, skills, prompts, and
 portable extension dialogs work in pi-ez-web; terminal-only TUI components are
 not rendered. The real web runtime supplies browser-backed `select`, `confirm`,

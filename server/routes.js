@@ -1396,8 +1396,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   api.post("/settings", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
-    const autoProfileChange = body.githubOwner !== undefined && normalizePiConfig(cfg.pi).profileSource === "auto";
-    const reporter = body.pi !== undefined || autoProfileChange
+    const reporter = body.pi !== undefined
       ? createOperationReporter({ id: operationRequestId(c, body), kind: "pi-profile", title: "Apply Pi resources" })
       : null;
     reporter?.log({ type: "request", phase: "request", message: "POST /api/settings (Pi resource configuration)" });
@@ -1467,7 +1466,6 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     }
     if (body.githubOwner !== undefined) {
       if (process.env.PI_WEB_GITHUB_OWNER) return err(c, 409, "setting_overridden", { field: "githubOwner", source: "PI_WEB_GITHUB_OWNER" });
-      if (autoProfileChange) sup.assertPiConfigurationReloadable();
       try {
         cfg.repositorySources.github.owner = normalizeGitHubOwner(body.githubOwner);
       } catch (e) {
@@ -1481,7 +1479,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     }
     saveConfig(cfg);
     if (syncConfigurationChanged) syncAdapter?.resetExtensionPath?.();
-    const piConfiguration = nextPiConfiguration || autoProfileChange || syncConfigurationChanged
+    const piConfiguration = nextPiConfiguration || syncConfigurationChanged
       ? await sup.reloadPiConfiguration({ report: reporter?.log, sessionId: body.activeSessionId || null })
       : await sup.piConfigurationState();
     const modelState = await sup.modelState();
