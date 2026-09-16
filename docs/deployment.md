@@ -42,6 +42,76 @@ file. Pass credentials or project source variables through explicit service
 environment entries or a private untracked `env_file`, as described in
 [configuration.md](configuration.md).
 
+## Layering deployment-specific hook tools
+
+The public image contains generic runtime tools, not every executable a
+particular deployment's trusted hooks may use. Layer a missing tool into one
+derived application image instead of changing the public image or adding a
+sidecar. The derived image keeps the inherited entrypoint and command, and the
+Compose service still supplies the healthcheck and `/data` volume. The added
+tools are available to all processes in the final nonroot container.
+
+For example, the public image already includes `jq` but not `ripgrep`. Build a
+base image and then a deployment image that adds the Debian `ripgrep` package:
+
+```sh
+docker build --build-arg PI_WEB_BUILD_ID=local --tag pi-ez-web:base .
+cat > Dockerfile.hooks <<'EOF'
+FROM pi-ez-web:base
+
+USER root
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+USER node
+EOF
+docker build --file Dockerfile.hooks --tag pi-ez-web:hooks .
+```
+
+A project can then declare a hook that uses the added executable. This
+example succeeds when at least one YAML file contains an `apiVersion:` line;
+it is an executable-presence example, not a complete YAML validator:
+
+```json
+{
+  "projects": [
+    {
+      "id": "infra",
+      "name": "infra",
+      "repoPath": "/data/repos/infra",
+      "hooks": {
+        "check": "rg --glob '*.yaml' --glob '*.yml' '^apiVersion:' ."
+      }
+    }
+  ]
+}
+```
+
+Merge that project entry into the existing `projects` array in
+`config.json`; do not replace other configuration. See
+[configuration.md](configuration.md) for configuration location and first-time
+example installation. Set or replace this line in the private `.env` file
+before starting Compose:
+
+```text
+PI_WEB_IMAGE=pi-ez-web:hooks
+```
+
+Then start Compose without rebuilding:
+
+```sh
+docker compose up --no-build -d
+curl --fail http://127.0.0.1:3141/ui-health
+```
+
+Keep `PI_WEB_IMAGE=pi-ez-web:hooks` in the private `.env` for later starts and
+use `--no-build`; `docker compose up --build` would rebuild the Compose
+Dockerfile under the derived tag. Hooks remain trusted commands running as the
+service user. Never put credentials in the derived image, its build context,
+or its layers. A deployment can use the same pattern to layer `mise` or `yadm`
+with its own reviewed pinned installation steps.
+
 ## Persistence and ownership
 
 Keep the `/data` volume across upgrades. The service writes atomically inside

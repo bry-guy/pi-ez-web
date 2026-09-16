@@ -157,6 +157,10 @@ be selected explicitly. `profileSource` can be `auto`, `explicit`, or
 Pi packages, extensions, and project hooks execute as the service user and
 must be treated as trusted code.
 
+A hook declaration does not install its executable. If a trusted hook uses a
+tool that is not in the public image, layer that tool into a deployment-specific
+derived image; see [Layering deployment-specific hook tools](deployment.md#layering-deployment-specific-hook-tools).
+
 Package installation uses `npm` resolved from `PATH` and may need network
 access and native build tools. Project setup hooks run in the selected
 workspace when a new checkout/worktree requires setup and can be rerun
