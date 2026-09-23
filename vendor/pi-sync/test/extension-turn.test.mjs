@@ -20,12 +20,26 @@ const envelope = {
 async function harness(fetch, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-sync-turn-"));
   const previousServerUrl = process.env.PI_SYNC_SERVER_URL;
+  const previousSyncUrl = process.env.PI_SYNC_URL;
   if (options.serverUrl) process.env.PI_SYNC_SERVER_URL = options.serverUrl;
+  else delete process.env.PI_SYNC_SERVER_URL;
+  delete process.env.PI_SYNC_URL;
   const entries = options.entries || envelope.entries;
   const sessionPath = join(root, "session.jsonl");
   await writeFile(sessionPath, `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousFetch = globalThis.fetch;
+  const previousSetInterval = globalThis.setInterval;
+  const previousClearInterval = globalThis.clearInterval;
+  const intervals = new Set();
+  if (options.captureIntervals) {
+    globalThis.setInterval = (callback, delay) => {
+      const timer = { callback, delay, unref() {} };
+      intervals.add(timer);
+      return timer;
+    };
+    globalThis.clearInterval = (timer) => intervals.delete(timer);
+  }
   process.env.PI_CODING_AGENT_DIR = root;
   globalThis.fetch = fetch;
   const handlers = new Map();
@@ -39,11 +53,14 @@ async function harness(fetch, options = {}) {
       if (options.repositoryRemote && args[0] === "remote" && args[1] === "get-url") return { stdout: `${options.repositoryRemote}\n`, code: 0 };
       return { stdout: "", code: 1 };
     },
+    sendUserMessage() {},
   };
   extension(pi);
   const ctx = {
     hasUI: true,
+    mode: options.mode ?? "json",
     isIdle: () => true,
+    hasPendingMessages: () => false,
     cwd: root,
     ui: {
       confirm: async () => true,
@@ -67,16 +84,27 @@ async function harness(fetch, options = {}) {
     handlers,
     pi,
     ctx,
+    intervals,
+    async tickIntervals() {
+      await Promise.all([...intervals].map((timer) => timer.callback()));
+    },
     notices,
     statuses,
     store: new BindingStore(root),
     async binding() { return new BindingStore(root).get(envelope.sessionId); },
     async close() {
+      intervals.clear();
+      if (options.captureIntervals) {
+        globalThis.setInterval = previousSetInterval;
+        globalThis.clearInterval = previousClearInterval;
+      }
       globalThis.fetch = previousFetch;
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       if (previousServerUrl === undefined) delete process.env.PI_SYNC_SERVER_URL;
       else process.env.PI_SYNC_SERVER_URL = previousServerUrl;
+      if (previousSyncUrl === undefined) delete process.env.PI_SYNC_URL;
+      else process.env.PI_SYNC_URL = previousSyncUrl;
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -722,6 +750,445 @@ test("reconciles a stale local copy with unuploaded changes before the next prom
     assert.equal((await fake.binding()).lastEtag, "e2");
     assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
     assert.doesNotMatch(fake.notices.join(" "), /conflict/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("automatically refreshes a newer remote snapshot during idle polling", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: "e2", leaseHolder: null, leaseExpiresAt: null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("auto-refresh-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  let switchedTarget;
+  let refreshPromise;
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    fake.pi.sendUserMessage = (text) => {
+      assert.equal(text, "/sync refresh");
+      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
+    };
+    fake.ctx.switchSession = async (target, options) => {
+      switchedTarget = target;
+      const replacement = {
+        ...fake.ctx,
+        ui: { ...fake.ctx.ui, notify: (message) => fake.notices.push(message) },
+        sessionManager: {
+          ...fake.ctx.sessionManager,
+          getSessionFile: () => target,
+          getLeafId: () => remote.headEntryId,
+          getSessionName: () => remote.title,
+        },
+        navigateTree: async () => ({ cancelled: false }),
+      };
+      await fake.handlers.get("session_start")({}, replacement);
+      await options.withSession(replacement);
+      return { cancelled: false };
+    };
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await refreshPromise;
+    assert.ok(switchedTarget);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
+    const refreshed = await fake.binding();
+    assert.equal(refreshed.lastEtag, "e2");
+    assert.equal(refreshed.materializedFile, switchedTarget);
+    assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
+    assert.match(fake.notices.join(" "), /refreshed/);
+    assert.equal(fake.intervals.size, 1);
+    await fake.handlers.get("session_shutdown")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("idle polling retries a failed automatic refresh", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const requests = [];
+  let acquireCount = 0;
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: "e2", leaseHolder: null, leaseExpiresAt: null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      acquireCount++;
+      if (acquireCount === 1) return Response.json({ error: { code: "http_error" } }, { status: 500 });
+      const response = await responseForLease("retry-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  let refreshPromise;
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    fake.pi.sendUserMessage = (text) => {
+      assert.equal(text, "/sync refresh");
+      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
+    };
+    fake.ctx.switchSession = async () => ({ cancelled: false });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await assert.rejects(refreshPromise);
+    assert.equal(acquireCount, 1);
+
+    refreshPromise = undefined;
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await refreshPromise;
+    assert.equal(acquireCount, 2);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "GET", "POST", "DELETE"]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("idle polling skips pending input, leased sessions, and overlapping checks", async () => {
+  const requests = [];
+  let currentEtag = "e1";
+  let leaseHolder = "other-client";
+  let delayNextList = false;
+  let resolveListStarted;
+  let resolveList;
+  const listStarted = new Promise((resolve) => { resolveListStarted = resolve; });
+  const delayedList = new Promise((resolve) => { resolveList = resolve; });
+  const listResponse = () => Response.json({
+    formatVersion: 1,
+    sessions: [{ sessionId: envelope.sessionId, title: envelope.title, createdAt: envelope.createdAt, headEntryId: envelope.headEntryId, etag: currentEtag, leaseHolder, leaseExpiresAt: leaseHolder ? "2026-01-01T00:02:00Z" : null }],
+  });
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      if (delayNextList) {
+        delayNextList = false;
+        resolveListStarted();
+        return delayedList;
+      }
+      return listResponse();
+    }
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    fake.ctx.isIdle = () => false;
+    await fake.tickIntervals();
+    assert.deepEqual(requests, []);
+
+    fake.ctx.isIdle = () => true;
+    fake.ctx.hasPendingMessages = () => true;
+    await fake.tickIntervals();
+    assert.deepEqual(requests, []);
+
+    fake.ctx.hasPendingMessages = () => false;
+    fake.ctx.ui.getEditorText = () => "draft";
+    await fake.tickIntervals();
+    assert.deepEqual(requests, []);
+
+    fake.ctx.ui.getEditorText = () => "";
+    currentEtag = "e2";
+    await fake.tickIntervals();
+    assert.deepEqual(requests.map(({ method }) => method), ["GET"]);
+
+    leaseHolder = null;
+    currentEtag = "e1";
+    delayNextList = true;
+    const timer = [...fake.intervals][0];
+    const first = timer.callback();
+    await listStarted;
+    const second = timer.callback();
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET"]);
+    resolveList(await listResponse());
+    await first;
+    await second;
+    await fake.handlers.get("session_shutdown")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("idle polling preserves local changes for missing and stale fingerprints without retrying etags", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const localBytes = `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${JSON.stringify(envelope.entries[0])}\n${JSON.stringify({ type: "message", id: "local-only", parentId: "a", timestamp: "2026-01-01T00:00:03Z" })}\n`;
+  const requests = [];
+  let currentEtag = "e2";
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: currentEtag, leaseHolder: null, leaseExpiresAt: null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("auto-refresh-token", currentEtag).json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  let switched = false;
+  let refreshPromise;
+  try {
+    await writeFile(fake.sessionPath, localBytes);
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+    });
+    fake.pi.sendUserMessage = (text) => {
+      assert.equal(text, "/sync refresh");
+      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
+    };
+    fake.ctx.switchSession = async () => {
+      switched = true;
+      return { cancelled: false };
+    };
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await refreshPromise;
+    assert.equal(switched, false);
+    assert.match(fake.notices.join(" "), /unsynchronized changes/);
+    assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
+    let binding = await fake.binding();
+    assert.equal(binding.lastEtag, "e1");
+    assert.equal(binding.lastFingerprint, undefined);
+    assert.equal(binding.leaseToken, undefined);
+
+    refreshPromise = undefined;
+    await fake.tickIntervals();
+    assert.equal(refreshPromise, undefined);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET"]);
+
+    binding = { ...binding, lastFingerprint: "stale-fingerprint" };
+    await fake.store.set(binding);
+    currentEtag = "e3";
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await refreshPromise;
+    assert.equal(switched, false);
+    assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
+    binding = await fake.binding();
+    assert.equal(binding.lastEtag, "e1");
+    assert.equal(binding.lastFingerprint, "stale-fingerprint");
+    assert.equal(binding.leaseToken, undefined);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "POST", "DELETE"]);
+
+    refreshPromise = undefined;
+    await fake.tickIntervals();
+    assert.equal(refreshPromise, undefined);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "POST", "DELETE", "GET"]);
+    await fake.handlers.get("session_shutdown")({}, fake.ctx);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("automatic conflict release failure retains its lease and stops polling", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const localBytes = `${JSON.stringify({ type: "session", version: 3, id: envelope.sessionId, timestamp: envelope.createdAt })}\n${JSON.stringify(envelope.entries[0])}\n${JSON.stringify({ type: "message", id: "local-only", parentId: "a", timestamp: "2026-01-01T00:00:03Z" })}\n`;
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: "e2", leaseHolder: null, leaseExpiresAt: null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("retained-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") {
+      return Response.json({ error: { code: "http_error" } }, { status: 500 });
+    }
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  let refreshPromise;
+  let switched = false;
+  try {
+    await writeFile(fake.sessionPath, localBytes);
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      state: "ready",
+    });
+    fake.pi.sendUserMessage = (text) => {
+      assert.equal(text, "/sync refresh");
+      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
+    };
+    fake.ctx.switchSession = async () => {
+      switched = true;
+      return { cancelled: false };
+    };
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.tickIntervals();
+    assert.ok(refreshPromise);
+    await assert.rejects(refreshPromise);
+    assert.equal(switched, false);
+    assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
+    const binding = await fake.binding();
+    assert.equal(binding.leaseToken, "retained-token");
+    assert.equal(binding.leaseExpiresAt, "2026-01-01T00:02:00Z");
+    assert.equal(binding.lastEtag, "e1");
+    assert.ok(fake.statuses.includes("sync: uncertain"));
+
+    refreshPromise = undefined;
+    await fake.tickIntervals();
+    assert.equal(refreshPromise, undefined);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("JSON-mode attach clears an existing interactive idle poll", async () => {
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    requests.push({ path: new URL(url).pathname, method: init.method });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "tui" });
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 1);
+
+    fake.ctx.mode = "json";
+    await fake.handlers.get("command:sync")("attach", fake.ctx);
+    assert.equal(fake.intervals.size, 0);
+    assert.deepEqual(requests, []);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("fresh JSON mode skips idle polling but retains manual refresh", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("manual-refresh-token", "e2").json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "json" });
+  let switchedTarget;
+  try {
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: "deliberately-stale",
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 0);
+
+    fake.ctx.switchSession = async (target) => {
+      switchedTarget = target;
+      return { cancelled: false };
+    };
+    await fake.handlers.get("command:sync")("refresh", fake.ctx);
+    assert.deepEqual(requests.map(({ method }) => method), ["POST", "DELETE"]);
+    assert.equal((await fake.binding()).lastEtag, "e2");
+    assert.notEqual(switchedTarget, fake.sessionPath);
+    await fake.handlers.get("session_shutdown")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 0);
   } finally {
     await fake.close();
   }

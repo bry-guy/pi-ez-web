@@ -62,6 +62,12 @@ export default function syncExtension(pi: ExtensionAPI) {
   let currentSessionId: string | undefined;
   let active: ActiveLease | undefined;
   let blocked: BlockReason | undefined;
+  let idlePollTimer: ReturnType<typeof setInterval> | undefined;
+  let idlePollGeneration = 0;
+  let idlePollInFlight = false;
+  let observedRemoteEtag: string | undefined;
+  let autoRefreshInFlight = false;
+  let automaticRefreshConflict = false;
   const workspaceWarnings = new Set<string>();
 
   const notify = (ctx: ExtensionContext | undefined, message: string, level: "info" | "warning" | "error" = "info") => {
@@ -106,6 +112,75 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (active) active.timer = undefined;
   };
 
+  const clearIdlePoll = () => {
+    idlePollGeneration++;
+    if (idlePollTimer) clearInterval(idlePollTimer);
+    idlePollTimer = undefined;
+    observedRemoteEtag = undefined;
+  };
+
+  const hasPendingInput = (ctx: ExtensionContext): boolean =>
+    ctx.hasPendingMessages() || (ctx.hasUI && typeof ctx.ui.getEditorText === "function" && ctx.ui.getEditorText().length > 0);
+
+  const startIdlePoll = (ctx: ExtensionContext, sessionId: string) => {
+    clearIdlePoll();
+    if (ctx.mode === "json") return;
+    const generation = idlePollGeneration;
+    idlePollTimer = setInterval(() => {
+      if (idlePollInFlight) return;
+      idlePollInFlight = true;
+      return (async () => {
+        if (
+          generation !== idlePollGeneration ||
+          currentSessionId !== sessionId ||
+          active ||
+          blocked === "invalid" ||
+          blocked === "setup_required" ||
+          !ctx.isIdle() ||
+          hasPendingInput(ctx)
+        ) return;
+
+        const binding = await store.get(sessionId);
+        if (
+          generation !== idlePollGeneration ||
+          currentSessionId !== sessionId ||
+          active ||
+          !binding ||
+          binding.state === "setup_required" ||
+          binding.leaseToken ||
+          !binding.lastEtag
+        ) return;
+
+        const repository = await repositoryForPicker(ctx);
+        if (generation !== idlePollGeneration || currentSessionId !== sessionId || active) return;
+        let list;
+        try {
+          list = await clientFor(binding.serverUrl).list({ repository: repository ?? null });
+        } catch {
+          return;
+        }
+        if (generation !== idlePollGeneration || currentSessionId !== sessionId || active) return;
+        const metadata = list.sessions.find((item) => item.sessionId === binding.canonicalSessionId);
+        if (!metadata || metadata.etag === binding.lastEtag || metadata.leaseHolder) {
+          if (metadata?.etag === binding.lastEtag) observedRemoteEtag = undefined;
+          return;
+        }
+        if (autoRefreshInFlight || observedRemoteEtag === metadata.etag || !ctx.isIdle() || hasPendingInput(ctx)) return;
+        observedRemoteEtag = metadata.etag;
+        autoRefreshInFlight = true;
+        try {
+          pi.sendUserMessage("/sync refresh", { expandPromptTemplates: true });
+        } catch {
+          autoRefreshInFlight = false;
+          observedRemoteEtag = undefined;
+        }
+      })().catch(() => undefined).finally(() => {
+        idlePollInFlight = false;
+      });
+    }, HEARTBEAT_MS);
+    idlePollTimer.unref?.();
+  };
+
   const persistBinding = async (binding: SyncBinding, token?: string, expiresAt?: string): Promise<SyncBinding> => {
     const next: SyncBinding = { ...binding };
     if (token) {
@@ -141,6 +216,7 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   const markSetupRequired = async (ctx: ExtensionContext | undefined, binding: SyncBinding, notifyUser = false, releaseLease = true): Promise<SyncBinding> => {
     const previous = active?.binding.nativeSessionId === binding.nativeSessionId ? active : undefined;
+    clearIdlePoll();
     if (previous) {
       clearHeartbeat();
       active = undefined;
@@ -169,7 +245,10 @@ export default function syncExtension(pi: ExtensionAPI) {
     }
     lease.uncertain = true;
     clearHeartbeat();
-    if (released && active === lease) active = undefined;
+    if (released && active === lease) {
+      active = undefined;
+      startIdlePoll(ctx, lease.binding.nativeSessionId);
+    }
     markBlocked(ctx, "conflict");
     notify(ctx, "The canonical synchronized session changed; the server copy is authoritative and the local data was preserved for recovery.", "warning");
   };
@@ -226,6 +305,7 @@ export default function syncExtension(pi: ExtensionAPI) {
 
   const acquireBinding = async (ctx: ExtensionContext, binding: SyncBinding): Promise<boolean> => {
     clearHeartbeat();
+    clearIdlePoll();
     active = undefined;
     blocked = undefined;
     if (binding.state === "setup_required") {
@@ -264,6 +344,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       } else {
         markBlocked(ctx, "uncertain");
       }
+      startIdlePoll(ctx, binding.nativeSessionId);
       return false;
     }
   };
@@ -336,6 +417,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     clearHeartbeat();
     if (active === lease) active = undefined;
     blocked = undefined;
+    startIdlePoll(ctx, lease.binding.nativeSessionId);
     return true;
   };
 
@@ -504,6 +586,7 @@ export default function syncExtension(pi: ExtensionAPI) {
         title: normalized.envelope.title,
       };
       await persistBinding(nextBinding);
+      startIdlePoll(ctx, nextBinding.nativeSessionId);
       notify(ctx, "The local conversation was re-enrolled; the next prompt will acquire its lease.", "info");
     } catch (error) {
       if (error instanceof SyncClientError && error.code === "duplicate_enrollment") {
@@ -531,6 +614,7 @@ export default function syncExtension(pi: ExtensionAPI) {
         await repairCurrent(ctx, existing);
         return;
       }
+      if (!existing.leaseToken) startIdlePoll(ctx, existing.nativeSessionId);
       notify(ctx, existing.leaseToken
         ? "Synchronized session is already in an active turn."
         : "Synchronized session is enrolled; the next prompt will acquire its lease.", "info");
@@ -560,6 +644,7 @@ export default function syncExtension(pi: ExtensionAPI) {
         title: normalized.envelope.title,
       };
       await store.set(binding);
+      startIdlePoll(ctx, binding.nativeSessionId);
       notify(ctx, "Conversation enrolled; the next prompt will acquire its lease.", "info");
     } catch (error) {
       if (error instanceof SyncClientError && error.code === "duplicate_enrollment") {
@@ -697,7 +782,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     return (await store.get(parentSessionId))?.materializedFile;
   };
 
-  const refreshCurrent = async (ctx: ExtensionCommandContext) => {
+  const refreshCurrentImpl = async (ctx: ExtensionCommandContext) => {
     await ctx.waitForIdle?.();
     currentSessionId = ctx.sessionManager.getSessionId();
     let binding = await store.get(currentSessionId);
@@ -723,6 +808,14 @@ export default function syncExtension(pi: ExtensionAPI) {
       showBlocked(ctx);
       return;
     }
+    let localFingerprint: string | undefined;
+    if (autoRefreshInFlight) {
+      try {
+        localFingerprint = stableEnvelopeFingerprint((await normalizeCurrent(ctx, binding)).envelope);
+      } catch (error) {
+        return failCommand(ctx, error, "sync_materialization_failed", "Could not inspect the local conversation.");
+      }
+    }
     let acquired;
     try {
       acquired = await clientFor(binding.serverUrl).acquire(binding.canonicalSessionId, deviceLabel, { repository: repository ?? null });
@@ -743,6 +836,18 @@ export default function syncExtension(pi: ExtensionAPI) {
         return failCommand(ctx, error, "sync_lease_uncertain", "The conversation is current, but its refresh lease could not be released.");
       }
       notify(ctx, "The synchronized conversation is already current.", "info");
+      return { switched: false };
+    }
+    if (autoRefreshInFlight && (!binding.lastFingerprint || localFingerprint !== binding.lastFingerprint)) {
+      automaticRefreshConflict = true;
+      try {
+        await releaseRefreshLease();
+      } catch (error) {
+        await persistBinding(binding, acquired.lease.token, acquired.lease.expiresAt);
+        markBlocked(ctx, "uncertain");
+        return failCommand(ctx, error, "sync_lease_uncertain", "The refreshed snapshot could not be opened because its lease could not be released.");
+      }
+      notify(ctx, "The local conversation has unsynchronized changes. It was preserved; use /sync to open the canonical copy separately.", "warning");
       return { switched: false };
     }
     try {
@@ -788,6 +893,18 @@ export default function syncExtension(pi: ExtensionAPI) {
       await store.set(binding).catch(() => undefined);
       if (switched) throw error;
       return failCommand(ctx, error, "sync_materialization_failed", "Could not open the refreshed synchronized conversation.");
+    }
+  };
+
+  const refreshCurrent = async (ctx: ExtensionCommandContext) => {
+    const automatic = autoRefreshInFlight;
+    if (!automatic) return refreshCurrentImpl(ctx);
+    automaticRefreshConflict = false;
+    try {
+      return await refreshCurrentImpl(ctx);
+    } finally {
+      autoRefreshInFlight = false;
+      if (!automaticRefreshConflict) observedRemoteEtag = undefined;
     }
   };
 
@@ -856,6 +973,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       }
     }
     clearHeartbeat();
+    clearIdlePoll();
     active = undefined;
     blocked = undefined;
     await store.remove(currentSessionId);
@@ -912,6 +1030,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     deviceLabel = await store.deviceLabel();
     active = undefined;
     blocked = undefined;
+    clearIdlePoll();
     let binding = await store.get(currentSessionId);
     if (!binding) {
       setStatus(ctx);
@@ -938,7 +1057,10 @@ export default function syncExtension(pi: ExtensionAPI) {
         return;
       }
       resumeActive(ctx, binding);
-    } else setStatus(ctx, "sync: not leased");
+    } else {
+      startIdlePoll(ctx, binding.nativeSessionId);
+      setStatus(ctx, "sync: not leased");
+    }
   });
 
   pi.on("session_info_changed", async (_event, ctx) => {
@@ -1051,6 +1173,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (active?.token && (blocked === "conflict" || blocked === "workspace_mismatch" || blocked === "invalid")) await releaseTurn(ctx, active);
     else await completeTurn(ctx, false, true);
     clearHeartbeat();
+    clearIdlePoll();
     active = undefined;
     setStatus(ctx);
     blocked = undefined;

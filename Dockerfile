@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 ARG PI_WEB_BUILD_ID=development
-ARG PI_SYNC_BASE_COMMIT=d5c46a99a250affe206a65c42db72072aac89da8
+ARG PI_SYNC_BASE_COMMIT=aca7431284ae6a561b9e63b3fedc4a3f56a9c1f3
 
 ENV NODE_ENV=production \
     PORT=3141 \
