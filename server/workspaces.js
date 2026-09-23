@@ -6,6 +6,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { slug } from "./config.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 
 export const MAIN_BRANCH = "main";
 
@@ -13,12 +14,12 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-function gitLogged(cwd, args, report) {
+function gitLogged(cwd, args, report, env = process.env) {
   const command = `git ${args.join(" ")}`;
   const startedAt = Date.now();
   report?.({ type: "process_start", phase: "git", command, cwd, message: `Running ${command}.` });
   try {
-    const stdout = git(cwd, ...args);
+    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
     report?.({ type: "process_end", phase: "git", command, cwd, stream: "stdout", output: stdout, exit: 0, durationMs: Date.now() - startedAt, message: `${command} completed.` });
     return stdout;
   } catch (error) {
@@ -89,7 +90,7 @@ function runGitProcess(cwd, args, report) {
     const command = `git ${args.join(" ")}`;
     const startedAt = Date.now();
     report?.({ type: "process_start", phase: "git", command, cwd, message: `Running ${command}.` });
-    const child = spawn("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", args, { cwd, env: gitCredentialEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", chunk => {
@@ -140,7 +141,7 @@ export function prepareMain(repoPath, { fetch = true, primaryBranch = null, repo
   assertCleanCheckout(repoPath);
   const remote = upstream.split("/")[0];
   try {
-    gitLogged(repoPath, ["fetch", "--prune", remote], report);
+    gitLogged(repoPath, ["fetch", "--prune", remote], report, gitCredentialEnvironment());
   } catch (error) { throw gitFailure("main_fetch_failed", error); }
   try {
     const before = currentHead(repoPath);
@@ -186,7 +187,7 @@ export function pushWorkspace(workspacePath, { report = null } = {}) {
   try {
     const upstream = branchUpstream(workspacePath, branch);
     const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
-    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: gitLogged(workspacePath, args, report), stderr: "" };
+    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: gitLogged(workspacePath, args, report, gitCredentialEnvironment()), stderr: "" };
   } catch (error) { throw gitFailure("git_push_failed", error); }
 }
 
@@ -383,7 +384,7 @@ export function resolveContext(repoPath, id) {
 export function pullWorkspace(workspacePath) {
   try {
     return {
-      stdout: execFileSync("git", ["pull", "--ff-only"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+      stdout: execFileSync("git", ["pull", "--ff-only"], { cwd: workspacePath, encoding: "utf8", env: gitCredentialEnvironment(), stdio: ["ignore", "pipe", "pipe"] }),
       stderr: "",
     };
   } catch (error) {

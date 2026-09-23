@@ -35,13 +35,31 @@ test("unknown API failures return structured JSON with a request id", async () =
   assert.equal(body.requestId, response.headers.get("x-request-id"));
 });
 
-test("1Password connection rejects missing tokens without exposing credential input", async () => {
-  const response = await post("/api/onepassword/connect", { token: "" });
-  assert.equal(response.status, 400);
-  const body = await response.json();
-  assert.deepEqual(body, { error: "onepassword_token_required", message: "Enter a valid 1Password service-account token." });
-  const status = await (await get("/api/onepassword/status")).json();
-  assert.deepEqual(status, { onepassword: { connected: false } });
+test("removed 1Password endpoints and state leave legacy files untouched", async () => {
+  const credential = path.join(home, "credentials", "onepassword-service-account-token");
+  const bytes = Buffer.from("synthetic-legacy-value\n");
+  fs.mkdirSync(path.dirname(credential), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(credential, bytes, { mode: 0o600 });
+  fs.chmodSync(credential, 0o600);
+  const mode = fs.statSync(credential).mode & 0o777;
+
+  const responses = [
+    await get("/api/onepassword/status"),
+    await post("/api/onepassword/connect", { token: "synthetic-token" }),
+    await post("/api/onepassword/disconnect", {}),
+  ];
+  for (const response of responses) assert.equal(response.status, 404);
+
+  const stateResponse = await get("/api/state");
+  assert.equal(stateResponse.status, 200);
+  const state = await stateResponse.json();
+  assert.equal(state.settings.onepassword, undefined);
+  const settingsResponse = await post("/api/settings", {});
+  assert.equal(settingsResponse.status, 200);
+  const settings = await settingsResponse.json();
+  assert.equal(settings.settings.onepassword, undefined);
+  assert.deepEqual(fs.readFileSync(credential), bytes);
+  assert.equal(fs.statSync(credential).mode & 0o777, mode);
 });
 
 test("bare synchronization scope errors preserve their HTTP status", async () => {
@@ -98,6 +116,41 @@ test("state exposes the API contract and health marker", async () => {
   const health = await (await get("/api/health")).json();
   assert.equal(health.ok, true);
   assert.equal(health.apiContractVersion, 5);
+});
+
+test("repository-owner changes do not reload Pi configuration", async () => {
+  const originalConfig = loadConfig();
+  const originalGithubOwner = process.env.PI_WEB_GITHUB_OWNER;
+  delete process.env.PI_WEB_GITHUB_OWNER;
+  const originalReload = supervisor.reloadPiConfiguration;
+  const originalAssertReloadable = supervisor.assertPiConfigurationReloadable;
+  let reloads = 0;
+  supervisor.assertPiConfigurationReloadable = () => {
+    throw Object.assign(new Error("configuration is busy"), { code: "pi_configuration_busy" });
+  };
+  supervisor.reloadPiConfiguration = async (...args) => {
+    reloads++;
+    return originalReload.call(supervisor, ...args);
+  };
+  try {
+    const response = await post("/api/settings", { githubOwner: "alice" });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(reloads, 0);
+    assert.equal(body.operation, undefined);
+    assert.equal(body.settings.githubOwner.value, "alice");
+
+    const piResponse = await post("/api/settings", { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] } });
+    const piBody = await piResponse.json();
+    assert.equal(piResponse.status, 409, JSON.stringify(piBody));
+    assert.equal(piBody.error, "pi_configuration_busy");
+  } finally {
+    supervisor.reloadPiConfiguration = originalReload;
+    supervisor.assertPiConfigurationReloadable = originalAssertReloadable;
+    if (originalGithubOwner === undefined) delete process.env.PI_WEB_GITHUB_OWNER;
+    else process.env.PI_WEB_GITHUB_OWNER = originalGithubOwner;
+    saveConfig(originalConfig);
+  }
 });
 
 test("repository picker uses the configured local repositories root", async () => {

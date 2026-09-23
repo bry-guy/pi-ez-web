@@ -9,10 +9,13 @@ and `synchronized-workspace` skill.
 This vendored snapshot is based on the upstream revision recorded in
 `UPSTREAM_COMMIT` and includes the pi-ez-web browser-host integration patch.
 The extension expects `PI_SYNC_SERVER_URL` (or `PI_SYNC_URL`) and is intended
-to be installed as a trusted Pi package. Use `/sync attach` to enroll a local
-session, `/sync detach` to remove only the local binding, `/sync` to open the
-repository-filtered picker, `/sync refresh` to pull the canonical copy, or
-`/sync status` to inspect the binding. Synchronized names are sticky. Git
+to be installed as a trusted Pi package. Interactive Pi sessions poll for newer
+canonical snapshots while idle and refresh unchanged local materializations
+automatically. JSON-mode hosts, including pi-ez-web, keep background polling
+disabled; `/sync refresh` remains available for an explicit refresh. Use
+`/sync attach` to enroll a local session, `/sync detach` to remove only the
+local binding, `/sync` to open the repository-filtered picker, or `/sync status`
+to inspect the binding. Synchronized names are sticky. Git
 upstream, branch, and pushed-commit pointers travel with the session; picker
 rows show the branch and current lease holder. Branch and commit mismatches
 are reported without changing Git. Lease tokens are device-local state; they

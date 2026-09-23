@@ -16,7 +16,7 @@ test("pi SDK exposes the surface the real supervisor uses", async () => {
     assert.equal(typeof smProto[m], "function", `SessionManager.${m}`);
   }
   const proto = sdk.AgentSession.prototype;
-  for (const m of ["prompt", "steer", "followUp", "abort", "subscribe", "setModel", "setSessionName", "dispose", "navigateTree", "bindExtensions"]) {
+  for (const m of ["prompt", "steer", "followUp", "abort", "subscribe", "setModel", "setSessionName", "dispose", "navigateTree", "bindExtensions", "getToolDefinition"]) {
     assert.equal(typeof proto[m], "function", `AgentSession.${m}`);
   }
   for (const g of ["sessionId", "sessionFile", "messages", "isStreaming", "isIdle", "sessionName", "model", "modelRuntime"]) {
@@ -31,6 +31,7 @@ test("pi SDK exposes the surface the real supervisor uses", async () => {
   assert.equal(typeof sdk.SettingsManager?.fromStorage, "function");
   assert.equal(typeof sdk.DefaultResourceLoader, "function");
   assert.equal(typeof sdk.DefaultPackageManager, "function");
+  assert.equal(typeof sdk.createBashToolDefinition, "function");
   assert.equal(typeof sdk.ModelRuntime, "function");
   assert.equal(typeof sdk.ModelRuntime.create, "function");
   for (const m of ["getAvailableSnapshot", "getAvailable", "getModel", "getProviders", "getProviderAuthStatus", "checkAuth", "login", "logout", "refresh"]) {

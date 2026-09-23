@@ -1,5 +1,5 @@
 [tools]
-# Node 20+ is supported by the app; use the current LTS line locally.
+# Node 22.19+ is required by the Pi SDK; use the current LTS line locally.
 node = "22"
 
 [tasks.bootstrap]

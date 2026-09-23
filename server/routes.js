@@ -12,10 +12,11 @@ import { hub } from "./events.js";
 import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
-import * as onepassword from "./onepassword.js";
 import { cloneRepository } from "./repositories.js";
 import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
+import { resolveProjectEnvironment } from "./project-environment.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 import { API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID } from "./version.js";
 import { createSyncCoordinator } from "./sync/coordinator.js";
 import { markSyncPending } from "./sync/enrollment.js";
@@ -80,7 +81,6 @@ function settingsState(cfg, github) {
       source: process.env.PI_WEB_GITHUB_OWNER ? "PI_WEB_GITHUB_OWNER" : "config",
       editable: !process.env.PI_WEB_GITHUB_OWNER,
     },
-    onepassword: onepassword.status(),
   };
 }
 
@@ -305,29 +305,6 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   api.post("/github/logout", c => {
     try { github.logout(); return c.json({ ok: true }); }
     catch (e) { if (e.code === "credential_managed_by_environment") return err(c, 409, e.code); throw e; }
-  });
-
-  api.get("/onepassword/status", c => c.json({ onepassword: onepassword.status() }));
-  api.post("/onepassword/connect", async c => {
-    const body = await c.req.json().catch(() => ({}));
-    try { return c.json({ onepassword: await onepassword.connect(body?.token) }); }
-    catch (e) {
-      const statuses = {
-        onepassword_token_required: 400,
-        onepassword_auth_failed: 401,
-        onepassword_sdk_unavailable: 503,
-        onepassword_service_unavailable: 503,
-        onepassword_rate_limited: 429,
-        onepassword_validation_timeout: 504,
-        onepassword_store_failed: 500,
-      };
-      if (statuses[e.code]) return err(c, statuses[e.code], e.code, { message: e.message });
-      throw e;
-    }
-  });
-  api.post("/onepassword/disconnect", c => {
-    try { return c.json({ ok: true, onepassword: onepassword.disconnect() }); }
-    catch (e) { if (e.code === "onepassword_disconnect_failed") return err(c, 500, e.code, { message: e.message }); throw e; }
   });
 
   api.post("/providers/:id/login", async c => {
@@ -1263,7 +1240,15 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: `No such hook: ${name}.` });
       return err(c, 404, "no_such_hook", { operation });
     }
-    const result = hookResult(await runHook(command, { cwd, signal: c.req.raw.signal, report: reporter.log }), name);
+    let extraEnv;
+    try {
+      extraEnv = resolveProjectEnvironment(found.project?.environment);
+    } catch (error) {
+      if (error.code !== "project_environment_source_missing") throw error;
+      const operation = reporter.finish({ status: "error", httpStatus: 409, message: "Project environment source is missing." });
+      return err(c, 409, error.code, { message: "Project environment source is missing.", operation });
+    }
+    const result = hookResult(await runHook(command, { cwd, extraEnv, signal: c.req.raw.signal, report: reporter.log }), name);
     const operation = reporter.finish({ status: result.ok ? "success" : "error", httpStatus: result.ok ? 200 : 422, exit: result.exit, message: result.ok ? "Configured hook completed." : "Configured hook failed." });
     return c.json({ ...result, operation });
   });
@@ -1276,11 +1261,22 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const { cmd } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
+    let env;
+    try {
+      const project = findProjectByWorkspace(cwd)?.project;
+      env = gitCredentialEnvironment({
+        ...process.env,
+        ...resolveProjectEnvironment(project?.environment),
+      });
+    } catch (error) {
+      if (error.code !== "project_environment_source_missing") throw error;
+      return err(c, 409, error.code, { message: "Project environment source is missing." });
+    }
     const bangId = newId("bg");
     hub.emit(id, "bang_start", { bangId, cmd });
     const t0 = Date.now();
     const { exit, out } = await new Promise(resolve => {
-      execFile("/bin/sh", ["-c", cmd], { cwd, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
+      execFile("/bin/sh", ["-c", cmd], { cwd, env, timeout: 60000, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
         resolve({ exit: e ? (e.code ?? 1) : 0, out: [stdout, stderr].filter(Boolean).join("") });
       });
     });
@@ -1396,8 +1392,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   api.post("/settings", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
-    const autoProfileChange = body.githubOwner !== undefined && normalizePiConfig(cfg.pi).profileSource === "auto";
-    const reporter = body.pi !== undefined || autoProfileChange
+    const reporter = body.pi !== undefined
       ? createOperationReporter({ id: operationRequestId(c, body), kind: "pi-profile", title: "Apply Pi resources" })
       : null;
     reporter?.log({ type: "request", phase: "request", message: "POST /api/settings (Pi resource configuration)" });
@@ -1467,7 +1462,6 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     }
     if (body.githubOwner !== undefined) {
       if (process.env.PI_WEB_GITHUB_OWNER) return err(c, 409, "setting_overridden", { field: "githubOwner", source: "PI_WEB_GITHUB_OWNER" });
-      if (autoProfileChange) sup.assertPiConfigurationReloadable();
       try {
         cfg.repositorySources.github.owner = normalizeGitHubOwner(body.githubOwner);
       } catch (e) {
@@ -1481,7 +1475,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     }
     saveConfig(cfg);
     if (syncConfigurationChanged) syncAdapter?.resetExtensionPath?.();
-    const piConfiguration = nextPiConfiguration || autoProfileChange || syncConfigurationChanged
+    const piConfiguration = nextPiConfiguration || syncConfigurationChanged
       ? await sup.reloadPiConfiguration({ report: reporter?.log, sessionId: body.activeSessionId || null })
       : await sup.piConfigurationState();
     const modelState = await sup.modelState();

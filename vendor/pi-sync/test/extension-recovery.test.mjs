@@ -22,6 +22,10 @@ test("explicitly repairs a missing server record from the local session", async 
   const sessionPath = join(root, "session.jsonl");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousFetch = globalThis.fetch;
+  const previousServerUrl = process.env.PI_SYNC_SERVER_URL;
+  const previousSyncUrl = process.env.PI_SYNC_URL;
+  delete process.env.PI_SYNC_SERVER_URL;
+  delete process.env.PI_SYNC_URL;
   let createCount = 0;
   let acquireCount = 0;
   try {
@@ -72,6 +76,7 @@ test("explicitly repairs a missing server record from the local session", async 
     extension(pi);
     const ctx = {
       hasUI: true,
+      mode: "json",
       cwd: root,
       ui: { confirm: async () => true, notify() {}, setStatus() {} },
       sessionManager: {
@@ -105,6 +110,10 @@ test("explicitly repairs a missing server record from the local session", async 
     globalThis.fetch = previousFetch;
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousServerUrl === undefined) delete process.env.PI_SYNC_SERVER_URL;
+    else process.env.PI_SYNC_SERVER_URL = previousServerUrl;
+    if (previousSyncUrl === undefined) delete process.env.PI_SYNC_URL;
+    else process.env.PI_SYNC_URL = previousSyncUrl;
     await rm(root, { recursive: true, force: true });
   }
 });

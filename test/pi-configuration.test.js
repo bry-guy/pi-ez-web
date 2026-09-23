@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,7 +87,7 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   const configuration = new PiConfiguration();
   const { settingsManager } = await configuration.createSettingsManager(cwd, agentDir, SettingsManager);
   assert.deepEqual(settingsManager.getGlobalSettings().packages, ["npm:profile-package", "npm:extra-package"]);
-  assert.deepEqual(settingsManager.getNpmCommand(), ["/usr/local/bin/npm", "--legacy-peer-deps", "--include=dev"]);
+  assert.deepEqual(settingsManager.getNpmCommand(), ["npm", "--legacy-peer-deps", "--include=dev"]);
   assert.deepEqual(settingsManager.getGlobalSettings().extensions, [
     path.join(profileDir, "extension.ts"),
     path.join(process.env.PI_WEB_HOME, "web-extension.ts"),
@@ -122,6 +123,32 @@ test("a local profile overlays Pi settings, resolves resources, and keeps projec
   assert.equal(state.profile.status, "loaded");
   assert.equal(state.profile.packageCount, 2);
   assert.equal(state.config.profile, profileDir);
+});
+
+test("the default npm command resolves through PATH and honors profile overrides", async () => {
+  const npmBin = path.join(tmp, "npm-bin");
+  fs.mkdirSync(npmBin, { recursive: true });
+  const npm = path.join(npmBin, "npm");
+  fs.writeFileSync(npm, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { encoding: "utf8", mode: 0o755 });
+  fs.chmodSync(npm, 0o755);
+
+  const configuration = new PiConfiguration();
+  const resolved = await configuration.resolve({ profile: null, packages: [], extensions: [] });
+  assert.deepEqual(resolved.settings.npmCommand, ["npm", "--legacy-peer-deps", "--include=dev"]);
+  const executed = spawnSync(resolved.settings.npmCommand[0], resolved.settings.npmCommand.slice(1), {
+    env: { ...process.env, PATH: npmBin },
+    encoding: "utf8",
+  });
+  assert.equal(executed.error, undefined);
+  assert.equal(executed.status, 0);
+  assert.equal(executed.stderr, "");
+  assert.equal(executed.stdout, "--legacy-peer-deps\n--include=dev\n");
+
+  const explicitProfile = path.join(tmp, "explicit-npm-profile");
+  fs.mkdirSync(explicitProfile, { recursive: true });
+  fs.writeFileSync(path.join(explicitProfile, "settings.json"), JSON.stringify({ npmCommand: ["/custom/npm", "--profile-flag"] }));
+  const explicit = await configuration.resolve({ profile: explicitProfile, packages: [], extensions: [] });
+  assert.deepEqual(explicit.settings.npmCommand, ["/custom/npm", "--profile-flag"]);
 });
 
 test("an external profile loads declarative package sources and ignores its machine-local paths", async () => {
@@ -212,15 +239,35 @@ test("profile load errors remain visible while inline resources stay usable", as
   assert.deepEqual(resolved.settings.packages, ["npm:fallback"]);
 });
 
-test("automatic profiles derive from the GitHub owner", () => {
-  assert.equal(
-    effectivePiConfig({ pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } }).profile,
-    "https://github.com/alice/dotfiles",
-  );
-  assert.equal(
-    effectivePiConfig({ pi: { profile: "https://example.com/settings.json", profileSource: "explicit", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } }).profile,
-    "https://example.com/settings.json",
-  );
+test("profiles require explicit configuration", async () => {
+  let fetches = 0;
+  const fetchImpl = async () => {
+    fetches++;
+    throw new Error("profile fetch should not run");
+  };
+  const ownerOnly = { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } };
+  assert.equal(effectivePiConfig(ownerOnly).profile, null);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(effectivePiConfig(ownerOnly))).profile.status, "none");
+
+  fs.writeFileSync(path.join(process.env.PI_WEB_HOME, "github-auth.json"), JSON.stringify({ account: { login: "stored-owner" } }));
+  const storedIdentityOnly = { pi: { profile: null, profileSource: "auto", packages: [], extensions: [] }, repositorySources: { github: { owner: null } } };
+  assert.equal(effectivePiConfig(storedIdentityOnly).profile, null);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(effectivePiConfig(storedIdentityOnly))).profile.status, "none");
+  assert.equal(fetches, 0);
+
+  const explicit = effectivePiConfig({ pi: { profile: "https://example.com/settings.json", profileSource: "explicit", packages: [], extensions: [] }, repositorySources: { github: { owner: "alice" } } });
+  assert.equal(explicit.profile, "https://example.com/settings.json");
+
+  const disabled = effectivePiConfig({
+    pi: { profile: "https://example.com/disabled.json", profileSource: "disabled", packages: ["npm:kept"], extensions: ["./kept.ts"] },
+    repositorySources: { github: { owner: "alice" } },
+  });
+  assert.equal(disabled.profile, null);
+  assert.equal(disabled.profileSource, "disabled");
+  assert.deepEqual(disabled.packages, ["npm:kept"]);
+  assert.deepEqual(disabled.extensions, ["./kept.ts"]);
+  assert.equal((await new PiConfiguration({ fetchImpl }).resolve(disabled)).profile.status, "none");
+  assert.equal(fetches, 0);
 });
 
 test("profile refresh replaces stale skills and materializes declared extensions", async () => {

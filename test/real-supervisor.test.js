@@ -428,6 +428,137 @@ test("configured extensions load commands and session_start tools", () => {
   }
 });
 
+test("the registered real bash tool refreshes mappings after reattachment", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-project-environment-real-"));
+  try {
+    const webHome = path.join(tmp, "web");
+    const agentDir = path.join(tmp, "pi");
+    const home = path.join(tmp, "home");
+    const profile = path.join(tmp, "profile");
+    const shellPath = path.join(tmp, "test-shell");
+    const cwd = path.join(tmp, "repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "ignore" });
+    fs.writeFileSync(path.join(cwd, "README.md"), "test\n");
+    execFileSync("git", ["add", "README.md"], { cwd, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init"], { cwd, stdio: "ignore" });
+    fs.mkdirSync(webHome, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(shellPath, "#!/bin/sh\nprintf shell-used > \"$TEST_SHELL_MARKER\"\nexec /bin/sh \"$@\"\n", { mode: 0o755 });
+    const configPath = path.join(webHome, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      reposRoot: path.join(tmp, "repos"),
+      worktreeRoot: path.join(webHome, "worktrees"),
+      projects: [{
+        id: "project-1", name: "repo", repoPath: cwd, source: { type: "local" }, hooks: {},
+        environment: {
+          PROJECT_TOOL_VALUE: "PROJECT_SOURCE_A",
+          PI_WEB_GITHUB_TOKEN: "PROJECT_TOOL_TOKEN",
+          GIT_ASKPASS: "PROJECT_TOOL_TOKEN",
+        },
+      }],
+      pi: { profile, packages: [], extensions: [] },
+    }));
+    fs.writeFileSync(path.join(profile, "settings.json"), JSON.stringify({
+      shellPath,
+      shellCommandPrefix: "export PROJECT_PREFIX_VALUE=prefix-value",
+    }));
+    const gitCommand = "printf '%s/%s/' \"$PROJECT_TOOL_VALUE\" \"$PROJECT_PREFIX_VALUE\"; if [ -z \"${GIT_ASKPASS-}\" ] && printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | grep -q 'password=synthetic-token'; then printf git-ok; else printf git-fail; fi";
+    const valueCommand = "printf '%s' \"$PROJECT_TOOL_VALUE\"";
+    const emptyCommand = "printf 'value:%s' \"$PROJECT_TOOL_VALUE\"";
+    const missingCommand = 'printf spawned > "$TEST_MARKER"';
+    const missingValueCommand = "printf '%s' \"${PROJECT_TOOL_VALUE:-missing}\"";
+    const script = `
+      import fs from "node:fs";
+      import { EventHub } from "./server/events.js";
+      import { RealSupervisor } from "./server/supervisor/real.js";
+      const supervisor = new RealSupervisor(new EventHub());
+      const created = await supervisor.createSession({ cwd: process.env.TEST_CWD });
+      await supervisor.commands(created.id);
+      const state = supervisor.live.get(created.id);
+      const bash = state.session.getToolDefinition("bash");
+      const execute = async (target, command, id) => {
+        const result = await target.execute("call-" + id, { command }, new AbortController().signal, undefined, undefined);
+        return result.content?.[0]?.text || "";
+      };
+      const before = { ...process.env };
+      const first = await execute(bash, ${JSON.stringify(gitCommand)}, 1);
+      const unchangedAfterFirst = JSON.stringify({ ...process.env }) === JSON.stringify(before);
+      const config = JSON.parse(fs.readFileSync(process.env.TEST_CONFIG, "utf8"));
+      config.projects[0].environment.PROJECT_TOOL_VALUE = "PROJECT_SOURCE_B";
+      fs.writeFileSync(process.env.TEST_CONFIG, JSON.stringify(config));
+      process.env.PROJECT_SOURCE_B = "tool-beta";
+      const second = await execute(bash, ${JSON.stringify(valueCommand)}, 2);
+      const afterSecond = { ...process.env };
+      await supervisor.rehome(created.id, process.env.TEST_CWD);
+      await supervisor.commands(created.id);
+      const reattachedState = supervisor.live.get(created.id);
+      const reattachedBash = reattachedState.session.getToolDefinition("bash");
+      const reattached = await execute(reattachedBash, ${JSON.stringify(valueCommand)}, 3);
+      const unchangedAfterReattach = JSON.stringify({ ...process.env }) === JSON.stringify(afterSecond);
+      process.env.PROJECT_SOURCE_C = "";
+      config.projects[0].environment.PROJECT_TOOL_VALUE = "PROJECT_SOURCE_C";
+      fs.writeFileSync(process.env.TEST_CONFIG, JSON.stringify(config));
+      const empty = await execute(reattachedBash, ${JSON.stringify(emptyCommand)}, 4);
+      config.projects[0].environment.PROJECT_TOOL_VALUE = "PROJECT_SOURCE_MISSING";
+      fs.writeFileSync(process.env.TEST_CONFIG, JSON.stringify(config));
+      let missingError = "";
+      try { await execute(reattachedBash, ${JSON.stringify(missingCommand)}, 5); }
+      catch (error) { missingError = error?.message || String(error); }
+      const missingMarker = fs.existsSync(process.env.TEST_MARKER);
+      config.projects[0].environment = {};
+      fs.writeFileSync(process.env.TEST_CONFIG, JSON.stringify(config));
+      const removed = await execute(reattachedBash, ${JSON.stringify(missingValueCommand)}, 6);
+      console.log(JSON.stringify({
+        first, second, reattached, empty, removed, missingError, missingMarker, shellMarker: fs.existsSync(process.env.TEST_SHELL_MARKER), bashName: bash?.name,
+        hasRead: state.session.getAllTools().some(tool => tool.name === "read"),
+        unchangedAfterFirst, unchangedAfterReattach, sourceB: afterSecond.PROJECT_SOURCE_B,
+      }));
+      reattachedState.session.dispose();
+    `;
+    const childEnv = { ...process.env };
+    for (const name of ["PROJECT_TOOL_VALUE", "PROJECT_PREFIX_VALUE", "PI_WEB_GITHUB_TOKEN", "GIT_ASKPASS", "GIT_ASKPASS_REQUIRE", "PROJECT_SOURCE_B", "PROJECT_SOURCE_C", "PROJECT_SOURCE_MISSING"]) delete childEnv[name];
+    Object.assign(childEnv, {
+      PI_WEB_HOME: webHome,
+      PI_CODING_AGENT_DIR: agentDir,
+      HOME: home,
+      TEST_CWD: cwd,
+      TEST_CONFIG: configPath,
+      TEST_MARKER: path.join(tmp, "must-not-run.txt"),
+      TEST_SHELL_MARKER: path.join(tmp, "shell-used.txt"),
+      PROJECT_SOURCE_A: "tool-alpha",
+      PROJECT_TOOL_TOKEN: "synthetic-token",
+      OPENAI_API_KEY: "",
+      ANTHROPIC_API_KEY: "",
+    });
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: path.resolve("."),
+      env: childEnv,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const result = JSON.parse(output.trim().split("\n").at(-1));
+    assert.equal(result.first, "tool-alpha/prefix-value/git-ok");
+    assert.equal(result.second, "tool-beta");
+    assert.equal(result.reattached, "tool-beta");
+    assert.equal(result.empty, "value:");
+    assert.equal(result.removed, "missing");
+    assert.equal(result.missingError, "Project environment source is missing.");
+    assert.equal(result.missingMarker, false);
+    assert.equal(result.shellMarker, true);
+    assert.equal(result.bashName, "bash");
+    assert.equal(result.hasRead, true);
+    assert.equal(result.unchangedAfterFirst, true);
+    assert.equal(result.unchangedAfterReattach, true);
+    assert.equal(result.sourceB, "tool-beta");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("a failed Pi package install falls back to the core session runtime", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-package-fallback-"));
   try {

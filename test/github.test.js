@@ -11,6 +11,18 @@ const jsonResponse = (body, init = {}) => new Response(JSON.stringify(body), {
   headers: { "content-type": "application/json", ...(init.headers || {}) },
 });
 
+async function withSyntheticEnvironment(overrides, callback) {
+  const saved = { ...process.env };
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, { PATH: saved.PATH || "/usr/bin:/bin", HOME: "/tmp/pi-ez-web-test-home", ...overrides });
+  try {
+    return await callback();
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+}
+
 test("GitHub device flow stores token privately and exposes account only", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-gh-"));
   const authFile = path.join(tmp, "github-auth.json");
@@ -47,6 +59,30 @@ test("GitHub device flow stores token privately and exposes account only", async
     assert.equal(stored.accessToken, "gho_private-token");
     assert.doesNotMatch(JSON.stringify(view), /private-token/);
     assert.equal(fs.statSync(authFile).mode & 0o077, 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("GitHub API uses an environment token without OAuth client configuration", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-gh-environment-"));
+  try {
+    await withSyntheticEnvironment({ HOME: tmp, PI_WEB_HOME: path.join(tmp, "pi-web"), PI_WEB_GITHUB_TOKEN: "environment-token" }, async () => {
+      const client = new GitHubClient({
+        fetchImpl: async (url, init) => {
+          assert.equal(url, "https://api.github.com/user");
+          assert.equal(init.headers.authorization, "Bearer environment-token");
+          return jsonResponse({ id: 42, login: "bry-guy" });
+        },
+        configOverride: { clientId: null, owner: null },
+        authFile: path.join(tmp, "github-auth.json"),
+      });
+      assert.equal(client.status().configured, false);
+      assert.equal(client.status().authenticated, true);
+      assert.equal(client.status().credentialSource, "environment");
+      const response = await client.request("/user");
+      assert.equal(response.status, 200);
+    });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProjectEnvironment } from "./project-environment.js";
 
 export function appHome() {
   return process.env.PI_WEB_HOME || path.join(os.homedir(), ".pi-web-ui");
@@ -172,6 +173,25 @@ function readJson(p, fallback) {
     return fallback;
   }
 }
+function readConfig() {
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath(), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw Object.assign(new Error("Configuration file could not be read."), { code: "config_unreadable" });
+  }
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw Object.assign(new Error("Configuration file contains invalid JSON."), { code: "invalid_config" });
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("Configuration file must contain a JSON object."), { code: "invalid_config" });
+  }
+  return value;
+}
 function writeJson(p, obj, mode = 0o600) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   const temporary = `${p}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -189,13 +209,13 @@ export function ensureHome() {
 }
 
 export function loadConfig() {
-  const rawValue = readJson(configPath(), {});
-  const raw = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : {};
+  const raw = readConfig();
   const sources = raw.repositorySources && typeof raw.repositorySources === "object" ? raw.repositorySources : {};
   const github = sources.github && typeof sources.github === "object" ? sources.github : {};
   const projects = (Array.isArray(raw.projects) ? raw.projects : DEFAULTS.projects).map(project => {
     if (!project || typeof project !== "object" || Array.isArray(project)) return project;
     const { mode: _legacyMode, ...current } = project;
+    if (Object.hasOwn(current, "environment")) current.environment = normalizeProjectEnvironment(current.environment);
     return current;
   });
   return {
@@ -251,21 +271,9 @@ export function githubConfig(cfg = loadConfig()) {
   };
 }
 
-function githubAccountLogin() {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(appHome(), "github-auth.json"), "utf8"));
-    return typeof value?.account?.login === "string" ? value.account.login : null;
-  } catch { return null; }
-}
-
 export function effectivePiConfig(cfg = loadConfig()) {
   const pi = normalizePiConfig(cfg?.pi);
-  if (pi.profileSource === "auto") {
-    const owner = githubConfig(cfg).owner || githubAccountLogin();
-    const safeOwner = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(String(owner || "")) ? owner : null;
-    pi.profile = safeOwner ? `https://github.com/${safeOwner}/dotfiles` : null;
-  }
-  return pi;
+  return pi.profileSource === "disabled" ? { ...pi, profile: null } : pi;
 }
 
 export function worktreeRoot(cfg) {

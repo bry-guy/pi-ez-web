@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { normalizeHookSets, normalizeHooks } from "./config.js";
+import { gitCredentialEnvironment } from "./git-credentials.js";
 import { redact } from "./redaction.js";
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
@@ -7,7 +8,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 const HOOK_ENV_KEYS = [
   "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
   "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "MISE_DATA_DIR", "MISE_CONFIG_DIR", "MISE_CACHE_DIR", "MISE_ENV",
-  "PI_WEB_HOME", "PI_CODING_AGENT_DIR", "PI_WEB_REPOS_ROOT", "PI_EZ_WEB_REPO_ROOT", "PI_WEB_ONEPASSWORD_TOKEN_FILE",
+  "PI_WEB_HOME", "PI_CODING_AGENT_DIR", "PI_WEB_REPOS_ROOT", "PI_EZ_WEB_REPO_ROOT",
   "PI_WEB_MODE", "PI_WEB_BUILD_ID", "PI_SYNC_SERVER_URL", "PI_WEB_SYNC_ALL_CONVERSATIONS", "PI_WEB_GITHUB_CLIENT_ID", "PORT",
 ];
 
@@ -57,6 +58,7 @@ export function runHook(command, {
   cwd,
   env = process.env,
   spawnImpl = spawn,
+  extraEnv = {},
   report = null,
   signal = null,
   timeoutMs = DEFAULT_HOOK_TIMEOUT_MS,
@@ -71,7 +73,7 @@ export function runHook(command, {
     const safeCommand = redact(command);
     const timeout = positive(timeoutMs, DEFAULT_HOOK_TIMEOUT_MS);
     const outputLimit = positive(maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
-    const hookEnv = hookEnvironment(env);
+    const hookEnv = gitCredentialEnvironment({ ...hookEnvironment(env), ...extraEnv });
     let child;
     let settled = false;
     let stopReason = null;

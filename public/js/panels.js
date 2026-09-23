@@ -28,15 +28,6 @@ const gitErrorMessage = error => ({
   merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
-const onePasswordErrorMessage = code => ({
-  onepassword_auth_failed: "1Password authentication failed. Check the service-account token.",
-  onepassword_sdk_unavailable: "1Password integration is unavailable on this server.",
-  onepassword_service_unavailable: "1Password service is unavailable. Try again.",
-  onepassword_rate_limited: "1Password is rate limited. Try again later.",
-  onepassword_validation_timeout: "1Password validation timed out. Try again.",
-  onepassword_store_failed: "1Password connection could not be stored.",
-}[code] || "1Password connection failed.");
-
 function operationFeedback(kinds, fallback = "Working…") {
   const operation = operationFor(kinds);
   if (!operation) return "";
@@ -154,8 +145,6 @@ class PiSettings extends HTMLElement {
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
-    if (e.target.closest("[data-act='connect-onepassword']")) return this.connectOnePassword();
-    if (e.target.closest("[data-act='disconnect-onepassword']")) return this.disconnectOnePassword();
     const login = e.target.closest("[data-auth-login]");
     if (login) return this.startAuth(login.dataset.authLogin, login.dataset.authType);
     const logout = e.target.closest("[data-auth-logout]");
@@ -212,15 +201,11 @@ class PiSettings extends HTMLElement {
     if (store.state.settings?.defaultRepositorySource?.editable !== false) patch.defaultRepositorySource = this.querySelector("[data-setting='defaultRepositorySource']")?.value;
     if (store.state.settings?.githubOwner?.editable !== false) patch.githubOwner = this.querySelector("[data-setting='githubOwner']")?.value.trim() || null;
     if (!Object.keys(patch).length) return;
-    const autoProfile = patch.githubOwner !== undefined && store.state.piConfiguration?.config?.profileSource === "auto";
-    const operation = autoProfile ? beginOperation("repository-settings", "Load GitHub dotfiles", "", "Request started.") : null;
     try {
-      const result = await api.settingsPatch({ ...patch, ...(operation ? { operationId: operation.id, activeSessionId: store.activeKey() } : {}) });
-      if (operation) completeOperation(operation, result);
+      await api.settingsPatch(patch);
       await refreshState();
       this.setFeedback("Repository settings saved.");
     } catch (err) {
-      if (operation) completeOperation(operation, {}, err);
       const message = err.error === "invalid_github_owner"
         ? "Enter a valid GitHub user or organization name."
         : `Repository settings failed: ${err.error || err.message || err}`;
@@ -234,9 +219,7 @@ class PiSettings extends HTMLElement {
     const profile = this.querySelector("[data-setting='piProfile']")?.value.trim() || null;
     const pi = {
       profile,
-      profileSource: profile
-        ? current.profileSource === "auto" && profile === (current.profile || "") ? "auto" : "explicit"
-        : "auto",
+      profileSource: profile ? "explicit" : current.profileSource === "disabled" ? "disabled" : "auto",
       packages: lines("[data-setting='piPackages']"),
       extensions: lines("[data-setting='piExtensions']"),
     };
@@ -347,31 +330,6 @@ class PiSettings extends HTMLElement {
       store.setError(`GitHub disconnect failed: ${err.error || err.message || err}`);
     }
   }
-  async connectOnePassword() {
-    const input = this.querySelector("[data-onepassword-token]");
-    const token = input?.value || "";
-    if (input) input.value = "";
-    if (!token.trim()) {
-      this.setFeedback("Enter a 1Password service-account token.", "error");
-      return;
-    }
-    try {
-      await api.onePasswordConnect(token);
-      await refreshState();
-      this.setFeedback("1Password connected.");
-    } catch (err) {
-      this.setFeedback(onePasswordErrorMessage(err.error), "error");
-    }
-  }
-  async disconnectOnePassword() {
-    try {
-      await api.onePasswordDisconnect();
-      await refreshState();
-      this.setFeedback("1Password disconnected.");
-    } catch (err) {
-      this.setFeedback(`1Password disconnect failed: ${err.error || err.message || err}`, "error");
-    }
-  }
   providerCard(provider) {
     const name = provider.id === "openai-codex"
       ? "OpenAI — ChatGPT"
@@ -443,17 +401,14 @@ class PiSettings extends HTMLElement {
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
     const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
-    const onePassword = settings.onepassword || {};
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
-    const profileInputValue = piConfig.profileSource === "auto" ? "" : piConfig.profile || "";
+    const profileInputValue = piConfig.profile || "";
     const profileStatus = ["loaded", "cached"].includes(piState.profile?.status)
       ? `${piState.profile.status === "cached" ? "Using cached" : "Loaded"} ${piState.profile.source}${piState.profile.ref ? ` @ ${piState.profile.ref}` : ""}${piState.profile.commit ? ` · ${piState.profile.commit.slice(0, 12)}` : ""}`
       : piState.profile?.status === "error"
         ? `Profile error: ${piState.profile.error}`
-        : piConfig.profileSource === "auto"
-          ? "Automatic GitHub dotfiles profile"
-          : "Using the deployment's Pi settings";
+        : "Using the deployment's Pi settings";
     const loadedExtensions = Array.isArray(piState.runtime?.extensions) ? piState.runtime.extensions : [];
     const loadedSkills = Array.isArray(piState.runtime?.skills) ? piState.runtime.skills : [];
     const resourceRows = (items, empty) => items.length
@@ -484,7 +439,6 @@ class PiSettings extends HTMLElement {
       ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
       : "";
     const piOperation = operationFeedback("pi-profile", "Applying Pi resources…");
-    const repositoryOperation = operationFeedback("repository-settings", "Saving repository settings…");
     const githubSummary = githubStatus?.authenticated
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
@@ -497,24 +451,10 @@ class PiSettings extends HTMLElement {
       </section>
       ${this.authFlowCard()}
       <section class="settings-section">
-        <div class="settings-section-title">1Password</div>
-        <div class="settings-card settings-card-spaced">
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">${onePassword.connected ? "Connected" : "Not connected"}</div><div class="sr-sub">Connect a scoped 1Password service account for explicit infra tasks. The token is stored outside config and is not added to the server environment; this trusted instance can access it.</div></div>
-            <span class="status-dot ${onePassword.connected ? "" : "off"}" aria-label="${onePassword.connected ? "Connected" : "Not connected"}"></span>
-          </div>
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Service-account token</div><div class="sr-sub">Use a service account, not your 1Password account password or Secret Key.</div></div>
-            <input class="settings-inline-input" data-onepassword-token type="password" autocomplete="new-password" placeholder="Paste token once">
-          </div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Available to explicit infra commands; all code in this trusted instance can access the stored credential.</span><div class="settings-actions"><button class="settings-save" data-act="connect-onepassword">${onePassword.connected ? "Reconnect" : "Connect"}</button>${onePassword.connected ? "<button class=\"settings-action quiet\" data-act=\"disconnect-onepassword\">Disconnect</button>" : ""}</div></div>
-        </div>
-      </section>
-      <section class="settings-section">
         <div class="settings-section-title">Pi profile & extensions</div>
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Dotfiles profile</div><div class="sr-sub">Leave this blank to use the configured GitHub user's <span class="settings-mono">dotfiles</span> repository. An explicit path or HTTPS URL overrides it. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
+            <div class="sr-main"><div class="sr-title">Pi profile</div><div class="sr-sub">Optional: enter a local path or HTTPS URL. Leave blank to use only the deployment's Pi settings. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
             <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(profileInputValue)}" placeholder="https://github.com/owner/dotfiles">
           </div>
           <div class="settings-row settings-path-row">
@@ -558,7 +498,7 @@ class PiSettings extends HTMLElement {
             <input class="settings-inline-input" data-setting="githubOwner" value="${esc(owner)}" placeholder="bry-guy" ${ownerEditable ? "" : "disabled"}>
           </div>
           <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div><div class="provider-actions"><button class="settings-action" data-act="open-github-picker">${githubStatus?.authenticated ? "Manage repositories" : "Sign in with GitHub"}</button>${githubStatus?.authenticated && githubStatus.credentialSource === "stored" ? `<button class="settings-action quiet" data-github-logout>Sign out</button>` : ""}</div></div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button>${repositoryOperation}</div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div></div>
         </div>
       </section>
       <div class="settings-card">
@@ -1447,13 +1387,7 @@ class PiRepoPicker extends HTMLElement {
           const ownerUnset = !store.state.settings?.githubOwner?.value;
           this.githubFlow = null;
           if (accountLogin && ownerUnset) {
-            const operation = beginOperation("pi-profile", "Load GitHub dotfiles", "", "Request started.");
-            try {
-              const profileResult = await api.settingsPatch({ githubOwner: accountLogin, operationId: operation.id, activeSessionId: store.activeKey() });
-              completeOperation(operation, profileResult);
-            } catch (error) {
-              completeOperation(operation, {}, error);
-            }
+            try { await api.settingsPatch({ githubOwner: accountLogin }); } catch {}
           }
           await refreshState();
           this.loaded = false;

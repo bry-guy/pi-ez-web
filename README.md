@@ -1,252 +1,79 @@
 # pi-ez-web
 
-A self-hostable web UI for [Pi](https://github.com/earendil-works/pi) coding-agent sessions: chat with Pi in the browser, attach projects, and choose Git branches for conversations.
+A self-hostable, single-tenant web UI for [Pi](https://github.com/earendil-works/pi)
+coding-agent sessions. Chat in a browser, attach repositories, run trusted
+commands, and hand off conversations between Pi clients.
 
-## Example
+## Quick start with Docker Compose
 
-The current design prototype shows a project session inspecting a repository, running a command, and applying a diff.
-
-**Desktop**
-
-![pi-ez-web desktop design](design/screenshots/pi-ez-web-desktop.png)
-
-**Mobile**
-
-![pi-ez-web mobile design](design/screenshots/pi-ez-web-mobile.png)
-
-These previews come from [design revision 2](design/revision-2/design/pi-app-standalone.html).
-
-## Use
-
-Run the mock UI without Pi credentials — **`npm run dev` is a scripted mock**: replies are canned (prefixed `mock:`), the model picker shows `Mock Fast` / `Mock Smart`, and nothing reaches a real agent. It exists to exercise the UI and event contract only:
+The default setup builds the image locally, keeps state in a named volume, and
+publishes only on loopback:
 
 ```sh
-npm install
-npm run dev
-# open http://localhost:3141
+cp .env.example .env
+docker compose up --build -d
+curl --fail http://127.0.0.1:3141/ui-health
 ```
 
-Run against the real Pi agent:
+Open <http://127.0.0.1:3141>. The first start needs no `config.json`; use
+[config.example.json](config.example.json) and the instructions in
+[docs/configuration.md](docs/configuration.md) when you want to predeclare
+projects or hooks.
+
+This service has no built-in authentication or sandbox. Keep it on a trusted
+LAN or tailnet/VPN; never port-forward it or expose it directly to the public
+internet. See [docs/deployment.md](docs/deployment.md) before using a reverse
+proxy or replacing the persistent volume.
+
+## Configuration
+
+[docs/configuration.md](docs/configuration.md) is the authoritative reference.
+The short version:
+
+- `PI_WEB_HOME` stores app state; `PI_CODING_AGENT_DIR` stores Pi auth,
+  settings, packages, and transcripts; repositories and worktrees need stable,
+  writable paths.
+- `project.environment` stores only destination/source variable names. Values
+  are resolved at command spawn, missing sources fail closed, and mappings are
+  convenience configuration rather than isolation.
+- GitHub device login stores app auth in `github-auth.json`; an explicitly
+  injected `PI_WEB_GITHUB_TOKEN` takes precedence. Pi provider auth remains in
+  Pi's `auth.json`.
+- The app-managed OnePassword lifecycle is removed. Inject any deployment
+  source variables explicitly and opt projects into them with the names-only
+  mapping; pi-ez-web does not import, validate, store, or delete those secrets.
+- Pi profiles are explicit. A null profile uses deployment-local settings; use
+  only trusted profiles, packages, extensions, and hooks.
+
+The Compose `.env` file controls interpolation only. It does not pass arbitrary
+variables to the container; add deployment variables to the service's
+`environment` or a private untracked `env_file`.
+
+## Local development
+
+The real server requires Node.js 22.19.0 or newer. The mock server needs no
+provider credentials:
 
 ```sh
-# npm install already includes the Pi SDK runtime dependency.
-npm run verify:real   # explicit, credentialed SDK + model smoke test
+npm ci
+npm run dev
+```
+
+For the real server, configure Pi in `PI_CODING_AGENT_DIR` (the usual local
+location is `~/.pi/agent`) and run:
+
+```sh
 npm start
 ```
 
-Chats and project sessions can be created before a provider is configured. The
-first prompt asks you to connect a model provider when no usable model is
-available. Assistant replies render GitHub-flavored Markdown (headings, lists,
-tables, links, quotes, and code blocks); model-supplied HTML is removed and the
-rendered output is sanitized. The composer discovers Pi extension, prompt-template,
-and skill commands. Pi's built-in slash commands are web-adapted too: model selection, compaction, export/download, copy, session stats, reload, navigation, and provider settings work from the same `/` palette.
-Settings provides Anthropic OAuth/API-key login, OpenAI ChatGPT/Codex OAuth,
-OpenAI API-key login, and the default-model selector. Project sessions provide a
-small branch workflow: choose a branch and name when starting, then use the
-session title to choose a branch or fork into another branch. The same view offers local
-Merge to main, Push, and confirmed local branch deletion. Branch state,
-checkout/worktree kind, clean/dirty state, and sessions sharing a context remain
-visible. `/fork` remains Pi's built-in same-branch conversation fork. Plain chats
-intentionally have none of the project branch controls.
+`mise` is an optional local task runner for the repository's development
+commands; it is not required by the image or runtime. The standard checks are
+`mise run test` and `mise run check`.
 
-## Install and configure
+## Synchronization
 
-Requires Node.js 20 or newer. Configure Pi once so `~/.pi/agent` contains its auth and model settings. Add projects in `~/.pi-web-ui/config.json`:
-
-```json
-{
-  "projectHooks": {
-    "setup": "mise install && mise run bootstrap",
-    "check": "mise run check"
-  },
-  "projects": [
-    { "id": "my-project", "name": "my-project", "repoPath": "/path/to/my-project" }
-  ],
-  "reposRoot": "~/src",
-  "defaultModel": null,
-  "sync": {
-    "serverUrl": null,
-    "allConversations": false
-  },
-  "pi": {
-    "profile": "https://github.com/bry-guy/dotfiles",
-    "packages": [],
-    "extensions": []
-  },
-  "repositorySources": {
-    "default": "local",
-    "github": { "owner": "bry-guy" }
-  }
-}
-```
-
-`defaultModel: null` means Automatic: use the first currently available
-provider model. An explicit value must be a usable `provider/modelId` reference.
-
-The optional `pi` block is the simplest way to share Pi behavior with the web
-runtime. `profile` accepts a local Pi profile directory, a local `settings.json`,
-or a credential-free HTTPS URL. When `profile` is automatic and a GitHub
-owner/account is configured, pi-ez-web uses that account's `dotfiles` repository;
-an explicit profile URL or path overrides this behavior. A GitHub repository URL
-reads `.pi/agent/settings.json` from the repository's resolved default branch,
-including `main` and `master`; a GitHub blob URL can select another file, for
-example `.pi/profiles/rpiv/settings.json`. The profile's declarative settings are
-layered onto each web session, while `packages` and `extensions` add sources
-directly.
-Relative paths in the web config resolve from `PI_WEB_HOME`. Missing npm/git
-packages are installed by Pi into the persistent `PI_CODING_AGENT_DIR` when a
-session loads or the profile is applied. GitHub profiles also fetch complete skill directories and
-supported extension resources into a deployment-local commit snapshot;
-**Settings → Apply** re-fetches the profile, installs missing packages, and
-reloads idle sessions. The last successfully fetched remote profile and
-resources are cached for restart/offline fallback.
-
-Profiles intentionally do **not** import `auth.json`, models, or transcripts:
-those remain deployment-local in `PI_CODING_AGENT_DIR`. Remote Pi packages and
-extensions execute as the server user with full system access, so an automatic
-GitHub dotfiles profile is also a trust decision: reference only accounts and
-repositories you trust. Apply reloads the selected idle session runtime;
-active streaming sessions are deferred safely. Pi-compatible tools, commands, hooks, startup events, skills, prompts, and
-portable extension dialogs work in pi-ez-web; terminal-only TUI components are
-not rendered. The real web runtime supplies browser-backed `select`, `confirm`,
-`input`, `editor`, notification, and status behavior. Durable todo state and
-background-agent lifecycle/progress snapshots are shown as grouped, persistent
-safe activity cards below the chat; parallel
-agents remain visible until they finish, while arbitrary extension widgets are
-not rendered. The same fields are viewable and editable
-under **Settings → Pi profile & extensions**.
-
-Use `PORT` to change the HTTP port and `PI_WEB_HOME` to change application
-state. `PI_WEB_REPOS_ROOT` overrides the repository scan and clone root (for
-example, `PI_WEB_REPOS_ROOT=/Users/bryan/dev mise start`). The project picker
-supports Local, GitHub, and public HTTPS Git URL sources. With a configured
-owner, public GitHub repositories can be browsed and cloned before login;
-GitHub device login adds private repositories and stores its token in
-`PI_WEB_HOME/github-auth.json`; Pi AI credentials remain in
-`PI_CODING_AGENT_DIR/auth.json`. Never put either credential in `config.json`.
-Trusted operator deployments can connect a scoped 1Password service account from
-Settings; pi-ez-web stores that token at
-`PI_WEB_HOME/credentials/onepassword-service-account-token` with mode `0600`.
-The token is used only by explicit child commands. This is trusted-instance
-hygiene, not isolation between projects running in the same pod. The earlier
-`github-auth.json` path rule applies to GitHub OAuth state only.
-
-Other environment overrides are `PI_WEB_REPOSITORY_SOURCE`,
-`PI_WEB_GITHUB_CLIENT_ID` (advanced server OAuth-app override),
-`PI_WEB_GITHUB_OWNER`, `PI_WEB_GITHUB_TOKEN`, `PI_SYNC_SERVER_URL`, and
-`PI_WEB_SYNC_ALL_CONVERSATIONS`. Sync environment values are read-only in
-Settings; without a sync server URL, conversations remain local-only. The
-preview deployment supplies the private sync service URL with
-`PI_WEB_SYNC_ALL_CONVERSATIONS=false`, so a feature-branch preview is ready for
-manual enrollment without synchronizing every conversation. The client ID is
-not a normal user setting: until the project ships its own registered OAuth App
-ID, a deployment must provide that public ID through this advanced override.
-Environment values take precedence over config and are read-only in Settings.
-
-The production image builds the vendored `pi-sync` client from a source
-snapshot based on `vendor/pi-sync/UPSTREAM_COMMIT`; the Docker
-`PI_SYNC_BASE_COMMIT` argument verifies that upstream base. The snapshot also
-contains this repository's web-host integration patch, so it is not claimed to
-be an unmodified upstream package. For a local checkout, build the sibling
-package and point the adapter at it without adding package state to
-`PI_WEB_HOME`:
-
-```sh
-npm install --package-lock=false --prefix /path/to/pi-sync/packages/pi-sync
-npm run build --prefix /path/to/pi-sync/packages/pi-sync
-PI_WEB_SYNC_CLIENT_MODULE=/path/to/pi-sync/packages/pi-sync mise start
-```
-
-When sync is configured, pi-ez-web loads the pi-sync Pi extension into the same
-SDK runtime as the rest of the selected Pi profile. `PiSyncWebAdapter` supplies
-browser dialogs, session replacement, extension status, and the configured sync
-endpoint; the extension owns enrollment, leases, heartbeat, ETags, JSONL
-materialization, and settlement. The header Refresh action invokes the
-extension's explicit `/sync refresh` handoff pull; automatic focus refresh is disabled for the
-extension-owned path so local web-only entries are not silently replaced. Unenrolled sessions remain local-only unless
-`allConversations` is enabled. Synchronized names are sticky and Git upstream,
-branch, and pushed-commit pointers travel with the canonical session. When Git
-information is available, the `/sync` picker only offers conversations from the
-same normalized repository remote; branch and commit mismatches remain advisory.
-Git mismatches are reported without fetching, switching branches, or blocking Pi.
-
-For a local real-server test, `mise start` is the normal command but does not
-inherit a deployment's environment. Supply the public OAuth App client ID to
-make GitHub Device Flow available locally:
-
-```sh
-PI_WEB_GITHUB_CLIENT_ID='<your public OAuth App client ID>' mise start
-```
-
-No client secret is needed. Alternatively, keep the public ID only in your
-machine-local `~/.pi-web-ui/config.json` under
-`repositorySources.github.clientId`. The Settings **Sign in with GitHub** action
-opens the Device Flow directly; approve its displayed code in GitHub while
-leaving the repository dialog open.
-
-The default local repository root is `$HOME/src`. The picker also accepts an
-absolute or `~/...` repository path directly. Existing Git worktrees are
-discovered in place. The repository's primary branch (detected from
-`origin/HEAD`, the current `main`/`master` branch, or the available local
-branches) uses the repository checkout; app-created non-primary branches use
-worktrees. Creating a branch from the primary branch fetches and fast-forwards
-it when possible; merging locally into it performs the same freshness and
-cleanliness checks. Push is explicit and never forced.
-Project hooks are inherited from `projectHooks` and may be overridden per
-project with a `hooks` object, for example
-`"hooks": { "setup": "./script/install", "check": "./script/check" }`.
-Configured hooks remain explicit commands and may change the selected context.
-Hooks receive an allowlisted functional environment rather than arbitrary
-deployment variables, have a 120-second timeout, cap captured output, and are
-cancelled with their process group when the request ends. Treat setup commands
-as trusted code; the allowlist is hygiene, not a sandbox.
-Pi-web's config, bindings, chats, and UI state remain under `~/.pi-web-ui`;
-bindings preserve a session's execution context and are not branch state. Plain
-chats use private scratch workspaces under
-`~/.pi-web-ui/chats/<scratch-id>` and scratch directories are retained for
-manual cleanup. The model picker is backed by Pi's available model runtime.
-
-### iOS / PWA
-
-The app includes a standalone web-app manifest, iOS icon metadata, a versioned
-app-shell service worker, safe-area spacing, and reconnect handling for apps
-that are suspended and resumed by iOS. Serve it over HTTPS, open the URL in
-Safari, then choose **Share → Add to Home Screen**. Launching the new Home
-Screen icon opens pi-ez-web as a standalone app.
-
-The service worker caches only the static app shell. API requests, transcripts,
-SSE, provider authentication, and GitHub flows are never cached. If the device
-loses connectivity, the app shows an offline state and catches up from the
-server after it returns online or comes back to the foreground; agent turns
-continue on the server. A new shell build displays an update prompt before
-reloading.
-
-## Trust boundary
-
-v1 has no authentication and no sandbox: the agent can run shell commands as the service user. Bind it only inside a trusted LAN or tailnet/VPN. Never port-forward it or expose it directly to the public internet.
-
-## Mise tasks
-
-[`mise.toml`](mise.toml) requires Node 22 and wraps the common local commands:
-
-```sh
-mise install       # install the declared Node version
-mise bootstrap     # install npm dependencies
-mise dev           # mock server; isolated state under .mise/state/mock
-mise test          # run server, SDK, and DOM tests
-mise test:dom      # run the DOM-only gate
-mise check         # tests plus whitespace validation
-mise start         # real server
-mise kill          # stop listeners on PORT (default 3141)
-mise verify-real   # credentialed real-Pi smoke test
-mise reset         # clear mock state
-```
-
-With the mock server running, `mise dev-project` registers the current checkout as a project. `mise preview-design` opens the latest standalone prototype on macOS. Set `PI_WEB_HOME` or `PORT` to override the defaults. `mise kill` also accepts a port directly (`mise kill -- 3141`).
-
-See the [runtime environment roadmap](docs/roadmap.md), [deployment.md](docs/deployment.md), [implementation.md](docs/implementation.md), [archived PLAN.md](docs/archive/PLAN.md), [archived remediation plan](docs/archive/pi-web-ui-remediation.md), and [design/](design/) for the implementation and design references. Use the archived [CHECKLIST.md](docs/archive/CHECKLIST.md) for the browser click-through gate.
-
-The infra repository owns the Kubernetes manifests, Argo applications, preview
-routes, and release path. This repository's workflow publishes immutable images
-only. Site-specific operator credentials and k3s tasks are documented in the
-infra repository's `selfhost/platform/pi-ez-web/README.md`.
+The optional vendored `pi-sync` integration hands off canonical conversation
+JSONL and metadata between laptop Pi sessions and the web client. It does not
+synchronize working trees, commits, patches, worktrees, stash state, or
+credentials. Provide `PI_SYNC_SERVER_URL` to the service and extension when
+enabling it; do not rely on a config-only sync URL for extension attachment.

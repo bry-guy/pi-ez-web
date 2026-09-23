@@ -1,0 +1,27 @@
+{
+  "projects": [],
+  "projectHooks": {},
+  "projectHookSets": {},
+  "worktreeRoot": "/data/pi-ez-worktrees",
+  "reposRoot": "/data/repos",
+  "port": 3141,
+  "defaultModel": null,
+  "defaultThinkingLevel": "medium",
+  "sync": {
+    "serverUrl": null,
+    "allConversations": false
+  },
+  "pi": {
+    "profile": null,
+    "profileSource": "disabled",
+    "packages": [],
+    "extensions": []
+  },
+  "repositorySources": {
+    "default": "local",
+    "github": {
+      "clientId": null,
+      "owner": null
+    }
+  }
+}

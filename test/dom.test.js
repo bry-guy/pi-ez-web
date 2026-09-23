@@ -38,9 +38,9 @@ const state = {
     { id: "openai", name: "OpenAI", configured: false, availableModels: 0, authMethods: [{ id: "api_key", label: "OpenAI API key" }], canLogout: false },
   ],
   repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
-  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true }, onepassword: { connected: false } },
+  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true } },
   piConfiguration: {
-    config: { profile: "https://github.com/bry-guy/dotfiles", packages: ["npm:context-mode"], extensions: [] },
+    config: { profile: "https://github.com/bry-guy/dotfiles", profileSource: "explicit", packages: ["npm:context-mode"], extensions: [] },
     profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
     warnings: [],
     runtime: { extensions: [{ path: "context-mode" }], errors: [], skills: [{ name: "todo-discipline", path: "/tmp/todo/SKILL.md" }], prompts: 0 },
@@ -96,24 +96,11 @@ async function boot() {
       if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
       if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
       if (url === "/api/github/device-login" && options.method === "POST") return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } }, true, 202);
-      if (url === "/api/github/device-login/ghf1" && !options.method) return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
+      if (url === "/api/github/device-login/ghf1" && !options.method) {
+        if (dom.window.__githubLoginComplete) return json({ flow: { id: "ghf1", state: "complete", account: { login: "logged-owner" } } });
+        return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
+      }
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
-      if (url === "/api/onepassword/connect" && options.method === "POST") {
-        if (dom.window.__onePasswordFailure) {
-          return json({ error: dom.window.__onePasswordFailure.code, message: "internal SDK detail" }, false, dom.window.__onePasswordFailure.status);
-        }
-        const body = JSON.parse(options.body || "{}");
-        dom.window.__onePasswordTokens = [...(dom.window.__onePasswordTokens || []), body.token];
-        state.settings.onepassword = { connected: true };
-        dom.window.__onePasswordResponse = { onepassword: { connected: true } };
-        return json(dom.window.__onePasswordResponse);
-      }
-      if (url === "/api/onepassword/disconnect" && options.method === "POST") {
-        state.settings.onepassword = { connected: false };
-        dom.window.__onePasswordResponse = { ok: true, onepassword: { connected: false } };
-        return json(dom.window.__onePasswordResponse);
-      }
-      if (url === "/api/onepassword/status") return json({ onepassword: state.settings.onepassword });
       if (url === "/api/sessions/s1/transcript") return json(transcript);
       if (url.includes("/api/sessions/") && url.includes("/extension-ui/") && options.method === "POST") {
         dom.window.__extensionUiResponses = dom.window.__extensionUiResponses || [];
@@ -164,6 +151,7 @@ async function boot() {
       }
       if (url.endsWith("/hooks/setup") && options.method === "POST") {
         dom.window.__setupStarted = true;
+        dom.window.__setupCalls = (dom.window.__setupCalls || 0) + 1;
         const operationId = options.headers?.["x-pi-operation-id"] || "test-setup";
         if (dom.window.__holdSetup) return new Promise(resolve => { dom.window.__resolveSetup = () => resolve(dom.window.__setupFails ? json({ error: "http_502" }, false, 502) : json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } })); });
         return json({ hook: "setup", ok: true, exit: 0, stdout: "setup ok\n", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "Setup complete." }] } });
@@ -172,7 +160,13 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-check";
         return json({ hook: "check", ok: true, exit: 0, command: "npm test", stdout: "check ok\n", stderr: "", operation: { id: operationId, status: "success", events: [{ at: Date.now(), type: "result", message: "check ok" }] } });
       }
-      if (url === "/api/settings" || url === "/api/sessions/s1/model") return json({ ok: true });
+      if (url === "/api/settings") {
+        const patch = JSON.parse(options.body || "{}");
+        dom.window.__settingsPatches = [...(dom.window.__settingsPatches || []), patch];
+        if (patch.githubOwner !== undefined) state.settings.githubOwner.value = patch.githubOwner;
+        return json({ ok: true });
+      }
+      if (url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
       if (url.includes("/api/projects/") && url.endsWith("/sessions")) {
         state.projects[0].sessions.unshift({ id: "s2", title: "Chat Name", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", model: "mock/fast", when: "now", streaming: false, children: [] });
@@ -478,6 +472,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.sessionId, "s2");
   assert.ok(root.querySelector("[data-id='s2']"));
   assert.equal(dom.window.__setupStarted, true, "setup starts after the returned session is selected");
+  assert.equal(dom.window.__setupCalls, 1, "automatic setup uses the existing hook endpoint");
   assert.equal(root.querySelector(".send-btn").disabled, false, "composer remains usable during setup");
   assert.ok(root.querySelector(".bar-operation-hint .operation-dot"), "background setup appears in the title hint");
   assert.equal(root.querySelector(".operation-row-hint"), null, "sidebar operation hints are removed");
@@ -539,38 +534,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
-  assert.match(root.querySelector("pi-settings").textContent, /1Password/);
-  const onePasswordInput = root.querySelector("[data-onepassword-token]");
-  onePasswordInput.value = "op_private-token";
-  root.querySelector("[data-act='connect-onepassword']").click();
-  assert.equal(onePasswordInput.value, "");
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(dom.window.__onePasswordTokens, ["op_private-token"]);
-  assert.doesNotMatch(root.textContent, /op_private-token/);
-  assert.doesNotMatch(JSON.stringify(store.state), /op_private-token/);
-  assert.doesNotMatch(JSON.stringify(dom.window.__onePasswordResponse), /op_private-token/);
-  assert.match(root.querySelector("pi-settings").textContent, /Connected/);
-  root.querySelector("[data-act='disconnect-onepassword']").click();
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match(root.querySelector("pi-settings").textContent, /Not connected/);
-  assert.equal(root.querySelector("[data-onepassword-token]").value, "");
-  for (const failure of [
-    { code: "onepassword_auth_failed", status: 401, message: "1Password authentication failed. Check the service-account token." },
-    { code: "onepassword_sdk_unavailable", status: 503, message: "1Password integration is unavailable on this server." },
-    { code: "onepassword_service_unavailable", status: 503, message: "1Password service is unavailable. Try again." },
-    { code: "onepassword_rate_limited", status: 429, message: "1Password is rate limited. Try again later." },
-    { code: "onepassword_validation_timeout", status: 504, message: "1Password validation timed out. Try again." },
-  ]) {
-    dom.window.__onePasswordFailure = failure;
-    const input = root.querySelector("[data-onepassword-token]");
-    input.value = "op_failed-token";
-    root.querySelector("[data-act='connect-onepassword']").click();
-    await new Promise(resolve => setTimeout(resolve, 20));
-    assert.match(root.querySelector("pi-settings").textContent, new RegExp(failure.message));
-    assert.doesNotMatch(root.querySelector("pi-settings").textContent, /internal SDK detail/);
-    assert.equal(input.value, "");
-  }
-  delete dom.window.__onePasswordFailure;
+  assert.match(root.querySelector("pi-settings").textContent, /Optional: enter a local path or HTTPS URL/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /configured GitHub user's|Automatic GitHub dotfiles profile/);
+  const settingsText = root.querySelector("pi-settings").textContent;
+  assert.doesNotMatch(settingsText, /1Password/);
+  assert.equal(root.querySelector("[data-onepassword-token]"), null);
+  assert.equal(root.querySelector("[data-act='connect-onepassword']"), null);
+  assert.equal(root.querySelector("[data-act='disconnect-onepassword']"), null);
   assert.equal(root.querySelectorAll("pi-settings .pi-loaded-list").length, 2);
   assert.match(root.querySelector("pi-settings .pi-resource-scroll").textContent, /context-mode|todo-discipline/);
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "https://github.com/bry-guy/dotfiles");
@@ -585,9 +555,28 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("pi-settings").textContent, /OpenAI API key/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
+
+  state.piConfiguration = {
+    config: { profile: null, profileSource: "disabled", packages: ["npm:kept"], extensions: ["./kept.ts"] },
+    profile: { status: "none", source: null, error: null },
+    warnings: [],
+    runtime: null,
+  };
+  store.set({ piConfiguration: state.piConfiguration, view: "settings" });
+  assert.equal(root.querySelector("[data-setting='piProfile']").value, "");
+  root.querySelector("pi-settings [data-act='save-pi-configuration']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(dom.window.__settingsPatches.at(-1).pi, {
+    profile: null,
+    profileSource: "disabled",
+    packages: ["npm:kept"],
+    extensions: ["./kept.ts"],
+  });
+
   root.querySelector("pi-settings [data-act='save-repository-settings']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-settings").textContent, /Repository settings saved/);
+  assert.equal(store.state.operations.some(operation => operation.kind === "repository-settings"), false);
   store.state.repositorySources.sources.find(source => source.id === "github").configured = true;
   root.querySelector("pi-settings [data-act='open-github-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -596,6 +585,34 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   root.querySelector("pi-repo-picker [data-act='close']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.repositorySources.sources.find(source => source.id === "github").configured = true;
+  state.settings.githubOwner.value = null;
+  await refreshState();
+  dom.window.__settingsPatches = [];
+  const piOperationsBeforeLogin = store.state.operations.filter(operation => operation.kind === "pi-profile").length;
+  const githubOwnerRefreshed = new Promise((resolve, reject) => {
+    let unsubscribe;
+    const timer = setTimeout(() => {
+      unsubscribe?.();
+      reject(new Error("GitHub login did not refresh the owner"));
+    }, 1000);
+    unsubscribe = store.subscribe(what => {
+      if (what !== "state" || store.state.settings?.githubOwner?.value !== "logged-owner") return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+  dom.window.__githubLoginComplete = true;
+  root.querySelector("pi-settings [data-act='open-github-picker']").click();
+  await githubOwnerRefreshed;
+  assert.equal(state.settings.githubOwner.value, "logged-owner");
+  assert.equal(store.state.settings.githubOwner.value, "logged-owner");
+  assert.deepEqual(dom.window.__settingsPatches, [{ githubOwner: "logged-owner" }]);
+  assert.equal(store.state.operations.filter(operation => operation.kind === "pi-profile").length, piOperationsBeforeLogin);
+  await root.querySelector("pi-repo-picker").dismiss();
+  dom.window.__githubLoginComplete = false;
   const defaultToggle = root.querySelector("pi-settings pi-model-picker[data-mode='default'] [data-model-toggle]");
   defaultToggle.focus();
   defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
