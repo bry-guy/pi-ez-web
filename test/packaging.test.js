@@ -83,10 +83,14 @@ test("self-hosting examples keep state persistent and secrets out of defaults", 
   assert.doesNotMatch(JSON.stringify(config), /token|secret|password|credential/i);
 
   for (const text of [readme, deployment, configuration]) {
-    assert.doesNotMatch(text, /Node(?:\.js)? 20|temporary askpass|preview deployment|bry-guy|fnox|OP_SERVICE_ACCOUNT_TOKEN/i);
+    assert.doesNotMatch(text.replaceAll("https://github.com/bry-guy/pi-ez-web", ""), /Node(?:\.js)? 20|temporary askpass|preview deployment|bry-guy|fnox|OP_SERVICE_ACCOUNT_TOKEN/i);
   }
+  assert.match(readme, /docker compose up --build -d/);
+  assert.match(readme, /Projects → Git URL/);
+  assert.match(readme, /PI_WEB_PORT/);
+  assert.match(configuration, /You do not need a config file to start/);
   assert.match(configuration, /Compose `.env` file controls Compose interpolation only/);
-  assert.match(configuration, /project_environment_source_missing/);
+  assert.match(configuration, /If a source variable is missing, the command does not start/);
   assert.match(configuration, /set -e/);
   assert.match(configuration, /`\/data\/pi-ez-operator-home\/.pi\/worktrees`/);
   assert.match(deployment, /one named\s+volume/);

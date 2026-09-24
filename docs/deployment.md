@@ -1,143 +1,25 @@
-# Deployment
+# Deployment and maintenance
 
-pi-ez-web is a trusted, single-process, single-tenant service. The repository
-contains a generic image and a minimal Compose entry point; deployment systems
-may build the image or wrap it with their own secret and network tooling.
+The Compose setup builds the app locally, binds it to localhost, and stores state in one named volume. See the [README](../README.md) to get started.
 
-## Compose quick start
+## Keep access private
 
-The checked-in Compose file builds locally, publishes only to loopback by
-default, and keeps application, Pi, repository, and worktree data in one named
-volume:
+pi-ez-web has no built-in authentication or sandbox. Anyone who can reach it can use its projects and run trusted commands with the service user's permissions. Keep the default `127.0.0.1` binding; do not expose the service directly to the internet.
 
-```sh
-cp .env.example .env
-docker compose up --build -d
-curl --fail http://127.0.0.1:3141/ui-health
-```
+For remote access, use an SSH tunnel or put the app behind a TLS- and authentication-protected reverse proxy on a trusted network. A proxy must pass through the long-lived `/api/events` stream without buffering. The proxy provides access control; pi-ez-web does not.
 
-The first start needs no `config.json`. Add the example later, without
-overwriting existing state, with the command in
-[configuration.md](configuration.md). Stop the service with
-`docker compose down`; do not add `--volumes` unless deleting all persistent
-state is intentional.
+## Keep your data
 
-The default service contract is:
+Compose stores application settings, Pi credentials and transcripts, repositories, and worktrees in one named volume mounted at `/data`. `docker compose down` preserves it. **Do not use `docker compose down --volumes` to upgrade**; that deletes the volume.
 
-| Item | Value |
-| --- | --- |
-| Image | Local build from this repository, tagged `pi-ez-web:local` |
-| Container user | Image `node` user, UID/GID 1000 |
-| Published port | `127.0.0.1:3141` on the host to `3141` in the container |
-| Persistent volume | `pi-ez-web-data` mounted at `/data` |
-| Application state | `/data/pi-ez-web` |
-| Pi state and transcripts | `/data/pi-ez-agent` |
-| Repositories | `/data/repos` |
-| Created worktrees | `/data/pi-ez-worktrees` when using the example config; otherwise `/data/pi-ez-operator-home/.pi/worktrees` |
-| Health check | `GET /ui-health` |
+Back up the volume before upgrading and protect the archive like a credential. The backup procedure below stops the service, discovers the project-scoped volume, and refuses to overwrite an existing archive. If backup fails, the app stays stopped; fix the cause before starting it again. The restore procedure extracts into a new volume and keeps the original intact. It archives only the `/data` volume; separately mounted host repositories need their own backups. Bind-mounted directories must be writable by container UID/GID 1000. Keep repository and worktree paths stable: Git worktrees record absolute paths.
 
-The port bind and image tag can be changed in `.env`. The Compose `.env` file
-only interpolates the Compose file; it is not a general container environment
-file. Pass credentials or project source variables through explicit service
-environment entries or a private untracked `env_file`, as described in
-[configuration.md](configuration.md).
+Use the same Compose overrides for start, backup, restore, and upgrades. To make the examples below use an external local override, export `COMPOSE_FILE=compose.yaml:/path/to/compose.private.yaml` first. When restoring, put `compose.restore.yaml` last.
 
-## Layering deployment-specific hook tools
+<details>
+<summary>Back up the Compose volume</summary>
 
-The public image contains generic runtime tools, not every executable a
-particular deployment's trusted hooks may use. Layer a missing tool into one
-derived application image instead of changing the public image or adding a
-sidecar. The derived image keeps the inherited entrypoint and command, and the
-Compose service still supplies the healthcheck and `/data` volume. The added
-tools are available to all processes in the final nonroot container.
-
-For example, the public image already includes `jq` but not `ripgrep`. Build a
-base image and then a deployment image that adds the Debian `ripgrep` package:
-
-```sh
-docker build --build-arg PI_WEB_BUILD_ID=local --tag pi-ez-web:base .
-cat > Dockerfile.hooks <<'EOF'
-FROM pi-ez-web:base
-
-USER root
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ripgrep \
-    && rm -rf /var/lib/apt/lists/*
-
-USER node
-EOF
-docker build --file Dockerfile.hooks --tag pi-ez-web:hooks .
-```
-
-A project can then declare a hook that uses the added executable. This
-example succeeds when at least one YAML file contains an `apiVersion:` line;
-it is an executable-presence example, not a complete YAML validator:
-
-```json
-{
-  "projects": [
-    {
-      "id": "infra",
-      "name": "infra",
-      "repoPath": "/data/repos/infra",
-      "hooks": {
-        "check": "rg --glob '*.yaml' --glob '*.yml' '^apiVersion:' ."
-      }
-    }
-  ]
-}
-```
-
-Merge that project entry into the existing `projects` array in
-`config.json`; do not replace other configuration. See
-[configuration.md](configuration.md) for configuration location and first-time
-example installation. Set or replace this line in the private `.env` file
-before starting Compose:
-
-```text
-PI_WEB_IMAGE=pi-ez-web:hooks
-```
-
-Then start Compose without rebuilding:
-
-```sh
-docker compose up --no-build -d
-curl --fail http://127.0.0.1:3141/ui-health
-```
-
-Keep `PI_WEB_IMAGE=pi-ez-web:hooks` in the private `.env` for later starts and
-use `--no-build`; `docker compose up --build` would rebuild the Compose
-Dockerfile under the derived tag. Hooks remain trusted commands running as the
-service user. Never put credentials in the derived image, its build context,
-or its layers. A deployment can use the same pattern to layer `mise` or `yadm`
-with its own reviewed pinned installation steps.
-
-## Persistence and ownership
-
-Keep the `/data` volume across upgrades. The service writes atomically inside
-`$PI_WEB_HOME`, so the parent directory and the volume must be writable by
-UID/GID 1000. If replacing the named volume with host directories, create and
-own them for UID/GID 1000 before starting the container. Keep repository and
-worktree paths stable across restarts and hosts; Git worktree metadata stores
-absolute paths.
-
-Back up the whole volume or, at minimum, these sensitive and stateful paths:
-
-- `$PI_WEB_HOME/config.json`, `bindings.json`, chats, cached Pi resources, and
-  `github-auth.json`;
-- `$PI_CODING_AGENT_DIR/auth.json`, models, and Pi session transcripts;
-- repositories and created worktrees if they are not independently backed up.
-
-Auth files, retained legacy credential files, and backups are secrets. Removing
-the app-managed OnePassword feature did not revoke or delete any old file.
-Never bake credentials into the image, config example, Compose file, URL,
-command arguments, or logs.
-
-For the checked-in Compose volume, stop the service before making a protected
-archive and store that archive outside the repository. The volume name is
-project-scoped, so discover it from the stopped service instead of assuming a
-global name. This command refuses an existing archive and does not restart the
-service if the backup fails:
+This stops the app, archives the volume read-only, and refuses to overwrite an existing archive. The backup directory defaults to `~/pi-ez-web-backups` and can be changed with `PI_EZ_WEB_BACKUP_DIR`.
 
 ```sh
 set -eu
@@ -163,8 +45,12 @@ set -eu
 docker compose up -d
 ```
 
-To restore, stop the service and extract the archive into an anonymous newly
-created volume, never over a live or stale volume:
+</details>
+
+<details>
+<summary>Restore into a new volume</summary>
+
+This keeps the original volume intact. Inspect the restored app before deleting any old data. The generated `compose.restore.yaml` is local deployment configuration; keep it out of version control.
 
 ```sh
 set -eu
@@ -190,83 +76,76 @@ EOF
 docker compose -f compose.yaml -f compose.restore.yaml up -d --no-build
 ```
 
-Inspect the restored state and retain the untracked `compose.restore.yaml` for
-subsequent starts. Bare `docker compose` selects the original volume again, so
-use both files for every later backup, upgrade, rollback, stop, and start:
+If you use a local Compose override, place it between `compose.yaml` and `compose.restore.yaml` so the restore override comes last:
+
+```sh
+docker compose -f compose.yaml -f /path/to/compose.private.yaml -f compose.restore.yaml up -d --no-build
+```
+
+Bare `docker compose` selects the original volume again. Use both files on later starts and updates:
 
 ```sh
 export COMPOSE_FILE=compose.yaml:compose.restore.yaml
 docker compose up -d --no-build
 ```
 
-Do not delete the original volume until the restore is verified. Never use
-`docker compose down --volumes` as a backup step.
+With a local override, list it before the restore file, for example `export COMPOSE_FILE=compose.yaml:/path/to/compose.private.yaml:compose.restore.yaml`. Use that same list for backup, restore, and updates.
 
-## Configuration and trusted inputs
+</details>
 
-See [configuration.md](configuration.md) for the complete JSON and environment
-reference. In particular:
+## Update and check health
 
-- `PI_WEB_HOME`, `PI_CODING_AGENT_DIR`, and `PI_WEB_REPOS_ROOT` should be
-  explicit absolute paths in containers.
-- `project.environment` stores only destination/source variable names and
-  resolves values at command spawn. A missing source prevents the command from
-  starting; an empty source remains an intentional empty value.
-- Mappings, hooks, Pi profiles, packages, extensions, and prestart commands are
-  trusted execution inputs, not project isolation. They run as the service user.
-- A Compose `.env` entry is not passed to the service unless Compose references
-  it in `environment` or an `env_file`.
-
-## Security boundary
-
-There is no built-in authentication or sandbox. Pi, project hooks, and trusted
-extensions can execute shell commands with the service user's authority. Keep
-the default loopback binding, or put the service behind a TLS/authenticated
-reverse proxy reachable only from a trusted LAN or tailnet/VPN. Do not
-port-forward it or expose it directly to the public internet. Do not treat
-separate projects in one instance as mutually untrusted tenants.
-
-If a reverse proxy is used, proxy all paths—including `/api` and the long-lived
-SSE endpoint—and preserve streaming responses. The proxy, not pi-ez-web,
-provides authentication and public TLS.
-
-## Health, upgrades, and rollback
-
-Use `/ui-health` for a process/UI check. The full server also exposes
-`/api/health`, which reports the API contract, build ID, capabilities, and sync
-state. A successful TCP connection alone is not an application health check.
-
-Run one application process (one replica). The supervisor, SSE hub, OAuth
-flow state, and workspace locks are in memory, so horizontal replicas are not
-a supported deployment shape.
-
-For a local image upgrade, retain the previous tag and keep the data volume:
+After backing up, retain the current default image, then update and rebuild. If you use a custom image tag, retain that tag instead of `pi-ez-web:local`:
 
 ```sh
 docker tag pi-ez-web:local pi-ez-web:previous
-docker compose build --pull
-docker compose up -d --no-build
+git pull
+docker compose up --build -d
 curl --fail http://127.0.0.1:3141/ui-health
+curl --fail http://127.0.0.1:3141/api/health
 ```
 
-Rollback without deleting state:
+These `--build` commands are for the default image; use the derived-image steps below if you customize it. Use the same Compose overrides as your normal start. The health checks below use the default host port; substitute your `PI_WEB_PORT` if it differs. `/ui-health` checks that the web process is running; `/api/health` checks the full server and reports its build and capabilities.
+
+To roll back the image without rebuilding:
 
 ```sh
-PI_WEB_IMAGE=pi-ez-web:previous docker compose up -d --no-build
+PI_WEB_IMAGE=pi-ez-web:previous docker compose up --no-build -d
 ```
 
-Test upgrades against a copy of the volume when possible; validate provider
-login, Git clone/fetch, worktree creation, project hooks, and transcript
-continuity after restart.
+Set `PI_WEB_IMAGE=pi-ez-web:previous` in `.env` to keep using it on later starts. Image rollback does not roll back the data volume; restore your backup if a new version changed stored data incompatibly.
 
-## Optional pi-sync
+Run one app instance. The session supervisor and event stream are in memory; multiple replicas are not supported.
 
-pi-sync is optional product functionality for handing canonical chat sessions
-between laptop Pi sessions and web clients. It is not working-tree
-synchronization. It transfers session JSONL and conversation metadata, not dirty
-files, commits, patches, worktrees, stash state, or credentials.
+## Custom tools for hooks
 
-Provide `PI_SYNC_SERVER_URL` to the web process and the pi-sync extension. The
-extension also accepts `PI_SYNC_URL`; a config-only `sync.serverUrl` should not
-be assumed to configure extension attachment. Keep sync disabled unless a
-compatible sync server and client module are deliberately provisioned.
+The public image does not include every command a project hook might need. Build a derived image for extra tools rather than adding a sidecar. Build the base image first:
+
+```sh
+docker build --build-arg PI_WEB_BUILD_ID=local --tag pi-ez-web:base .
+```
+
+Save this as `Dockerfile.hooks`:
+
+```dockerfile
+FROM pi-ez-web:base
+USER root
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+USER node
+```
+
+Build the derived image:
+
+```sh
+docker build --file Dockerfile.hooks --tag pi-ez-web:hooks .
+```
+
+Now set `PI_WEB_IMAGE=pi-ez-web:hooks` in `.env` and start without rebuilding:
+
+```sh
+docker compose up --no-build -d
+```
+
+Keep that `.env` value for later starts. After updating the source, rebuild the base and derived images in the same order. Do not use `docker compose up --build` while using a derived image: Compose would replace the derived tag with the base image. Hooks run with the app user's permissions; treat them as trusted code. See [Configuration](configuration.md) for the available settings.

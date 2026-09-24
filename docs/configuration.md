@@ -1,13 +1,61 @@
 # Configuration
 
-pi-ez-web is a single-tenant application. Its configuration is a JSON object
-at `$PI_WEB_HOME/config.json`; `config.example.json` is a working container
-example with no credentials. The file is optional: a missing file means the
-built-in defaults are used.
+Most installations can be set up in the browser. You do not need a config file to start: connect a provider in **Settings**, choose a model, and add a project. Advanced settings are optional.
 
-To install the example into the Compose volume without replacing an existing
-configuration, stop the service and use a one-shot container. The exclusive
-creation check leaves an existing file untouched:
+With Docker Compose, the app config lives at `/data/pi-ez-web/config.json` inside the persistent volume. This is `$PI_WEB_HOME/config.json` in the container. The credential-free [config.example.json](../config.example.json) shows the available options.
+
+## Models and providers
+
+In **Settings**, sign in to a provider or add an API key, then choose a default model. Pi stores provider credentials below `$PI_CODING_AGENT_DIR`; the Compose setup keeps this directory in the persistent volume. `defaultModel: null` selects the first available model; an explicit value uses the `provider/modelId` format.
+
+## Add repositories
+
+The project picker offers **Local**, **GitHub**, and **Git URL** sources:
+
+- **Local** scans `reposRoot`, which is `/data/repos` in Compose. Git tracks worktree paths, so keep repository paths stable.
+- **Git URL** clones public HTTPS Git URLs. SSH URLs are not supported.
+- **GitHub** can browse public or private repositories. Private access uses GitHub sign-in; the server needs a public OAuth App client ID (`PI_WEB_GITHUB_CLIENT_ID`), not a client secret. Alternatively, set an externally managed `PI_WEB_GITHUB_TOKEN` in the service environment; it takes precedence over stored sign-in. The owner filter (`PI_WEB_GITHUB_OWNER`) is optional.
+
+The Compose file sets `PI_WEB_REPOS_ROOT=/data/repos`, which makes **Local repositories** read-only in Settings. To use a host checkout, add both a bind mount and a matching repository-root override in a Compose file kept outside the repo:
+
+```yaml
+services:
+  pi-ez-web:
+    environment:
+      PI_WEB_REPOS_ROOT: /srv/projects
+    volumes:
+      - /srv/projects:/srv/projects
+```
+
+Start with that override and keep using it on later starts and updates; without it, Compose returns to `/data/repos`:
+
+```sh
+docker compose -f compose.yaml -f /path/to/compose.private.yaml up -d
+```
+
+The container runs as UID/GID 1000, so the mounted directory must be writable by that user. GitHub sign-in credentials are stored in `$PI_WEB_HOME/github-auth.json`; provider credentials are separate and remain in Pi's auth directory.
+
+## Optional config file
+
+Use `config.json` when you want to predefine projects or change settings that are not managed in **Settings**. The main options are:
+
+| Setting | Purpose |
+| --- | --- |
+| `projects` | Repositories and optional project hooks |
+| `reposRoot` | Local repository scan and clone location |
+| `worktreeRoot` | Where the app creates worktrees; use a stable absolute path |
+| `defaultModel` | Automatic selection (`null`) or a `provider/modelId` |
+| `defaultThinkingLevel` | Default reasoning level for new chats |
+| `pi` | Explicit Pi profile, packages, and extensions |
+| `repositorySources` | Default project-picker source and GitHub options |
+| `sync` | Optional pi-sync server and conversation setting |
+
+Without `worktreeRoot`, Compose uses `/data/pi-ez-operator-home/.pi/worktrees`; the example config uses `/data/pi-ez-worktrees`. Git records absolute worktree paths, so keep this location stable.
+
+<details>
+<summary>Install the example config into an existing Compose volume</summary>
+
+This stops the service and refuses to overwrite an existing config:
 
 ```sh
 set -e
@@ -27,194 +75,69 @@ docker compose run --rm --no-deps -T --entrypoint /bin/sh pi-ez-web -c '
 docker compose up -d
 ```
 
-## Configuration object
+</details>
 
-The supported top-level fields are:
+## Environment variables
 
-- `projects`: configured repositories. Each entry has `id`, `name`, and
-  `repoPath`, and may have `hooks`, `setup`, and an `environment` mapping.
-- `projectHooks`: deployment-wide hook commands.
-- `projectHookSets`: hook defaults keyed by project name.
-- `worktreeRoot`: root for worktrees created by the application. Use a stable,
-  persistent absolute path; Git worktree metadata records absolute paths. With
-  the Compose defaults and no config file, this is
-  `/data/pi-ez-operator-home/.pi/worktrees`; the example config uses
-  `/data/pi-ez-worktrees`.
-- `reposRoot`: default root for repository discovery and clones.
-- `port`: server port when `PORT` is not set.
-- `defaultModel`: `null` for automatic model selection or a usable
-  `provider/modelId`.
-- `defaultThinkingLevel`: one of `off`, `minimal`, `low`, `medium`, `high`,
-  `xhigh`, or `max`.
-- `pi`: optional explicit Pi profile, package, and extension settings.
-- `repositorySources`: `default` (`local`, `github`, or `git-url`) and optional
-  GitHub `clientId` and `owner`.
-- `sync`: optional `serverUrl` and `allConversations` setting.
+Environment values override matching JSON settings, which override built-in defaults. The Compose `.env` file controls Compose interpolation only; it does **not** pass arbitrary variables into the container. Add only the variables you need under the service's `environment` in a local Compose override; do not commit the override or `.env` values.
 
-A project environment contains names only:
-
-```json
-{
-  "id": "my-project",
-  "name": "my-project",
-  "repoPath": "/data/repos/my-project",
-  "environment": {
-    "PROJECT_API_TOKEN": "DEPLOYMENT_PROJECT_API_TOKEN"
-  }
-}
-```
-
-At command spawn, the server reads `DEPLOYMENT_PROJECT_API_TOKEN` from its
-current environment and supplies its value as `PROJECT_API_TOKEN`. Names are
-validated, resolved afresh for each command, and never replaced by resolved
-values in `config.json` or API state. A source must exist; an intentionally
-empty source is valid. A missing source fails before the command starts with
-`project_environment_source_missing`.
-
-This mapping is convenience configuration, not a security boundary. The
-server, configured hooks, and trusted Pi commands run as the same service user.
-A trusted command can read the inherited deployment environment or edit the
-configuration, so mappings do not isolate projects or act as access controls.
-
-## Environment precedence
-
-The built-in defaults are an empty project list, automatic model selection,
-medium thinking, local repository sources, disabled synchronization, and no Pi
-profile. Effective values use deployment environment first where an override
-exists, then `config.json`, then the built-in default:
-
-- `PORT` overrides `port`, then `3141` is used.
-- `PI_WEB_REPOS_ROOT` overrides `reposRoot`, then `$HOME/src` is used.
-- `worktreeRoot` has no environment override; it falls back to
-  `$HOME/.pi/worktrees`.
-- `PI_SYNC_SERVER_URL` and `PI_WEB_SYNC_ALL_CONVERSATIONS` override their
-  `sync` fields.
-- `PI_WEB_GITHUB_CLIENT_ID` and `PI_WEB_GITHUB_OWNER` override their GitHub
-  config fields. `PI_WEB_GITHUB_TOKEN` takes precedence over the stored GitHub
-  auth file.
-
-The Compose `.env` file controls Compose interpolation only. It does not pass
-arbitrary variables into the container. Add deployment variables explicitly to
-the service's `environment` section or use a private, untracked Compose
-`env_file`. For example, keep this as an untracked `compose.private.yaml`:
+For GitHub sign-in, add only the public client ID; no client secret is needed:
 
 ```yaml
 services:
   pi-ez-web:
     environment:
-      DEPLOYMENT_PROJECT_API_TOKEN: ${DEPLOYMENT_PROJECT_API_TOKEN:?set DEPLOYMENT_PROJECT_API_TOKEN}
       PI_WEB_GITHUB_CLIENT_ID: ${PI_WEB_GITHUB_CLIENT_ID:?set PI_WEB_GITHUB_CLIENT_ID}
 ```
 
-Then add the names-only mapping shown above and run with values supplied by
-the shell or an untracked `.env.private` file:
+To use a GitHub token instead, use this variable **instead of** the client ID above:
 
-```sh
-docker compose --env-file .env.private -f compose.yaml -f compose.private.yaml up -d
+```yaml
+services:
+  pi-ez-web:
+    environment:
+      PI_WEB_GITHUB_TOKEN: ${PI_WEB_GITHUB_TOKEN:?set PI_WEB_GITHUB_TOKEN}
 ```
 
-The client ID is public configuration; no GitHub client secret is needed.
+For a project secret, add only its source variable:
 
-The deployment-facing environment variables are:
+```yaml
+services:
+  pi-ez-web:
+    environment:
+      HOST_API_TOKEN: ${HOST_API_TOKEN:?set HOST_API_TOKEN}
+```
 
-| Variable | Effect |
-| --- | --- |
-| `PI_WEB_HOME` | Application state root; overrides the default `~/.pi-web-ui`. |
-| `PI_CODING_AGENT_DIR` | Pi settings, auth, packages, and transcripts root. |
-| `PI_WEB_REPOS_ROOT` | Repository discovery and clone root; overrides `reposRoot`. |
-| `PORT` | Listening port; overrides `config.json` `port`. |
-| `PI_WEB_MODE` | `real` by default; `mock` is for local testing. |
-| `PI_WEB_REPOSITORY_SOURCE` | Read-only default repository source. |
-| `PI_WEB_GITHUB_CLIENT_ID` | Public GitHub OAuth App client ID; overrides config. |
-| `PI_WEB_GITHUB_OWNER` | Optional GitHub user or organization filter; overrides config. |
-| `PI_WEB_GITHUB_TOKEN` | Explicit GitHub credential; takes precedence over stored app auth. |
-| `PI_SYNC_SERVER_URL` | Sync endpoint; overrides `sync.serverUrl`. |
-| `PI_WEB_SYNC_ALL_CONVERSATIONS` | Boolean override for `sync.allConversations`. |
-| `PI_WEB_SYNC_CLIENT_MODULE` | Optional explicit pi-sync client module path. |
-| `PI_WEB_PRESTART_COMMAND` | Trusted synchronous shell command run before startup. |
-| `PI_WEB_PRESTART_TIMEOUT_MS` | Positive timeout for the prestart command; 120 seconds by default. |
-| `PI_WEB_UI_ONLY` | Serves the static UI and UI health/config routes without the stateful API. |
+In the target project's existing entry in `config.json`, map the command's destination name to the environment variable's source name. Merge this field into the existing config; do not replace other projects:
 
-Environment-backed settings are read-only in Settings. The server never
-mutates its own `process.env` when resolving project mappings.
 
-## Provider setup
+```json
+{
+  "projects": [
+    {
+      "id": "my-project",
+      "name": "my-project",
+      "repoPath": "/data/repos/my-project",
+      "environment": {
+        "API_TOKEN": "HOST_API_TOKEN"
+      }
+    }
+  ]
+}
+```
 
-The browser Settings panel can start provider login when Pi has no usable model.
-Provider credentials are stored by Pi below `$PI_CODING_AGENT_DIR`; keep that
-path persistent. `defaultModel: null` selects the first currently available
-model, while an explicit value must be a usable `provider/modelId`. GitHub
-device login additionally needs a public OAuth App client ID in
-`PI_WEB_GITHUB_CLIENT_ID` or `repositorySources.github.clientId`; the device
-flow does not require a client secret.
+Put referenced values in the ignored root `.env` file, then start with the local override:
 
-## Profiles, packages, and hooks
+```sh
+docker compose -f compose.yaml -f /path/to/compose.private.yaml up -d
+```
 
-Pi profile selection is explicit. A `null` `profile` uses deployment-local Pi
-settings; a local path, local settings file, or trusted HTTPS settings URL can
-be selected explicitly. `profileSource` can be `auto`, `explicit`, or
-`disabled`; no GitHub-owner-to-dotfiles profile is inferred. Remote profiles,
-Pi packages, extensions, and project hooks execute as the service user and
-must be treated as trusted code.
+Use the same `-f` options for every start and upgrade; without them, Compose will not apply the override. If a source variable is missing, the command does not start. The mapping stores variable names, not values, and is a convenience—not a security boundary. Trusted hooks and Pi commands run with the app's authority and can read its environment.
 
-A hook declaration does not install its executable. If a trusted hook uses a
-tool that is not in the public image, layer that tool into a deployment-specific
-derived image; see [Layering deployment-specific hook tools](deployment.md#layering-deployment-specific-hook-tools).
+Other useful deployment variables include `PI_WEB_REPOS_ROOT` (repository root), `PI_WEB_SYNC_ALL_CONVERSATIONS`, and `PI_SYNC_SERVER_URL`.
 
-Package installation uses `npm` resolved from `PATH` and may need network
-access and native build tools. Project setup hooks run in the selected
-workspace when a new checkout/worktree requires setup and can be rerun
-manually. Hook commands use the existing allowlisted environment, have a
-120-second timeout and 1 MiB captured-output limit, and are cancelled with
-their process group when the request ends. Project mappings are applied at
-execution time before the child-specific Git credential configuration.
+## Optional integrations
 
-## GitHub and Git credentials
+Hooks, Pi packages, and extensions are trusted code running as the app user. If a hook needs a tool not in the image, [build a derived image](deployment.md#custom-tools-for-hooks) rather than adding a sidecar.
 
-GitHub device login stores app auth in `$PI_WEB_HOME/github-auth.json`.
-`PI_WEB_GITHUB_TOKEN` is an externally managed alternative and takes
-precedence; changing it is a deployment operation, not a Settings logout.
-Pi provider credentials remain in `$PI_CODING_AGENT_DIR/auth.json`.
-
-Repository sources are local paths, GitHub repositories, and credential-free
-HTTPS Git URLs. GitHub Git operations use a child-scoped credential helper and
-never put credentials in URLs or arguments. Treat both auth files and their
-backups as secrets.
-
-## Prestart command
-
-`PI_WEB_PRESTART_COMMAND` is an optional trusted `/bin/sh -c` command run
-synchronously before config loading, supervisor creation, and listening. Its
-stdin is closed; it inherits the deployment process environment and uses a
-120-second timeout by default. Set `PI_WEB_PRESTART_TIMEOUT_MS` to a positive
-integer to change the bound. A blank command is ignored; a timeout or nonzero
-exit prevents startup. Keep it idempotent, noninteractive, and free of secret
-output.
-
-## Synchronization
-
-The optional vendored `pi-sync` integration hands off canonical chat session
-JSONL and conversation metadata between Pi clients. It does not synchronize
-working trees, commits, patches, worktrees, stash state, or credentials.
-
-Set `PI_SYNC_SERVER_URL` in the service environment when enabling sync. The
-extension reads its endpoint from `PI_SYNC_SERVER_URL` or `PI_SYNC_URL`; do not
-rely on a config-only `sync.serverUrl` value for extension attachment. Keep
-`allConversations` disabled unless every conversation should be eligible for
-sync.
-
-## Direct Node startup
-
-The direct `npm start` launcher sets a port but does not provide the Compose
-loopback port binding. Treat it as reachable on the host's network interfaces
-and use a host firewall or a trusted reverse proxy when running it outside a
-private workstation.
-
-## Invalid configuration
-
-`config.json` must contain valid JSON with an object root. A missing file uses
-defaults without creating a file. An unreadable file fails with the stable
-`config_unreadable` error; malformed JSON, `null`, arrays, and scalar roots
-fail with `invalid_config`. Startup stops before the server listens, and the
-existing file is not rewritten. Fix the file or restore a known-good backup;
-do not put credentials into the example or source repository.
+pi-sync is optional and synchronizes conversation JSONL and metadata—not repository files, Git history, worktrees, or credentials. Set `PI_SYNC_SERVER_URL` for the web app and the Pi extension; leave `allConversations` disabled unless you want every conversation eligible for sync.
