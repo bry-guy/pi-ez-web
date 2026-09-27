@@ -660,6 +660,7 @@ export class RealSupervisor {
 
   async message(id, text, mode, images = [], clientMessageId = null, snapshotToken = null) {
     let st = await this._attachById(id);
+    if (this.pendingPrompts.has(id) && !st.session.isStreaming) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
     if (!["steer", "followUp"].includes(mode) && !String(text || "").startsWith("/")) {
       const sync = await this.syncAdapter?.beforePrompt?.(id);
       if (sync?.sessionId) id = sync.sessionId;
@@ -811,6 +812,7 @@ export class RealSupervisor {
     }
 
     const st = await this._attachById(id);
+    if (this.pendingPrompts.has(id) && !st.session.isStreaming) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
     const extensionCommand = st.session.extensionRunner?.getCommand?.(parsed.name);
     if (extensionCommand) {
       if (parsed.name !== "sync") await this.syncAdapter?.assertSnapshot?.(id, snapshotToken, st.session.sessionFile);

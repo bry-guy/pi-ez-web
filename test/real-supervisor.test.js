@@ -120,21 +120,19 @@ test("automatic checks skip a prompt before SDK streaming begins", async () => {
   assert.deepEqual(await supervisor.trySyncOperation("same-id", () => ({ outcome: "unchanged" })), { outcome: "unchanged" });
 });
 
-test("one settled submission cannot unblock a second pending prompt", async () => {
-  const pending = [];
+test("overlapping prompt admission is rejected before SDK streaming begins", async () => {
+  let settle;
   const supervisor = new RealSupervisor({});
   supervisor.live.set("same-id", { session: {
     model: { provider: "test", id: "model", api: "test" },
     isStreaming: false,
-    prompt: () => new Promise(resolve => pending.push(resolve)),
+    prompt: () => new Promise(resolve => { settle = resolve; }),
   }, pendingMessages: [] });
   await supervisor.message("same-id", "one", "prompt");
-  await supervisor.message("same-id", "two", "prompt");
-  await new Promise(resolve => setImmediate(resolve));
-  pending[0]();
-  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(supervisor.message("same-id", "two", "prompt"), error => error.code === "sync_busy");
   assert.deepEqual(await supervisor.trySyncOperation("same-id", () => { throw new Error("replacement admitted"); }), { outcome: "busy" });
-  pending[1]();
+  await new Promise(resolve => setImmediate(resolve));
+  settle();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(await supervisor.trySyncOperation("same-id", () => ({ outcome: "unchanged" })), { outcome: "unchanged" });
 });
