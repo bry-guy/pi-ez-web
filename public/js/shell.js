@@ -1,4 +1,4 @@
-import { api, openTranscript, refreshState, transcriptLoading } from "./api.js";
+import { api, checkActiveSync, openTranscript, refreshState, transcriptLoading } from "./api.js";
 import { activeOperations, beginOperation, completeOperation, operationForScope, operationHint } from "./operations.js";
 import { store } from "./store.js";
 
@@ -55,7 +55,7 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   });
 }
 
-export function selectSession(projectId, sessionId, { showOperation = false, skipRefresh = false } = {}) {
+export function selectSession(projectId, sessionId, { showOperation = false } = {}) {
   cancelExtensionUiFor(sessionId);
   const project = store.state.projects.find(p => p.id === projectId);
   const node = findNode(project?.sessions, sessionId);
@@ -67,21 +67,13 @@ export function selectSession(projectId, sessionId, { showOperation = false, ski
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
-  const refreshOnSelect = !skipRefresh
-    && store.state.sync?.implementation !== "extension"
-    && node?.synchronized
-    && !store.transcript(sessionId).streaming
-    && !store.transcript(sessionId).compacting;
-  const operation = showOperation && !refreshOnSelect && !transcriptLoading(sessionId)
+  const operation = showOperation && !transcriptLoading(sessionId)
     ? beginOperation("open-session", "Open session", "", "Request started.", sessionId, {
       projectId, contextId: node?.contextId, workspacePath: node?.workspacePath, action: "open-session",
     })
     : null;
-  if (refreshOnSelect) {
-    void refreshSyncConversation();
-  } else {
-    openTranscript(sessionId, { operation });
-  }
+  openTranscript(sessionId, { operation });
+  void checkActiveSync();
 }
 export function selectSessionById(sessionId, options = {}) {
   for (const project of store.state.projects) {
@@ -141,24 +133,6 @@ export async function newChat() {
 
 export async function newProjectSession(projectId) {
   openSessionPicker(projectId, { mode: "new" });
-}
-
-async function refreshSyncConversation() {
-  const id = store.activeKey();
-  const session = id ? store.findAnySession(id) : null;
-  const running = operationForScope("sync-refresh", { sessionId: id });
-  if (!id || !session?.synchronized || running?.status === "running") return;
-  const operation = beginOperation("sync-refresh", "Refresh synchronized conversation", "", "Request started.", id);
-  try {
-    const result = await api.refreshSyncSession(id, operation.id);
-    completeOperation(operation, result);
-    await openTranscript(id, { scrollToLatest: false });
-    void refreshState().catch(error => store.setError(`Could not refresh sync state: ${error.message || error}`));
-  } catch (error) {
-    completeOperation(operation, {}, error);
-    store.setError(`Could not refresh conversation: ${error.message || error.error || error}`);
-    void openTranscript(id, { scrollToLatest: false });
-  }
 }
 
 let closeOperationInFlight = false;

@@ -1,7 +1,7 @@
 import "./shell.js";
 import "./thread.js";
 import "./panels.js";
-import { connectSSE, openTranscript, refreshState, resumeConnection } from "./api.js";
+import { checkActiveSync, connectSSE, openTranscript, refreshState, resumeConnection } from "./api.js";
 import { store } from "./store.js";
 import { restoreLastSelection, selectChat, selectSession } from "./shell.js";
 
@@ -47,6 +47,8 @@ async function registerServiceWorker() {
 
 window.addEventListener("offline", () => store.set({ offline: true, reconnecting: false }));
 window.addEventListener("online", resumeConnection);
+window.addEventListener("focus", checkActiveSync);
+setInterval(() => { void checkActiveSync(); }, 20_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resumeConnection(); });
 window.addEventListener("pageshow", resumeConnection);
 await loadUiConfig();

@@ -29,6 +29,7 @@ function syncFailureText(error) {
     active_lease: details.holder ? `This conversation is in use by ${details.holder}.` : "This conversation is in use by another client.",
     sync_unavailable: "The synchronization service is temporarily unavailable.",
     sync_conflict: "The canonical conversation changed elsewhere; the local copy was preserved.",
+    sync_snapshot_stale: "This conversation was replaced elsewhere. Your draft is preserved; clear it to compose against the replacement.",
     sync_lease_uncertain: "The synchronization lease could not be verified. Try again after the service recovers.",
     sync_session_not_found: "The sync server no longer has this conversation.",
     sync_workspace_setup_required: error?.message || "Prepare the recorded Git workspace before continuing.",
@@ -704,6 +705,7 @@ class PiComposer extends HTMLElement {
     </div></div></div>`;
     this.ta = this.querySelector("textarea");
     this.attachments = [];
+    this.sendingIds = new Set();
     this.attachmentsEl = this.querySelector(".composer-attachments");
     this.imageInput = this.querySelector(".image-input");
     this.attachBtn = this.querySelector(".attach-btn");
@@ -712,7 +714,9 @@ class PiComposer extends HTMLElement {
     this.sendBtn = this.querySelector(".send-btn");
 
     this.ta.addEventListener("input", () => {
-      store.setDraft(this.ta.value);
+      const id = store.activeKey();
+      if (this.ta.value) store.pinDraftSnapshot(id);
+      store.setDraft(this.ta.value, id);
       this.resizeEditor();
       void this.syncCommands();
     });
@@ -740,7 +744,11 @@ class PiComposer extends HTMLElement {
     this.addEventListener("click", e => {
       const removeImage = e.target.closest("[data-remove-image]");
       if (removeImage) {
-        this.attachments.splice(Number(removeImage.dataset.removeImage), 1);
+        const id = store.activeKey();
+        const attachments = store.draftAttachments(id).slice();
+        attachments.splice(Number(removeImage.dataset.removeImage), 1);
+        store.setDraftAttachments(attachments, id);
+        this.attachments = attachments;
         this.renderAttachments();
         return;
       }
@@ -929,6 +937,7 @@ class PiComposer extends HTMLElement {
   }
 
   async handleCommandResult(id, result) {
+    if (store.activeKey() !== id) return;
     const action = result?.action;
     if (action === "settings") { store.set({ view: "settings", commandNotice: null }); return; }
     if (action === "model-picker") {
@@ -949,9 +958,9 @@ class PiComposer extends HTMLElement {
     if (action === "copy") {
       try {
         await navigator.clipboard.writeText(result.text || "");
-        store.set({ commandNotice: { sessionId: id, title: "Copy", message: "Copied the last agent message." } });
+        if (store.activeKey() === id) store.set({ commandNotice: { sessionId: id, title: "Copy", message: "Copied the last agent message." } });
       } catch {
-        store.setError("Clipboard access is unavailable in this browser.");
+        if (store.activeKey() === id) store.setError("Clipboard access is unavailable in this browser.");
       }
       return;
     }
@@ -965,7 +974,7 @@ class PiComposer extends HTMLElement {
     }
     if (action === "refresh") {
       await openTranscript(id);
-      store.set({ commandNotice: result.notice === false ? null : { sessionId: id, title: "Pi", message: result.message || "Done." } });
+      if (store.activeKey() === id) store.set({ commandNotice: result.notice === false ? null : { sessionId: id, title: "Pi", message: result.message || "Done." } });
       return;
     }
     if (action === "sidebar") { store.set({ railOpen: true, drawerOpen: true, commandNotice: null }); return; }
@@ -977,11 +986,13 @@ class PiComposer extends HTMLElement {
     if (action === "fork") {
       try {
         const result = await api.forkSession(id);
+        if (store.activeKey() !== id) return;
         await refreshState();
+        if (store.activeKey() !== id) return;
         if (result.projectId) selectSession(result.projectId, result.id);
         else selectChat(result.id);
       } catch (error) {
-        store.setError(error.message || error.error || "Could not fork this session.");
+        if (store.activeKey() === id) store.setError(error.message || error.error || "Could not fork this session.");
       }
       return;
     }
@@ -993,18 +1004,34 @@ class PiComposer extends HTMLElement {
   }
 
   async addFiles(files) {
+    const id = store.activeKey();
+    if (!id) return;
     for (const file of [...(files || [])]) {
-      if (!file.type.startsWith("image/") || this.attachments.length >= 4) continue;
+      const draft = store.draftData(id);
+      if (!file.type.startsWith("image/") || store.draftAttachments(id).length + (draft?.pendingAttachments || 0) >= 4) continue;
       if (file.size > 6_000_000) { store.setError("Images must be smaller than 6 MB."); continue; }
-      const data = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      this.attachments.push({ type: "image", data, mimeType: file.type, name: file.name });
+      store.pinDraftSnapshot(id);
+      store.setDraftPendingAttachments((draft?.pendingAttachments || 0) + 1, id);
+      if (store.activeKey() === id) this.sync();
+      try {
+        const data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        store.setDraftAttachments([...store.draftAttachments(id), { type: "image", data, mimeType: file.type, name: file.name }], id);
+        if (store.activeKey() === id) {
+          this.attachments = store.draftAttachments(id).slice();
+          this.renderAttachments();
+        }
+      } catch {
+        store.setError("Could not read attached image.");
+      } finally {
+        store.setDraftPendingAttachments(Math.max(0, (store.draftData(id)?.pendingAttachments || 0) - 1), id);
+        if (store.activeKey() === id) this.sync();
+      }
     }
-    this.renderAttachments();
   }
   renderAttachments() {
     this.attachmentsEl.innerHTML = this.attachments.map((image, index) => `<div class="attachment-thumb"><img src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="${esc(image.name || "Attached image")}"><button type="button" data-remove-image="${index}" aria-label="Remove image">×</button></div>`).join("");
@@ -1012,53 +1039,70 @@ class PiComposer extends HTMLElement {
   async send(forcedMode) {
     const id = store.activeKey();
     const text = this.ta.value.trim();
-    if (!id || (!text && !this.attachments.length) || store.transcript(id).compacting) return;
-    const images = this.attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
+    const rawText = this.ta.value;
+    const draft = store.draftData(id);
+    const attachments = store.draftAttachments(id).slice();
+    if (!id || (!text && !attachments.length) || store.transcript(id).compacting
+      || draft?.pendingAttachments || this.sendingIds.has(id)) return;
+    const snapshotToken = store.pinDraftSnapshot(id);
+    const draftRecord = store.draftData(id);
+    const snapshotTokenCaptured = Object.hasOwn(draftRecord, "snapshotToken");
+    const session = store.findAnySession(id);
+    const writeToken = session?.synchronized ? snapshotToken : undefined;
+    const images = attachments.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
     const pendingId = !text.startsWith("/") && !text.startsWith("!")
       ? this.addPendingMessage(id, text, images)
       : null;
+    this.sendingIds.add(id);
+    store.setDraftSending(true, id);
     this.scrollToLatest();
     this.ta.value = "";
     this.expanded = false;
     this.resizeEditor();
     this.attachments = [];
     this.renderAttachments();
-    store.setDraft("");
+    store.setDraft("", id);
+    store.setDraftAttachments([], id);
+    const sentRevision = store.draftData(id)?.revision;
+    delete store.draftData(id)?.snapshotToken;
     store.set({ commandNotice: null });
-    if (text.startsWith("!")) {
-      try { await api.bang(id, text.slice(1).trim()); }
-      catch (err) { store.setError(syncFailureMessage(err, "Command failed")); }
-      return;
-    }
+    this.sync();
     const streaming = store.transcript(id).streaming;
     const mode = forcedMode || (streaming ? "steer" : "prompt");
     try {
-      if (text.startsWith("/")) {
-        const result = await api.command(id, text, mode);
-        await this.handleCommandResult(id, result);
+      if (text.startsWith("!")) {
+        await api.bang(id, text.slice(1).trim(), writeToken);
+      } else if (text.startsWith("/")) {
+        const commandToken = session?.synchronized && !/^\/sync(?:\s|$)/.test(text) ? snapshotToken : undefined;
+        const result = await api.command(id, text, mode, commandToken);
+        if (store.activeKey() === id) await this.handleCommandResult(id, result);
       } else {
-        await api.message(id, text, mode, images, pendingId);
-        // The optimistic record is already visible; SSE replaces it with Pi's
-        // canonical record when the server accepts the prompt.
+        await api.message(id, text, mode, images, pendingId, writeToken);
       }
+      if (store.draftData(id)?.revision === sentRevision) store.clearDraft(id);
     } catch (err) {
       const message = err.error === "model_required"
         ? "No model is available."
         : syncFailureText(err) || err.message || err.error || String(err);
       this.markPendingMessage(id, pendingId, message);
-      if (err.error === "model_required") {
-        store.setDraft(text);
-        this.ta.value = text;
-        this.attachments = images;
-        this.renderAttachments();
-        store.setError("No model is available. Connect a provider or choose one in Settings.");
-      } else {
-        store.setDraft(text);
-        this.ta.value = text;
-        this.attachments = images;
-        this.renderAttachments();
-        store.setError(syncFailureMessage(err, "Send failed"));
+      const currentDraft = store.draftData(id);
+      if (currentDraft?.revision === sentRevision) {
+        if (snapshotTokenCaptured) currentDraft.snapshotToken = snapshotToken;
+        store.setDraft(rawText, id);
+        store.setDraftAttachments(attachments, id);
       }
+      if (store.activeKey() === id) {
+        this.ta.value = store.draft(id);
+        this.attachments = store.draftAttachments(id).slice();
+        this.renderAttachments();
+      }
+      store.setError(err.error === "model_required"
+        ? "No model is available. Connect a provider or choose one in Settings."
+        : syncFailureMessage(err, "Send failed"));
+    } finally {
+      this.sendingIds.delete(id);
+      store.setDraftSending(false, id);
+      if (store.activeKey() === id) this.sync();
     }
   }
 
@@ -1070,7 +1114,11 @@ class PiComposer extends HTMLElement {
     this.ta.placeholder = store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…";
     const activeId = store.activeKey();
     const draft = store.draft(activeId);
-    if (activeId !== this.draftSessionId) this.expanded = false;
+    if (activeId !== this.draftSessionId) {
+      this.expanded = false;
+      this.attachments = store.draftAttachments(activeId).slice();
+      this.renderAttachments();
+    }
     if (activeId !== this.draftSessionId || (this.ta.value !== draft && document.activeElement !== this.ta)) this.ta.value = draft;
     this.draftSessionId = activeId;
     if (activeId !== this.commandSessionId) {
@@ -1090,8 +1138,11 @@ class PiComposer extends HTMLElement {
       : t.streaming ? "Enter a steering message, alt+enter a follow-up…"
         : store.inProject() && p ? `Ask about ${p.name}…` : "Send a message…");
     this.stopBtn.classList.toggle("hidden", !t.streaming);
-    // Keep Send available during a turn so it can steer or queue a follow-up.
-    this.sendBtn.disabled = compacting;
+    const draftState = store.draftData(activeId);
+    this.ta.disabled = !!draftState?.sending;
+    this.attachBtn.disabled = !!draftState?.sending;
+    this.imageInput.disabled = !!draftState?.sending;
+    this.sendBtn.disabled = compacting || !!draftState?.sending || !!draftState?.pendingAttachments;
     this.resizeEditor();
   }
 }

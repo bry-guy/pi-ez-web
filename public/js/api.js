@@ -57,6 +57,7 @@ export const api = {
   providerLogout: providerId => fetch(`/api/providers/${encodeURIComponent(providerId)}/logout`, { method: "POST" }).then(j),
   syncSession: (id, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   refreshSyncSession: requestSyncRefresh,
+  checkSyncSession: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync/check`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
   fetchProject: (id, operationId = null) => fetch(`/api/projects/${encodeURIComponent(id)}/fetch`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
@@ -99,17 +100,17 @@ export const api = {
   },
   transcript: (id) => fetch(`/api/sessions/${id}/transcript`).then(j),
   meta: (id) => fetch(`/api/sessions/${id}/meta`).then(j),
-  message: (id, text, mode = "prompt", images = [], clientMessageId = null) => fetch(`/api/sessions/${id}/message`, {
-    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images, ...(clientMessageId ? { clientMessageId } : {}) }),
+  message: (id, text, mode = "prompt", images = [], clientMessageId = null, snapshotToken) => fetch(`/api/sessions/${id}/message`, {
+    method: "POST", headers: JH, body: JSON.stringify({ text, mode, images, ...(clientMessageId ? { clientMessageId } : {}), ...(snapshotToken !== undefined ? { snapshotToken } : {}) }),
   }).then(j),
   stop: (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" }).then(j),
-  bang: (id, cmd) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd }) }).then(j),
+  bang: (id, cmd, snapshotToken) => fetch(`/api/sessions/${id}/bang`, { method: "POST", headers: JH, body: JSON.stringify({ cmd, ...(snapshotToken !== undefined ? { snapshotToken } : {}) }) }).then(j),
   setModel: (id, model) => fetch(`/api/sessions/${id}/model`, { method: "POST", headers: JH, body: JSON.stringify({ model }) }).then(j),
   context: id => fetch(`/api/sessions/${encodeURIComponent(id)}/context`).then(j),
   thinking: id => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`).then(j),
   setThinking: (id, level) => fetch(`/api/sessions/${encodeURIComponent(id)}/thinking`, { method: "POST", headers: JH, body: JSON.stringify({ level }) }).then(j),
   commands: id => fetch(`/api/sessions/${encodeURIComponent(id)}/commands`).then(j),
-  command: (id, text, mode = "prompt") => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode }) }).then(j),
+  command: (id, text, mode = "prompt", snapshotToken) => fetch(`/api/sessions/${encodeURIComponent(id)}/command`, { method: "POST", headers: JH, body: JSON.stringify({ text, mode, ...(snapshotToken !== undefined ? { snapshotToken } : {}) }) }).then(j),
   extensionUiResponse: (sessionId, requestId, body) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "POST", headers: JH, body: JSON.stringify(body || {}) }).then(j),
   extensionUiCancel: (sessionId, requestId) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "DELETE" }).then(j),
   exportSession: (id, format = "html") => `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
@@ -202,8 +203,8 @@ async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
   for (let attempt = 0; ; attempt++) {
     try { return await api.transcript(id); }
     catch (err) {
-      // Server-side 4xx/5xx carry an `error` code — don't retry those.
-      if (err.error || attempt >= delays.length) throw err;
+      const staleSnapshot = err.status === 409 && err.error === "sync_snapshot_stale";
+      if ((err.error && !staleSnapshot) || attempt >= delays.length) throw err;
       await sleep(delays[attempt]);
     }
   }
@@ -211,8 +212,10 @@ async function fetchTranscriptWithRetry(id, delays = [300, 900, 2000]) {
 
 export function transcriptLoading(id) { return loading.has(id); }
 
+const reloadAfterLoad = new Set();
 export async function openTranscript(id, { scrollToLatest = true, operation = null } = {}) {
-  if (!id || loading.has(id)) return;
+  if (!id) return;
+  if (loading.has(id)) { reloadAfterLoad.add(id); return; }
   const startedAt = Date.now();
   operation && appendOperationEvent(operation.id, { type: "request", message: `GET /api/sessions/${id}/transcript` });
   loading.add(id);
@@ -226,6 +229,7 @@ export async function openTranscript(id, { scrollToLatest = true, operation = nu
     }
     store.state.transcripts[id] = {
       records,
+      snapshotToken: snap.snapshotToken ?? null,
       streaming: !!snap.streaming,
       compacting: !!snap.compacting,
       seq: snap.seq ?? -1,
@@ -246,6 +250,7 @@ export async function openTranscript(id, { scrollToLatest = true, operation = nu
     buffers.delete(id);
     loading.delete(id);
     store.notify("transcript");
+    if (reloadAfterLoad.delete(id)) queueMicrotask(() => void openTranscript(id, { scrollToLatest: false }));
   }
 }
 
@@ -255,7 +260,9 @@ let recoveryTimer = null;
 let recoveryAttempt = 0;
 let recoveryInFlight = false;
 let reloadIssued = false;
-const syncRefreshInFlight = new Set();
+const pendingSessionSwitches = new Map();
+let syncAutoTask = null;
+let syncAutoPending = false;
 
 function stopRecovery() {
   if (recoveryTimer) clearTimeout(recoveryTimer);
@@ -285,6 +292,7 @@ async function recoverConnection() {
     }
     await refreshState();
     stopRecovery();
+    void checkActiveSync();
   } catch {
     recoveryAttempt += 1;
     const delay = Math.min(10000, 500 * (2 ** Math.min(recoveryAttempt, 4)));
@@ -304,29 +312,110 @@ function startRecovery() {
   scheduleRecovery(250);
 }
 
-async function refreshActiveSync(id) {
-  if (!id || syncRefreshInFlight.has(id)) return;
+function viewingSession(id) {
+  return !!id && store.state.view === "chat" && !store.state.chatId
+    && store.state.sessionId === id && store.activeKey() === id;
+}
+
+function canCatchUpSession(id) {
+  const transcript = store.transcript(id);
+  return viewingSession(id)
+    && globalThis.document?.visibilityState === "visible"
+    && globalThis.navigator?.onLine !== false && !store.state.offline
+    && !transcript.streaming && !transcript.compacting && !store.hasDraft(id);
+}
+
+function showCatchUpNotice(id) {
+  const notice = store.state.commandNotice;
+  if (notice?.sessionId === id && notice.title === "Pi Sync") return;
+  store.set({ commandNotice: { sessionId: id, title: "Pi Sync", message: "A replacement is ready in another tab. Finish or clear this draft to catch up." } });
+}
+
+function clearCatchUpNotice(id) {
+  const notice = store.state.commandNotice;
+  if (notice?.sessionId === id && notice.title === "Pi Sync") store.set({ commandNotice: null });
+}
+
+async function openSwitchedSession(sourceId, targetId) {
+  const stillViewingSource = () => viewingSession(sourceId);
+  if (!stillViewingSource()) return false;
+  const { selectSessionById } = await import("./shell.js");
+  if (!stillViewingSource()) return false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await refreshState();
+    if (!stillViewingSource()) return false;
+    if (targetId === sourceId) {
+      await openTranscript(sourceId, { scrollToLatest: false });
+      return stillViewingSource();
+    }
+    if (selectSessionById(targetId)) return true;
+  }
+  throw new Error("The synchronized conversation is not available locally.");
+}
+
+function canCheckActiveSync(id) {
   const session = findSessionInState(store.state, id);
   const transcript = store.transcript(id);
-  if (store.state.sync?.implementation === "extension" || !session?.synchronized || transcript.streaming || transcript.compacting) {
-    void openTranscript(id);
+  return viewingSession(id) && !!session?.synchronized
+    && globalThis.document?.visibilityState === "visible"
+    && globalThis.navigator?.onLine !== false && !store.state.offline
+    && !transcript.streaming && !transcript.compacting && !store.hasDraft(id);
+}
+
+export async function checkActiveSync() {
+  const id = store.activeKey();
+  if (!id || !viewingSession(id)) return;
+  if (syncAutoTask) {
+    syncAutoPending = true;
+    await syncAutoTask;
     return;
   }
-  syncRefreshInFlight.add(id);
-  try {
-    await api.refreshSyncSession(id);
-    await openTranscript(id, { scrollToLatest: false });
-    await refreshState();
-  } catch (error) {
-    if ([423, 409].includes(error.status)) {
-      void refreshState().catch(() => {});
-    } else {
-      store.setError(`Could not refresh synchronized conversation: ${error.message || error}`);
+
+  const targetId = pendingSessionSwitches.get(id);
+  if (targetId !== undefined && !canCatchUpSession(id)) {
+    showCatchUpNotice(id);
+    return;
+  }
+  if (targetId === undefined && !canCheckActiveSync(id)) return;
+
+  const task = (async () => {
+    if (targetId !== undefined) {
+      try {
+        const opened = await openSwitchedSession(id, targetId);
+        if (opened && pendingSessionSwitches.get(id) === targetId) {
+          pendingSessionSwitches.delete(id);
+          clearCatchUpNotice(id);
+        }
+      } catch (error) {
+        if (viewingSession(id)) store.setError(`Could not open the synchronized conversation: ${error.message || error}`);
+      }
+      return;
     }
-  } finally {
-    syncRefreshInFlight.delete(id);
+    try {
+      const result = await api.checkSyncSession(id);
+      if (!viewingSession(id) || store.hasDraft(id)) return;
+      const tokenChanged = typeof result.snapshotToken === "string"
+        && result.snapshotToken !== store.transcript(id).snapshotToken;
+      if (result.outcome !== "refreshed" && !tokenChanged) return;
+      await openTranscript(id, { scrollToLatest: false });
+      if (!viewingSession(id)) return;
+      await refreshState();
+    } catch (error) {
+      if (viewingSession(id)) store.setError(`Could not check synchronized conversation: ${error.message || error}`);
+    }
+  })();
+  syncAutoTask = task;
+  try { await task; }
+  finally {
+    if (syncAutoTask === task) syncAutoTask = null;
+    if (syncAutoPending) {
+      syncAutoPending = false;
+      queueMicrotask(() => void checkActiveSync());
+    }
   }
 }
+
+store.subscribe(what => { if (what === "draft") void checkActiveSync(); });
 
 export function resumeConnection() {
   if (globalThis.navigator?.onLine === false) {
@@ -335,8 +424,7 @@ export function resumeConnection() {
   }
   store.set({ offline: false });
   connectSSE();
-  const id = store.activeKey();
-  if (id) void refreshActiveSync(id);
+  void checkActiveSync();
   void recoverConnection();
 }
 
@@ -344,10 +432,12 @@ export function connectSSE() {
   if (es) es.close();
   es = new EventSource(`/api/events?build=${encodeURIComponent(store.state.buildId || "")}`);
   es.onopen = () => {
-    if (!recoveryTimer && !recoveryInFlight) return;
-    if (recoveryTimer) clearTimeout(recoveryTimer);
-    recoveryTimer = null;
-    void recoverConnection();
+    if (recoveryTimer || recoveryInFlight) {
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+      void recoverConnection();
+    }
+    void checkActiveSync();
   };
   es.onmessage = (m) => {
     let evt;
@@ -374,19 +464,11 @@ function tOf(id) {
 }
 function byId(records, id) { return records.find(r => r.id === id); }
 
-async function openSwitchedSession(id) {
-  const { selectSessionById } = await import("./shell.js");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await refreshState();
-    if (selectSessionById(id, { skipRefresh: true })) return;
-  }
-  throw new Error("The synchronized conversation is not available locally.");
-}
-
 export function applyEvent(evt, replay = false) {
   if (evt.type === "session_switched" && evt.toSessionId) {
-    void openSwitchedSession(evt.toSessionId)
-      .catch(error => store.setError(`Could not open the synchronized conversation: ${error.message || error}`));
+    if (!viewingSession(evt.sessionId)) return;
+    pendingSessionSwitches.set(evt.sessionId, evt.toSessionId);
+    void checkActiveSync();
     return;
   }
   if (evt.type === "extension_ui_request") {

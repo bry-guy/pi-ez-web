@@ -183,12 +183,81 @@ export const store = {
     return this.state.chatId || this.state.sessionId;
   },
   draft(id = this.activeKey()) {
-    return id ? this.state.drafts[id] || "" : "";
+    if (!id) return "";
+    const draft = this.state.drafts[id];
+    return typeof draft === "string" ? draft : draft?.text || "";
+  },
+  draftData(id = this.activeKey()) {
+    if (!id) return null;
+    const draft = this.state.drafts[id];
+    if (typeof draft === "string") return this.state.drafts[id] = { text: draft, attachments: [] };
+    return draft || null;
+  },
+  ensureDraft(id) {
+    return this.draftData(id) || (id ? (this.state.drafts[id] = { text: "", attachments: [] }) : null);
+  },
+  draftAttachments(id = this.activeKey()) {
+    const attachments = this.draftData(id)?.attachments;
+    return Array.isArray(attachments) ? attachments : [];
+  },
+  draftSnapshotToken(id = this.activeKey()) {
+    const draft = this.draftData(id);
+    return draft && Object.hasOwn(draft, "snapshotToken") ? draft.snapshotToken : undefined;
+  },
+  pinDraftSnapshot(id = this.activeKey()) {
+    if (!id) return undefined;
+    const draft = this.ensureDraft(id);
+    if (!Object.hasOwn(draft, "snapshotToken")) draft.snapshotToken = this.state.transcripts[id]?.snapshotToken;
+    return draft.snapshotToken;
   },
   setDraft(value, id = this.activeKey()) {
     if (!id) return;
-    if (value) this.state.drafts[id] = value;
-    else delete this.state.drafts[id];
+    const draft = this.ensureDraft(id);
+    const text = value || "";
+    if (text && text !== draft.text) this.pinDraftSnapshot(id);
+    if (text !== draft.text) draft.revision = (draft.revision || 0) + 1;
+    draft.text = text;
+    this.trimDraft(id);
+    this.notify("draft");
+  },
+  setDraftAttachments(attachments, id = this.activeKey()) {
+    if (!id) return;
+    const draft = this.ensureDraft(id);
+    const next = attachments || [];
+    if (next.length) this.pinDraftSnapshot(id);
+    if (next !== draft.attachments) draft.revision = (draft.revision || 0) + 1;
+    draft.attachments = next;
+    this.trimDraft(id);
+    this.notify("draft");
+  },
+  setDraftPendingAttachments(count, id = this.activeKey()) {
+    if (!id) return;
+    const draft = this.ensureDraft(id);
+    if (count) draft.pendingAttachments = count;
+    else delete draft.pendingAttachments;
+    this.trimDraft(id);
+    this.notify("draft");
+  },
+  setDraftSending(sending, id = this.activeKey()) {
+    if (!id) return;
+    const draft = this.ensureDraft(id);
+    if (sending) draft.sending = true;
+    else delete draft.sending;
+    this.trimDraft(id);
+    this.notify("draft");
+  },
+  hasDraft(id = this.activeKey()) {
+    const draft = this.draftData(id);
+    return !!(this.draft(id) || draft?.attachments?.length || draft?.pendingAttachments || draft?.sending);
+  },
+  trimDraft(id) {
+    const draft = this.state.drafts[id];
+    if (draft && !this.draft(id) && !draft.attachments?.length && !draft.pendingAttachments && !draft.sending) delete this.state.drafts[id];
+  },
+  clearDraft(id = this.activeKey()) {
+    if (!id) return;
+    delete this.state.drafts[id];
+    this.notify("draft");
   },
   transcript(id = this.activeKey()) {
     return this.state.transcripts[id] || { records: [], streaming: false };

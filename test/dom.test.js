@@ -61,7 +61,9 @@ async function boot() {
   let stateReads = 0;
   dom.setNarrowViewport = value => { narrowViewport = value; };
   const realSetInterval = globalThis.setInterval;
+  dom.window.__intervals = [];
   globalThis.setInterval = (fn, ms, ...args) => {
+    if (ms === 20_000) dom.window.__intervals.push(fn);
     const timer = realSetInterval(fn, ms, ...args);
     timer.unref?.();
     return timer;
@@ -88,6 +90,7 @@ async function boot() {
         if (dom.window.__addSyncTargetOnStateRefresh && stateReads > 1 && !state.projects[0].sessions.some(session => session.id === "sync-target")) {
           state.projects[0].sessions.push({ id: "sync-target", title: "Canonical session", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] });
         }
+        if (dom.window.__holdState) return new Promise(resolve => { dom.window.__resolveState = () => resolve(json(state)); });
         return json(state);
       }
       if (url === "/api/models") return json({ models: state.models });
@@ -101,7 +104,16 @@ async function boot() {
         return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } });
       }
       if (url === "/api/github/device-login/ghf1" && options.method === "DELETE") return json({ ok: true });
-      if (url === "/api/sessions/s1/transcript") return json(transcript);
+      if (url.startsWith("/api/sessions/") && url.endsWith("/transcript")) {
+        dom.window.__transcriptReads = (dom.window.__transcriptReads || 0) + 1;
+        if (dom.window.__staleTranscriptResponses > 0) {
+          dom.window.__staleTranscriptResponses--;
+          return json({ error: "sync_snapshot_stale" }, false, 409);
+        }
+        if (dom.window.__transcriptError) return json(dom.window.__transcriptError, false, dom.window.__transcriptErrorStatus || 409);
+        if (dom.window.__holdTranscript) return new Promise(resolve => { (dom.window.__transcriptResolvers ||= []).push(() => resolve(json(dom.window.__transcriptResponse || transcript))); });
+        return json(dom.window.__transcriptResponse || transcript);
+      }
       if (url.includes("/api/sessions/") && url.includes("/extension-ui/") && options.method === "POST") {
         dom.window.__extensionUiResponses = dom.window.__extensionUiResponses || [];
         dom.window.__extensionUiResponses.push(JSON.parse(options.body || "{}"));
@@ -123,6 +135,17 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-fetch";
         return json({ ok: true, projectId: "p1", fetched: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Fetched Git branches." }] } });
       }
+      if (url.endsWith("/sync/check") && options.method === "POST") {
+        dom.window.__syncCheckCalls = (dom.window.__syncCheckCalls || 0) + 1;
+        dom.window.__syncCheckActive = (dom.window.__syncCheckActive || 0) + 1;
+        dom.window.__syncCheckMaxActive = Math.max(dom.window.__syncCheckMaxActive || 0, dom.window.__syncCheckActive);
+        const finish = () => {
+          dom.window.__syncCheckActive--;
+          return json({ outcome: dom.window.__syncCheckOutcome || "unchanged", sessionId: "s1", snapshotToken: dom.window.__syncCheckToken || "snapshot-1" });
+        };
+        if (dom.window.__holdSyncCheck) return new Promise(resolve => { (dom.window.__syncCheckResolvers ||= []).push(() => resolve(finish())); });
+        return finish();
+      }
       if (url === "/api/sessions/s1/sync/refresh" && options.method === "POST") {
         dom.window.__refreshCalls = (dom.window.__refreshCalls || 0) + 1;
         const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-refresh";
@@ -134,12 +157,27 @@ async function boot() {
         const operationId = options.headers?.["x-pi-operation-id"] || "test-close";
         return json({ ok: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Session closed." }] } });
       }
+      if (url.endsWith("/message") && options.method === "POST") {
+        const request = { url, body: JSON.parse(options.body || "{}") };
+        dom.window.__writeRequests = [...(dom.window.__writeRequests || []), request];
+        return dom.window.__staleWrites ? json({ error: "sync_snapshot_stale" }, false, 409) : json({ ok: true });
+      }
+      if (url.endsWith("/bang") && options.method === "POST") {
+        const request = { url, body: JSON.parse(options.body || "{}") };
+        dom.window.__writeRequests = [...(dom.window.__writeRequests || []), request];
+        return dom.window.__staleWrites ? json({ error: "sync_snapshot_stale" }, false, 409) : json({ ok: true });
+      }
       if (url === "/api/sessions/s1/commands") return json({ commands: [
         { name: "settings", description: "Open settings", source: "pi" },
         { name: "model", description: "Select a model", source: "pi" },
         { name: "name", description: "Set the session display name", source: "pi" },
       ] });
-      if (url === "/api/sessions/s1/command") return json({ ok: true, action: "session_meta" });
+      if (url === "/api/sessions/s1/command" && options.method === "POST") {
+        const request = { url, body: JSON.parse(options.body || "{}") };
+        dom.window.__writeRequests = [...(dom.window.__writeRequests || []), request];
+        if (dom.window.__staleWrites && !request.body.text.startsWith("/sync")) return json({ error: "sync_snapshot_stale" }, false, 409);
+        return json({ ok: true, action: request.body.text.startsWith("/sync") ? "notice" : "session_meta", message: "sync is available" });
+      }
       if (url === "/api/sessions/s1/branch-context" && options.method === "POST") {
         const project = state.projects[0];
         const session = project.sessions.find(item => item.id === "s1");
@@ -213,11 +251,30 @@ async function boot() {
 test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   const dom = await boot();
   const { store } = await import("../public/js/store.js");
-  const { api, applyEvent, refreshState, shouldBufferEvent } = await import("../public/js/api.js");
+  const { api, applyEvent, checkActiveSync, openTranscript, refreshState, shouldBufferEvent } = await import("../public/js/api.js");
   assert.equal(shouldBufferEvent("text_delta"), true);
   assert.equal(shouldBufferEvent("session_switched"), false);
+  await api.message("s1", "token message", "prompt", [], "token-client", "message-token");
+  await api.bang("s1", "pwd", "bang-token");
+  await api.command("s1", "/skill test", "prompt", "command-token");
+  await api.command("s1", "/sync status");
+  assert.deepEqual(dom.window.__writeRequests.map(request => request.body.snapshotToken), [
+    "message-token", "bang-token", "command-token", undefined,
+  ]);
+  let transcriptReads = dom.window.__transcriptReads || 0;
+  dom.window.__staleTranscriptResponses = 1;
+  await openTranscript("s1");
+  assert.equal(dom.window.__transcriptReads, transcriptReads + 2, "only sync_snapshot_stale transcript responses retry");
+  transcriptReads = dom.window.__transcriptReads;
+  dom.window.__transcriptError = { error: "other_conflict" };
+  await openTranscript("s1");
+  assert.equal(dom.window.__transcriptReads, transcriptReads + 1, "other transcript 409 errors fail fast");
+  dom.window.__transcriptError = null;
+  store.set({ error: null });
   const { openSessionPicker, selectSession } = await import("../public/js/shell.js");
   const root = dom.window.document.querySelector("pi-app");
+  Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
+  assert.equal(dom.window.__intervals.length, 1, "one 20-second auto-check loop is installed");
   assert.ok(root.querySelector("pi-sidebar"));
   assert.match(root.querySelector(".model-chip").textContent, /Mock Fast/);
   const parentSession = store.state.projects[0].sessions[0];
@@ -360,11 +417,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("header.bar > .sync-badge"), null, "Sync status stays in the title group");
   root.querySelector("[data-act='close-session-picker']").click();
   assert.equal(root.querySelector("pi-header [data-act='refresh-sync']"), null, "Sync refresh is available through slash commands only");
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "snapshot-1" };
   selectSession("p1", "sibling");
   await new Promise(resolve => setTimeout(resolve, 20));
   selectSession("p1", "s1");
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(dom.window.__refreshCalls, 1);
+  assert.equal(dom.window.__syncCheckCalls, 1, "selection checks sync state through the automatic endpoint");
+  assert.equal(dom.window.__refreshCalls || 0, 0, "automatic checks do not use explicit manual refresh");
   dom.window.__holdRefresh = true;
   const firstRefresh = api.refreshSyncSession("s1");
   const secondRefresh = api.refreshSyncSession("s1");
@@ -372,7 +431,141 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   dom.window.__resolveRefresh();
   await Promise.all([firstRefresh, secondRefresh]);
   dom.window.__holdRefresh = false;
-  assert.equal(dom.window.__refreshCalls, 2);
+  assert.equal(dom.window.__refreshCalls, 1);
+
+  const checkCount = () => dom.window.__syncCheckCalls || 0;
+  let checks = checkCount();
+  store.state.drafts.s1 = { text: "pending", attachments: [] };
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "draft text suppresses automatic checks");
+  store.state.drafts.s1 = { text: "", attachments: [{ data: "image" }] };
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "attachments suppress automatic checks");
+  store.state.drafts.s1 = { text: "", attachments: [], pendingAttachments: 1 };
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "attachment reads suppress automatic checks");
+  delete store.state.drafts.s1;
+  store.transcript("s1").streaming = true;
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "streaming suppresses automatic checks");
+  store.transcript("s1").streaming = false;
+  store.transcript("s1").compacting = true;
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "compaction suppresses automatic checks");
+  store.transcript("s1").compacting = false;
+  store.set({ offline: true });
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "offline suppresses automatic checks");
+  store.set({ offline: false });
+  Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "hidden" });
+  await checkActiveSync();
+  assert.equal(checkCount(), checks, "hidden tabs suppress automatic checks");
+  Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
+  dom.window.dispatchEvent(new dom.window.Event("focus"));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(checkCount(), ++checks, "focus triggers an automatic check");
+  dom.window.__intervals[0]();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(checkCount(), ++checks, "the single timer triggers an automatic check");
+  dom.window.__holdSyncCheck = true;
+  const overlapping = checkActiveSync();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  dom.window.dispatchEvent(new dom.window.Event("focus"));
+  dom.window.__intervals[0]();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(checkCount(), ++checks, "overlapping triggers share one in-flight check");
+  assert.equal(dom.window.__syncCheckMaxActive, 1);
+  dom.window.__holdSyncCheck = false;
+  dom.window.__syncCheckResolvers.shift()();
+  await overlapping;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(checkCount(), ++checks, "a coalesced trigger runs after the previous check");
+  assert.equal(dom.window.__syncCheckMaxActive, 1);
+  store.set({ sync: { ...store.state.sync, implementation: "extension" } });
+  const refreshCallsBeforeExtensionCheck = dom.window.__refreshCalls;
+  await checkActiveSync();
+  assert.equal(checkCount(), ++checks, "extension-backed sessions still use automatic checks");
+  assert.equal(dom.window.__refreshCalls, refreshCallsBeforeExtensionCheck, "automatic extension checks remain separate from manual refresh");
+  store.set({ sync: { ...store.state.sync, implementation: "fake" } });
+  dom.window.__syncCheckToken = "snapshot-next";
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "snapshot-next" };
+  transcriptReads = dom.window.__transcriptReads;
+  await checkActiveSync();
+  assert.equal(dom.window.__transcriptReads, transcriptReads + 1, "unchanged checks still reload when the binding token changed");
+  assert.equal(store.transcript("s1").snapshotToken, "snapshot-next");
+
+  const composer = root.querySelector("pi-composer");
+  const textarea = composer.querySelector("textarea");
+  store.transcript("s1").snapshotToken = "token-old";
+  textarea.value = "draft before transcript refresh";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(store.draftSnapshotToken("s1"), "token-old");
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "token-new" };
+  await openTranscript("s1");
+  assert.equal(store.transcript("s1").snapshotToken, "token-new");
+  assert.equal(store.draftSnapshotToken("s1"), "token-old", "transcript loads never upgrade pinned draft tokens");
+  assert.equal(textarea.value, "draft before transcript refresh");
+
+  dom.window.__staleWrites = true;
+  let writes = dom.window.__writeRequests.length;
+  await composer.send();
+  assert.equal(dom.window.__writeRequests.length, ++writes);
+  assert.equal(dom.window.__writeRequests.at(-1).body.snapshotToken, "token-old");
+  assert.equal(textarea.value, "draft before transcript refresh");
+  assert.equal(store.draftSnapshotToken("s1"), "token-old");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(dom.window.__writeRequests.length, writes, "stale message failures are never automatically resent");
+
+  textarea.value = "!pwd";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await composer.send();
+  assert.equal(dom.window.__writeRequests.at(-1).body.snapshotToken, "token-old", "bang requests use the pinned token");
+  assert.equal(textarea.value, "!pwd", "stale bang failures preserve the draft");
+
+  textarea.value = "/skill test";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await composer.send();
+  assert.equal(dom.window.__writeRequests.at(-1).body.snapshotToken, "token-old", "prompt-producing commands use the pinned token");
+  assert.equal(textarea.value, "/skill test", "stale command failures preserve the draft");
+
+  textarea.value = "/sync status";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await composer.send();
+  assert.equal(Object.hasOwn(dom.window.__writeRequests.at(-1).body, "snapshotToken"), false, "/sync management remains tokenless");
+  assert.equal(store.draft("s1"), "");
+  dom.window.__staleWrites = false;
+
+  const originalFileReader = globalThis.FileReader;
+  let finishFileRead;
+  globalThis.FileReader = class {
+    readAsDataURL() { finishFileRead = () => { this.result = "data:image/png;base64,Zm9v"; this.onload(); }; }
+  };
+  store.transcript("s1").snapshotToken = "attachment-token";
+  const attachmentFile = new dom.window.File(["image"], "draft.png", { type: "image/png" });
+  const fileRead = composer.addFiles([attachmentFile]);
+  assert.equal(store.draftSnapshotToken("s1"), "attachment-token", "attachments pin the token before FileReader completes");
+  store.transcript("s1").snapshotToken = "attachment-replacement";
+  dom.window.__syncCheckToken = "attachment-replacement";
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "attachment-replacement" };
+  await openTranscript("s1");
+  assert.equal(store.draftSnapshotToken("s1"), "attachment-token");
+  finishFileRead();
+  await fileRead;
+  assert.equal(store.draftAttachments("s1").length, 1);
+  textarea.value = "attachment draft";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  dom.window.__staleWrites = true;
+  await composer.send();
+  assert.equal(dom.window.__writeRequests.at(-1).body.snapshotToken, "attachment-token");
+  assert.equal(dom.window.__writeRequests.at(-1).body.images[0].data, "Zm9v");
+  assert.equal(textarea.value, "attachment draft");
+  assert.equal(store.draftAttachments("s1").length, 1, "stale failures preserve attachments");
+  globalThis.FileReader = originalFileReader;
+  textarea.value = "";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  composer.querySelector("[data-remove-image]").click();
+  dom.window.__staleWrites = false;
+
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
   assert.equal(feedEvents.at(-1).textContent, "Latest fetch event", "picker logs survive close and reopen");
@@ -944,12 +1137,68 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.doesNotMatch(root.querySelector(".logs-modal").textContent, /pi close/);
   root.querySelector("[data-act='close-logs']").click();
 
+  Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
+  store.transcript("s1").streaming = false;
+  store.transcript("s1").compacting = false;
+  store.clearDraft("s1");
+  composer.attachments = [];
+  composer.renderAttachments();
+  textarea.value = "";
+  store.set({ view: "chat", projectId: "p1", sessionId: "s1", chatId: null, sessionPicker: null, error: null });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  applyEvent({ v: 1, seq: 102, sessionId: "sibling", type: "session_switched", toSessionId: "sync-target" });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.sessionId, "s1", "switches from another conversation do not move this tab");
+
+  store.transcript("s1").snapshotToken = "same-old";
+  dom.window.__syncCheckToken = "same-new";
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "same-new" };
+  textarea.value = "same-id draft";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  applyEvent({ v: 1, seq: 103, sessionId: "s1", type: "session_switched", toSessionId: "s1" });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.sessionId, "s1");
+  assert.equal(textarea.value, "same-id draft");
+  assert.equal(store.draftSnapshotToken("s1"), "same-old");
+  assert.match(root.querySelector(".command-notice")?.textContent || "", /replacement is ready/);
+  await openTranscript("s1");
+  assert.equal(store.transcript("s1").snapshotToken, "same-new");
+  assert.equal(store.draftSnapshotToken("s1"), "same-old", "same-ID transcript reloads preserve the draft token");
+  textarea.value = "";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(store.state.sessionId, "s1", "same-ID catch-up reloads without reselection");
+  assert.equal(store.state.commandNotice, null);
+
   dom.window.__addSyncTargetOnStateRefresh = true;
-  store.set({ error: null });
-  applyEvent({ v: 1, seq: 101, sessionId: "s1", type: "session_switched", toSessionId: "sync-target" });
+  dom.window.__syncCheckToken = "same-new";
+  dom.window.__transcriptResponse = { ...transcript, snapshotToken: "same-new" };
+  textarea.value = "source draft";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  const sourceToken = store.draftSnapshotToken("s1");
+  applyEvent({ v: 1, seq: 104, sessionId: "s1", type: "session_switched", toSessionId: "sync-target" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(store.state.sessionId, "s1", "a replacement waits while the source has a draft");
+  assert.equal(store.draft("s1"), "source draft");
+  assert.equal(store.draftSnapshotToken("s1"), sourceToken);
+  assert.match(root.querySelector(".command-notice")?.textContent || "", /replacement is ready/);
+  textarea.value = "";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(store.state.sessionId, "sync-target", "clearing the source draft catches up to the replacement");
+  assert.equal(store.draft("s1"), "");
+
+  selectSession("p1", "s1");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  dom.window.__holdState = true;
+  applyEvent({ v: 1, seq: 105, sessionId: "s1", type: "session_switched", toSessionId: "sync-target" });
+  for (let i = 0; i < 10 && !dom.window.__resolveState; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(typeof dom.window.__resolveState, "function", "switch waits for state discovery");
+  selectSession("p1", "sibling");
+  dom.window.__holdState = false;
+  dom.window.__resolveState();
   await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(store.state.sessionId, "sync-target", "session switch events select the canonical conversation");
-  assert.equal(store.state.error, null, "state refresh discovers the target without a synchronization error");
+  assert.equal(store.state.sessionId, "sibling", "selection changes during state refresh prevent stale SSE navigation");
 
   dom.window.close();
 });
