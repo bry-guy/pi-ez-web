@@ -85,7 +85,7 @@ export class RealSupervisor {
     this.runtime = null;         // shared ModelRuntime for all attached sessions
     this.runtimePromise = null;   // prevents concurrent runtime initialization
     this.attachPromises = new Map(); // sessionId -> in-flight attach
-    this.syncOperations = new Set();
+    this.syncOperations = new Map();
     this.pendingPrompts = new Map();
     this.pendingSyncHeads = new Map(); // sessionId -> canonical head to restore on attach
     this.syncCoordinator = null;
@@ -843,11 +843,28 @@ export class RealSupervisor {
     });
   }
 
-  async withSyncOperation(id, task) {
+  async withSyncOperation(id, task, kind = "exclusive") {
     if (this.syncOperations.has(id) || (this.pendingPrompts.has(id) && !this.isStreaming(id))) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
-    this.syncOperations.add(id);
+    const operation = { kind };
+    this.syncOperations.set(id, operation);
     try { return await task(); }
-    finally { this.syncOperations.delete(id); }
+    finally { if (this.syncOperations.get(id) === operation) this.syncOperations.delete(id); }
+  }
+
+  async streamingControlDuringBang(id, text, mode, images, clientMessageId, snapshotToken) {
+    const operation = this.syncOperations.get(id);
+    const st = this.live.get(id);
+    const busy = () => Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
+    if (operation?.kind !== "bang" || !st?.session.isStreaming) throw busy();
+    await this.syncAdapter.assertSnapshot(id, snapshotToken, st.session.sessionFile);
+    if (this.syncOperations.get(id) !== operation || this.live.get(id) !== st || !st.session.isStreaming) throw busy();
+    if (!isUsableModel(st.session.model)) throw Object.assign(new Error("model_required"), { code: "model_required" });
+    if (clientMessageId) st.pendingMessages.push({ clientMessageId, text });
+    try { return await (mode === "steer" ? st.session.steer(text, images) : st.session.followUp(text, images)); }
+    catch (error) {
+      if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
+      throw error;
+    }
   }
 
   async trySyncOperation(id, task) {

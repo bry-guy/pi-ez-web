@@ -311,6 +311,7 @@ async function scenario() {
     assert.equal(restarted.snapshotToken, baselineTranscript.snapshotToken);
     assert.ok(restarted.records.some(record => record.text === "local unsynchronized history"));
     assert.equal(restarted.records.some(record => record.text === "unbound decoy history"), false);
+    await restartedSupervisor.commands(id);
 
     const originalBangRecord = restartedSupervisor.bangRecord.bind(restartedSupervisor);
     let signalBangPersistence;
@@ -326,8 +327,52 @@ async function scenario() {
       snapshotToken: restarted.snapshotToken,
     });
     await bangPersistenceStarted;
-    assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "busy");
-    finishBangPersistence();
+    const streamingSession = restartedSupervisor.live.get(id).session;
+    const controls = ["model", "isStreaming", "steer", "followUp", "prompt"];
+    const previous = controls.map(key => [key, Object.getOwnPropertyDescriptor(streamingSession, key)]);
+    const called = [];
+    Object.defineProperties(streamingSession, {
+      model: { configurable: true, value: { provider: "test", id: "model", api: "test" } },
+      isStreaming: { configurable: true, writable: true, value: true },
+      steer: { configurable: true, value: () => { called.push("steer"); } },
+      followUp: { configurable: true, value: () => { called.push("followUp"); } },
+      prompt: { configurable: true, value: () => { called.push("prompt"); } },
+    });
+    const validate = restartedAdapter.assertSnapshot.bind(restartedAdapter);
+    try {
+      assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "busy");
+      for (const mode of ["steer", "followUp"]) {
+        const control = await request(restartedApi, `/sessions/${id}/message`, { text: mode, mode, snapshotToken: restarted.snapshotToken });
+        assert.equal(control.status, 200, JSON.stringify(control.body));
+      }
+      const staleControl = await request(restartedApi, `/sessions/${id}/message`, { text: "stale", mode: "steer", snapshotToken: tabOne.snapshotToken });
+      assert.equal(staleControl.status, 409);
+      assert.equal(staleControl.body.error, "sync_snapshot_stale");
+      let signalValidation;
+      const validationStarted = new Promise(resolve => { signalValidation = resolve; });
+      let finishValidation;
+      restartedAdapter.assertSnapshot = async (...args) => {
+        signalValidation();
+        await new Promise(resolve => { finishValidation = resolve; });
+        return validate(...args);
+      };
+      const crossing = request(restartedApi, `/sessions/${id}/message`, { text: "late steer", mode: "steer", snapshotToken: restarted.snapshotToken });
+      await validationStarted;
+      streamingSession.isStreaming = false;
+      finishValidation();
+      const rejected = await crossing;
+      assert.equal(rejected.status, 409);
+      assert.equal(rejected.body.error, "sync_busy");
+      assert.deepEqual(called, ["steer", "followUp"], "stream end never falls back to prompt");
+      assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "busy");
+    } finally {
+      restartedAdapter.assertSnapshot = validate;
+      for (const [key, descriptor] of previous) {
+        if (descriptor) Object.defineProperty(streamingSession, key, descriptor);
+        else delete streamingSession[key];
+      }
+      finishBangPersistence();
+    }
     assert.equal((await bangRequest).status, 200);
     const bangEntries = fs.readFileSync(afterConflict.materializedFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert.ok(bangEntries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"));

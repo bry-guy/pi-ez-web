@@ -185,11 +185,11 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   const mutate = (id, task, options = {}) => typeof sync.withMutation === "function"
     ? sync.withMutation(id, task, options)
     : task();
-  const withAdmission = (id, token, task) => syncAdapter && sup.withSyncOperation
+  const withAdmission = (id, token, task, kind = "exclusive") => syncAdapter && sup.withSyncOperation
     ? sup.withSyncOperation(id, async () => {
       await syncAdapter.assertSnapshot(id, token, await sup.sessionFile?.(id));
       return task();
-    })
+    }, kind)
     : task();
   const beginStreamingMutation = id => typeof sync.beginMutation === "function"
     ? sync.beginMutation(id, { allowStreaming: true })
@@ -851,7 +851,11 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     let lease;
     try {
       lease = await beginStreamingMutation(id);
-      await withAdmission(id, snapshotToken, () => sup.message(id, messageText, mode, images, clientMessageId, snapshotToken));
+      if (syncAdapter && ["steer", "followUp"].includes(mode) && sup.isStreaming(id) && sup.syncOperations?.get(id)?.kind === "bang") {
+        await sup.streamingControlDuringBang(id, messageText, mode, images, clientMessageId, snapshotToken);
+      } else {
+        await withAdmission(id, snapshotToken, () => sup.message(id, messageText, mode, images, clientMessageId, snapshotToken));
+      }
       // Real and mock supervisors call agentSettled after the asynchronous run
       // reaches idle. A synchronous/no-model failure has no active stream, so
       // finish the short mutation here instead.
@@ -1315,7 +1319,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     hub.emit(id, "bang_end", { bangId, exit, durationMs, stdout: out });
     await sup.bangRecord(id, { id: bangId, role: "bang", cmd, meta, out });
     return c.json({ exit, durationMs });
-    }); } catch (error) {
+    }, "bang"); } catch (error) {
       if (error.code === "sync_snapshot_stale" || error.code === "sync_busy") return err(c, 409, error.code);
       throw error;
     }
