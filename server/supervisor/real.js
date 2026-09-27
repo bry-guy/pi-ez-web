@@ -844,7 +844,7 @@ export class RealSupervisor {
   }
 
   async withSyncOperation(id, task) {
-    if (this.syncOperations.has(id)) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
+    if (this.syncOperations.has(id) || (this.pendingPrompts.has(id) && !this.isStreaming(id))) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
     this.syncOperations.add(id);
     try { return await task(); }
     finally { this.syncOperations.delete(id); }

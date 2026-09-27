@@ -114,6 +114,7 @@ test("automatic checks skip a prompt before SDK streaming begins", async () => {
   }, pendingMessages: [] });
   await supervisor.message("same-id", "hello", "prompt");
   assert.deepEqual(await supervisor.trySyncOperation("same-id", () => { throw new Error("replacement admitted"); }), { outcome: "busy" });
+  await assert.rejects(supervisor.withSyncOperation("same-id", () => { throw new Error("manual refresh admitted"); }), error => error.code === "sync_busy");
   await new Promise(resolve => setImmediate(resolve));
   settle();
   await new Promise(resolve => setImmediate(resolve));
