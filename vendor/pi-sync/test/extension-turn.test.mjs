@@ -45,6 +45,8 @@ async function harness(fetch, options = {}) {
   const handlers = new Map();
   const notices = [];
   const statuses = [];
+  let commandContext;
+  let autoCheckPromise;
   const pi = {
     registerCommand(name, command) { handlers.set(`command:${name}`, command.handler); },
     on(name, handler) { handlers.set(name, handler); },
@@ -53,7 +55,10 @@ async function harness(fetch, options = {}) {
       if (options.repositoryRemote && args[0] === "remote" && args[1] === "get-url") return { stdout: `${options.repositoryRemote}\n`, code: 0 };
       return { stdout: "", code: 1 };
     },
-    sendUserMessage() {},
+    sendUserMessage(text) {
+      assert.equal(text, "/sync auto-check");
+      autoCheckPromise = handlers.get("command:sync")("auto-check", commandContext);
+    },
   };
   extension(pi);
   const ctx = {
@@ -78,15 +83,31 @@ async function harness(fetch, options = {}) {
     },
     switchSession: async () => ({ cancelled: true }),
   };
+  commandContext = ctx;
+  const eventCtx = { ...ctx };
+  delete eventCtx.switchSession;
+  Object.defineProperties(eventCtx, {
+    mode: { get: () => ctx.mode },
+    isIdle: { get: () => ctx.isIdle },
+    hasPendingMessages: { get: () => ctx.hasPendingMessages },
+  });
   return {
     root,
     sessionPath,
     handlers,
     pi,
     ctx,
+    eventCtx,
     intervals,
     async tickIntervals() {
       await Promise.all([...intervals].map((timer) => timer.callback()));
+      await autoCheckPromise?.catch(() => undefined);
+      autoCheckPromise = undefined;
+    },
+    async waitForAutoCheck() {
+      const pending = autoCheckPromise;
+      autoCheckPromise = undefined;
+      await pending;
     },
     notices,
     statuses,
@@ -780,7 +801,6 @@ test("automatically refreshes a newer remote snapshot during idle polling", asyn
     return Response.json({ error: { code: "not_found" } }, { status: 404 });
   }, { captureIntervals: true, mode: "tui" });
   let switchedTarget;
-  let refreshPromise;
   try {
     await fake.store.set({
       nativeSessionId: envelope.sessionId,
@@ -791,10 +811,6 @@ test("automatically refreshes a newer remote snapshot during idle polling", asyn
       lastFingerprint: JSON.stringify(envelope),
       state: "ready",
     });
-    fake.pi.sendUserMessage = (text) => {
-      assert.equal(text, "/sync refresh");
-      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
-    };
     fake.ctx.switchSession = async (target, options) => {
       switchedTarget = target;
       const replacement = {
@@ -812,10 +828,8 @@ test("automatically refreshes a newer remote snapshot during idle polling", asyn
       await options.withSession(replacement);
       return { cancelled: false };
     };
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await refreshPromise;
     assert.ok(switchedTarget);
     assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
     const refreshed = await fake.binding();
@@ -824,6 +838,7 @@ test("automatically refreshes a newer remote snapshot during idle polling", asyn
     assert.match(await readFile(switchedTarget, "utf8"), /"id":"b"/);
     assert.match(fake.notices.join(" "), /refreshed/);
     assert.equal(fake.intervals.size, 1);
+    assert.equal([...fake.intervals][0].delay, 20_000);
     await fake.handlers.get("session_shutdown")({}, fake.ctx);
     assert.equal(fake.intervals.size, 0);
   } finally {
@@ -858,7 +873,6 @@ test("idle polling retries a failed automatic refresh", async () => {
     if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({ error: { code: "not_found" } }, { status: 404 });
   }, { captureIntervals: true, mode: "tui" });
-  let refreshPromise;
   try {
     await fake.store.set({
       nativeSessionId: envelope.sessionId,
@@ -869,22 +883,13 @@ test("idle polling retries a failed automatic refresh", async () => {
       lastFingerprint: JSON.stringify(envelope),
       state: "ready",
     });
-    fake.pi.sendUserMessage = (text) => {
-      assert.equal(text, "/sync refresh");
-      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
-    };
     fake.ctx.switchSession = async () => ({ cancelled: false });
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
 
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await assert.rejects(refreshPromise);
     assert.equal(acquireCount, 1);
 
-    refreshPromise = undefined;
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await refreshPromise;
     assert.equal(acquireCount, 2);
     assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "GET", "POST", "DELETE"]);
   } finally {
@@ -928,7 +933,7 @@ test("idle polling skips pending input, leased sessions, and overlapping checks"
       lastFingerprint: JSON.stringify(envelope),
       state: "ready",
     });
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     fake.ctx.isIdle = () => false;
     await fake.tickIntervals();
     assert.deepEqual(requests, []);
@@ -955,8 +960,11 @@ test("idle polling skips pending input, leased sessions, and overlapping checks"
     const first = timer.callback();
     await listStarted;
     const second = timer.callback();
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
     assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET"]);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     resolveList(await listResponse());
+    await fake.waitForAutoCheck();
     await first;
     await second;
     await fake.handlers.get("session_shutdown")({}, fake.ctx);
@@ -993,7 +1001,6 @@ test("idle polling preserves local changes for missing and stale fingerprints wi
     return Response.json({ error: { code: "not_found" } }, { status: 404 });
   }, { captureIntervals: true, mode: "tui" });
   let switched = false;
-  let refreshPromise;
   try {
     await writeFile(fake.sessionPath, localBytes);
     await fake.store.set({
@@ -1004,18 +1011,12 @@ test("idle polling preserves local changes for missing and stale fingerprints wi
       materializedFile: fake.sessionPath,
       state: "ready",
     });
-    fake.pi.sendUserMessage = (text) => {
-      assert.equal(text, "/sync refresh");
-      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
-    };
     fake.ctx.switchSession = async () => {
       switched = true;
       return { cancelled: false };
     };
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await refreshPromise;
     assert.equal(switched, false);
     assert.match(fake.notices.join(" "), /unsynchronized changes/);
     assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
@@ -1023,30 +1024,25 @@ test("idle polling preserves local changes for missing and stale fingerprints wi
     assert.equal(binding.lastEtag, "e1");
     assert.equal(binding.lastFingerprint, undefined);
     assert.equal(binding.leaseToken, undefined);
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "conflict", sessionId: envelope.sessionId });
 
-    refreshPromise = undefined;
     await fake.tickIntervals();
-    assert.equal(refreshPromise, undefined);
-    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET"]);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET"]);
 
     binding = { ...binding, lastFingerprint: "stale-fingerprint" };
     await fake.store.set(binding);
     currentEtag = "e3";
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await refreshPromise;
     assert.equal(switched, false);
     assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
     binding = await fake.binding();
     assert.equal(binding.lastEtag, "e1");
     assert.equal(binding.lastFingerprint, "stale-fingerprint");
     assert.equal(binding.leaseToken, undefined);
-    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "POST", "DELETE"]);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "GET", "POST", "DELETE"]);
 
-    refreshPromise = undefined;
     await fake.tickIntervals();
-    assert.equal(refreshPromise, undefined);
-    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "POST", "DELETE", "GET"]);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "GET", "GET", "POST", "DELETE", "GET"]);
     await fake.handlers.get("session_shutdown")({}, fake.ctx);
   } finally {
     await fake.close();
@@ -1079,7 +1075,6 @@ test("automatic conflict release failure retains its lease and stops polling", a
     }
     return Response.json({ error: { code: "not_found" } }, { status: 404 });
   }, { captureIntervals: true, mode: "tui" });
-  let refreshPromise;
   let switched = false;
   try {
     await writeFile(fake.sessionPath, localBytes);
@@ -1091,18 +1086,12 @@ test("automatic conflict release failure retains its lease and stops polling", a
       materializedFile: fake.sessionPath,
       state: "ready",
     });
-    fake.pi.sendUserMessage = (text) => {
-      assert.equal(text, "/sync refresh");
-      refreshPromise = fake.handlers.get("command:sync")("refresh", fake.ctx);
-    };
     fake.ctx.switchSession = async () => {
       switched = true;
       return { cancelled: false };
     };
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     await fake.tickIntervals();
-    assert.ok(refreshPromise);
-    await assert.rejects(refreshPromise);
     assert.equal(switched, false);
     assert.equal(await readFile(fake.sessionPath, "utf8"), localBytes);
     const binding = await fake.binding();
@@ -1111,9 +1100,7 @@ test("automatic conflict release failure retains its lease and stops polling", a
     assert.equal(binding.lastEtag, "e1");
     assert.ok(fake.statuses.includes("sync: uncertain"));
 
-    refreshPromise = undefined;
     await fake.tickIntervals();
-    assert.equal(refreshPromise, undefined);
     assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE"]);
   } finally {
     await fake.close();
@@ -1136,7 +1123,7 @@ test("JSON-mode attach clears an existing interactive idle poll", async () => {
       lastFingerprint: JSON.stringify(envelope),
       state: "ready",
     });
-    await fake.handlers.get("session_start")({}, fake.ctx);
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
     assert.equal(fake.intervals.size, 1);
 
     fake.ctx.mode = "json";
@@ -1190,6 +1177,168 @@ test("fresh JSON mode skips idle polling but retains manual refresh", async () =
     await fake.handlers.get("session_shutdown")({}, fake.ctx);
     assert.equal(fake.intervals.size, 0);
   } finally {
+    await fake.close();
+  }
+});
+
+test("JSON auto-check is awaitable and returns eligibility and refresh outcomes without polling", async () => {
+  const remote = {
+    ...envelope,
+    headEntryId: "b",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  const requests = [];
+  let remoteEtag = "e1";
+  let leaseHolder = null;
+  let resolveSwitch;
+  let signalSwitch;
+  const switchStarted = new Promise((resolve) => { signalSwitch = resolve; });
+  const switchBarrier = new Promise((resolve) => { resolveSwitch = resolve; });
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: remoteEtag, leaseHolder, leaseExpiresAt: leaseHolder ? "2026-01-01T00:02:00Z" : null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("auto-check-token", remoteEtag).json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "json" });
+  try {
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "unchanged" });
+
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.ctx);
+    assert.equal(fake.intervals.size, 0);
+    fake.ctx.isIdle = () => false;
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    fake.ctx.isIdle = () => true;
+    fake.ctx.hasPendingMessages = () => true;
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    fake.ctx.hasPendingMessages = () => false;
+    const enrolled = await fake.binding();
+    await fake.store.set({ ...enrolled, leaseToken: "local-token" });
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    await fake.store.set(enrolled);
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "unchanged" });
+    remoteEtag = "e2";
+    leaseHolder = "other-client";
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET"]);
+
+    leaseHolder = null;
+    let switchedTarget;
+    let switchCount = 0;
+    fake.ctx.switchSession = async (target) => {
+      switchCount++;
+      switchedTarget = target;
+      signalSwitch();
+      await switchBarrier;
+      return { cancelled: false };
+    };
+    let settled = false;
+    const check = fake.handlers.get("command:sync")("auto-check", fake.ctx).then((result) => {
+      settled = true;
+      return result;
+    });
+    await switchStarted;
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    resolveSwitch();
+    assert.deepEqual(await check, { outcome: "refreshed", sessionId: envelope.sessionId });
+    assert.equal(switchCount, 1);
+    assert.ok(switchedTarget);
+    assert.equal(fake.intervals.size, 0);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET", "GET", "POST", "DELETE"]);
+    const requestCount = requests.length;
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "busy" });
+    assert.equal(requests.length, requestCount);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("successive automatic refreshes use unique materializations for the same session", async () => {
+  let remote = {
+    ...envelope,
+    headEntryId: "b",
+    title: "Remote update",
+    entries: [...envelope.entries, { type: "message", id: "b", parentId: "a", timestamp: "2026-01-01T00:00:02Z" }],
+  };
+  let remoteEtag = "e2";
+  let currentPath;
+  let currentLeaf = envelope.headEntryId;
+  const requests = [];
+  const fake = await harness(async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method });
+    if (path === "/v1/sessions" && init.method === "GET") {
+      return Response.json({
+        formatVersion: 1,
+        sessions: [{ sessionId: envelope.sessionId, title: remote.title, createdAt: remote.createdAt, headEntryId: remote.headEntryId, etag: remoteEtag, leaseHolder: null, leaseExpiresAt: null }],
+      });
+    }
+    if (path.endsWith("/lease") && init.method === "POST") {
+      const response = await responseForLease("unique-target-token", remoteEtag).json();
+      return Response.json({ ...response, session: remote });
+    }
+    if (path.endsWith("/lease") && init.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ error: { code: "not_found" } }, { status: 404 });
+  }, { captureIntervals: true, mode: "json" });
+  const previousNow = Date.now;
+  Date.now = () => 1_700_000_000_000;
+  try {
+    currentPath = fake.sessionPath;
+    fake.ctx.sessionManager.getSessionFile = () => currentPath;
+    fake.ctx.sessionManager.getLeafId = () => currentLeaf;
+    fake.ctx.switchSession = async (target) => {
+      currentPath = target;
+      currentLeaf = remote.headEntryId;
+      return { cancelled: false };
+    };
+    await fake.store.set({
+      nativeSessionId: envelope.sessionId,
+      serverUrl: "http://sync.test",
+      canonicalSessionId: envelope.sessionId,
+      lastEtag: "e1",
+      materializedFile: fake.sessionPath,
+      lastFingerprint: JSON.stringify(envelope),
+      state: "ready",
+    });
+    await fake.handlers.get("session_start")({}, fake.eventCtx);
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "refreshed", sessionId: envelope.sessionId });
+    const first = await fake.binding();
+
+    remote = {
+      ...remote,
+      headEntryId: "c",
+      title: "Second remote update",
+      entries: [...remote.entries, { type: "message", id: "c", parentId: "b", timestamp: "2026-01-01T00:00:03Z" }],
+    };
+    remoteEtag = "e3";
+    assert.deepEqual(await fake.handlers.get("command:sync")("auto-check", fake.ctx), { outcome: "refreshed", sessionId: envelope.sessionId });
+    const second = await fake.binding();
+    assert.notEqual(first.materializedFile, second.materializedFile);
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "POST", "DELETE", "GET", "POST", "DELETE"]);
+  } finally {
+    Date.now = previousNow;
     await fake.close();
   }
 });

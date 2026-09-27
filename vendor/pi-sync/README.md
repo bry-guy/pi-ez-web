@@ -11,8 +11,10 @@ This vendored snapshot is based on the upstream revision recorded in
 The extension expects `PI_SYNC_SERVER_URL` (or `PI_SYNC_URL`) and is intended
 to be installed as a trusted Pi package. Interactive Pi sessions poll for newer
 canonical snapshots while idle and refresh unchanged local materializations
-automatically. JSON-mode hosts, including pi-ez-web, keep background polling
-disabled; `/sync refresh` remains available for an explicit refresh. Use
+automatically. JSON-mode hosts keep extension polling disabled; a host may
+await `/sync auto-check`, which returns an object with an `outcome` of
+`unchanged`, `busy`, `conflict`, or `refreshed`. `/sync refresh` remains
+available for an explicit refresh. Use
 `/sync attach` to enroll a local session, `/sync detach` to remove only the
 local binding, `/sync` to open the repository-filtered picker, or `/sync status`
 to inspect the binding. Synchronized names are sticky. Git

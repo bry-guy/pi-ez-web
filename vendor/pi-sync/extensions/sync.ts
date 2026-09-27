@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve as resolvePath } from "node:path";
@@ -35,6 +36,8 @@ type ActiveLease = {
   timer?: ReturnType<typeof setInterval>;
 };
 
+type AutoCheckResult = { outcome: "unchanged" | "busy" | "conflict" | "refreshed"; sessionId?: string };
+
 function usefulTitle(title: unknown, ...placeholders: (string | undefined)[]): string {
   if (typeof title !== "string") return "";
   const value = title.trim();
@@ -64,7 +67,8 @@ export default function syncExtension(pi: ExtensionAPI) {
   let blocked: BlockReason | undefined;
   let idlePollTimer: ReturnType<typeof setInterval> | undefined;
   let idlePollGeneration = 0;
-  let idlePollInFlight = false;
+  let idlePollDispatchInFlight = false;
+  let autoCheckInFlight = false;
   let observedRemoteEtag: string | undefined;
   let autoRefreshInFlight = false;
   let automaticRefreshConflict = false;
@@ -127,56 +131,13 @@ export default function syncExtension(pi: ExtensionAPI) {
     if (ctx.mode === "json") return;
     const generation = idlePollGeneration;
     idlePollTimer = setInterval(() => {
-      if (idlePollInFlight) return;
-      idlePollInFlight = true;
-      return (async () => {
-        if (
-          generation !== idlePollGeneration ||
-          currentSessionId !== sessionId ||
-          active ||
-          blocked === "invalid" ||
-          blocked === "setup_required" ||
-          !ctx.isIdle() ||
-          hasPendingInput(ctx)
-        ) return;
-
-        const binding = await store.get(sessionId);
-        if (
-          generation !== idlePollGeneration ||
-          currentSessionId !== sessionId ||
-          active ||
-          !binding ||
-          binding.state === "setup_required" ||
-          binding.leaseToken ||
-          !binding.lastEtag
-        ) return;
-
-        const repository = await repositoryForPicker(ctx);
-        if (generation !== idlePollGeneration || currentSessionId !== sessionId || active) return;
-        let list;
-        try {
-          list = await clientFor(binding.serverUrl).list({ repository: repository ?? null });
-        } catch {
-          return;
-        }
-        if (generation !== idlePollGeneration || currentSessionId !== sessionId || active) return;
-        const metadata = list.sessions.find((item) => item.sessionId === binding.canonicalSessionId);
-        if (!metadata || metadata.etag === binding.lastEtag || metadata.leaseHolder) {
-          if (metadata?.etag === binding.lastEtag) observedRemoteEtag = undefined;
-          return;
-        }
-        if (autoRefreshInFlight || observedRemoteEtag === metadata.etag || !ctx.isIdle() || hasPendingInput(ctx)) return;
-        observedRemoteEtag = metadata.etag;
-        autoRefreshInFlight = true;
-        try {
-          pi.sendUserMessage("/sync refresh", { expandPromptTemplates: true });
-        } catch {
-          autoRefreshInFlight = false;
-          observedRemoteEtag = undefined;
-        }
-      })().catch(() => undefined).finally(() => {
-        idlePollInFlight = false;
-      });
+      if (generation !== idlePollGeneration || currentSessionId !== sessionId || active || blocked || idlePollDispatchInFlight || autoCheckInFlight || !ctx.isIdle() || hasPendingInput(ctx)) return;
+      idlePollDispatchInFlight = true;
+      try {
+        pi.sendUserMessage("/sync auto-check", { expandPromptTemplates: true });
+      } catch {
+        idlePollDispatchInFlight = false;
+      }
     }, HEARTBEAT_MS);
     idlePollTimer.unref?.();
   };
@@ -782,7 +743,7 @@ export default function syncExtension(pi: ExtensionAPI) {
     return (await store.get(parentSessionId))?.materializedFile;
   };
 
-  const refreshCurrentImpl = async (ctx: ExtensionCommandContext) => {
+  const refreshCurrentImpl = async (ctx: ExtensionCommandContext, automatic = autoRefreshInFlight) => {
     await ctx.waitForIdle?.();
     currentSessionId = ctx.sessionManager.getSessionId();
     let binding = await store.get(currentSessionId);
@@ -809,7 +770,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       return;
     }
     let localFingerprint: string | undefined;
-    if (autoRefreshInFlight) {
+    if (automatic) {
       try {
         localFingerprint = stableEnvelopeFingerprint((await normalizeCurrent(ctx, binding)).envelope);
       } catch (error) {
@@ -838,7 +799,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       notify(ctx, "The synchronized conversation is already current.", "info");
       return { switched: false };
     }
-    if (autoRefreshInFlight && (!binding.lastFingerprint || localFingerprint !== binding.lastFingerprint)) {
+    if (automatic && (!binding.lastFingerprint || localFingerprint !== binding.lastFingerprint)) {
       automaticRefreshConflict = true;
       try {
         await releaseRefreshLease();
@@ -858,7 +819,7 @@ export default function syncExtension(pi: ExtensionAPI) {
       return failCommand(ctx, error, "sync_lease_uncertain", "The refreshed snapshot could not be opened because its lease could not be released.");
     }
 
-    const target = join(ctx.sessionManager.getSessionDir(), `${Date.now()}_${acquired.session.sessionId}.jsonl`);
+    const target = join(ctx.sessionManager.getSessionDir(), `${Date.now()}_${acquired.session.sessionId}_${randomUUID()}.jsonl`);
     const refreshedBinding: SyncBinding = {
       ...binding,
       state: "ready",
@@ -896,17 +857,55 @@ export default function syncExtension(pi: ExtensionAPI) {
     }
   };
 
-  const refreshCurrent = async (ctx: ExtensionCommandContext) => {
-    const automatic = autoRefreshInFlight;
-    if (!automatic) return refreshCurrentImpl(ctx);
-    automaticRefreshConflict = false;
+  async function autoCheck(ctx: ExtensionCommandContext): Promise<AutoCheckResult> {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const generation = idlePollGeneration;
+    if (autoCheckInFlight) return { outcome: "busy" };
+    autoCheckInFlight = true;
+    const isCurrent = () => generation === idlePollGeneration && currentSessionId === sessionId && ctx.sessionManager.getSessionId() === sessionId;
+    const isEligible = (binding?: SyncBinding) => isCurrent() && !active && !blocked && !binding?.leaseToken && binding?.state !== "setup_required" && ctx.isIdle() && !hasPendingInput(ctx);
     try {
-      return await refreshCurrentImpl(ctx);
+      if (!sessionId || !isCurrent()) return { outcome: "busy" };
+      const binding = await store.get(sessionId);
+      if (!isCurrent()) return { outcome: "busy" };
+      if (!binding) return { outcome: "unchanged" };
+      if (!isEligible(binding)) return { outcome: "busy" };
+      if (!binding.lastEtag) return { outcome: "unchanged" };
+
+      const repository = await repositoryForPicker(ctx);
+      if (!isEligible(binding)) return { outcome: "busy" };
+      let list;
+      try {
+        list = await clientFor(binding.serverUrl).list({ repository: repository ?? null });
+      } catch {
+        return { outcome: "busy" };
+      }
+      if (!isEligible(binding)) return { outcome: "busy" };
+      const metadata = list.sessions.find((item) => item.sessionId === binding.canonicalSessionId);
+      if (!metadata || metadata.etag === binding.lastEtag) {
+        if (metadata?.etag === binding.lastEtag) observedRemoteEtag = undefined;
+        return { outcome: "unchanged" };
+      }
+      if (metadata.leaseHolder) return { outcome: "busy" };
+      if (observedRemoteEtag === metadata.etag) return { outcome: "conflict", sessionId };
+
+      observedRemoteEtag = metadata.etag;
+      automaticRefreshConflict = false;
+      autoRefreshInFlight = true;
+      try {
+        const result = await refreshCurrentImpl(ctx, true);
+        if (automaticRefreshConflict) return { outcome: "conflict", sessionId };
+        return result?.switched ? { outcome: "refreshed", sessionId: result.sessionId } : { outcome: "unchanged" };
+      } finally {
+        autoRefreshInFlight = false;
+        if (!automaticRefreshConflict) observedRemoteEtag = undefined;
+      }
     } finally {
-      autoRefreshInFlight = false;
-      if (!automaticRefreshConflict) observedRemoteEtag = undefined;
+      autoCheckInFlight = false;
     }
-  };
+  }
+
+  const refreshCurrent = async (ctx: ExtensionCommandContext) => refreshCurrentImpl(ctx, false);
 
   const releaseCleanLease = async (ctx: ExtensionCommandContext, binding: SyncBinding): Promise<SyncBinding | null> => {
     if (!binding.leaseToken && !active?.token) return binding;
@@ -1003,23 +1002,29 @@ export default function syncExtension(pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description: "Open, attach, detach, or inspect synchronized Pi conversations",
     handler: async (args, ctx) => {
-      await store.load();
-      deviceLabel = await store.deviceLabel();
       const command = args.trim();
-      if (command === "attach" || command.startsWith("attach ")) {
-        await enrollCurrent(ctx, command.slice("attach".length).trim());
-      } else if (command === "detach") {
-        await detachCurrent(ctx);
-      } else if (command === "refresh") {
-        await refreshCurrent(ctx);
-      } else if (command === "reconcile") {
-        await reconcileCurrent(ctx);
-      } else if (command === "status") {
-        await showStatus(ctx);
-      } else if (command === "") {
-        await syncPick(ctx);
-      } else {
-        notify(ctx, "Usage: /sync, /sync attach [server URL], /sync detach, /sync refresh, or /sync status", "error");
+      try {
+        await store.load();
+        deviceLabel = await store.deviceLabel();
+        if (command === "attach" || command.startsWith("attach ")) {
+          await enrollCurrent(ctx, command.slice("attach".length).trim());
+        } else if (command === "detach") {
+          await detachCurrent(ctx);
+        } else if (command === "refresh") {
+          await refreshCurrent(ctx);
+        } else if (command === "auto-check") {
+          return (await autoCheck(ctx)) as unknown as void;
+        } else if (command === "reconcile") {
+          await reconcileCurrent(ctx);
+        } else if (command === "status") {
+          await showStatus(ctx);
+        } else if (command === "") {
+          await syncPick(ctx);
+        } else {
+          notify(ctx, "Usage: /sync, /sync attach [server URL], /sync detach, /sync refresh, or /sync status", "error");
+        }
+      } finally {
+        if (command === "auto-check") idlePollDispatchInFlight = false;
       }
     },
   });
