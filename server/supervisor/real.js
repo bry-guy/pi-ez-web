@@ -85,6 +85,8 @@ export class RealSupervisor {
     this.runtime = null;         // shared ModelRuntime for all attached sessions
     this.runtimePromise = null;   // prevents concurrent runtime initialization
     this.attachPromises = new Map(); // sessionId -> in-flight attach
+    this.syncOperations = new Set();
+    this.pendingPrompts = new Map();
     this.pendingSyncHeads = new Map(); // sessionId -> canonical head to restore on attach
     this.syncCoordinator = null;
     this.syncAdapter = null;
@@ -173,6 +175,17 @@ export class RealSupervisor {
   }
 
   async _discover(id) {
+    const boundFile = await this.syncAdapter?.materializedFile?.(id);
+    if (boundFile && !this.live.has(id)) {
+      const { SessionManager } = await SDK();
+      if (!fs.existsSync(boundFile)) throw Object.assign(new Error("The synchronized snapshot is unavailable."), { code: "sync_snapshot_stale" });
+      const manager = SessionManager.open(boundFile);
+      if (manager.getSessionId() !== id) throw Object.assign(new Error("The synchronized snapshot has a different identity."), { code: "sync_identity_mismatch" });
+      this.paths.set(id, boundFile);
+      this.preferredPaths.set(id, boundFile);
+      this.info.set(id, { id, path: boundFile, cwd: manager.getCwd(), name: manager.getSessionName?.() || null });
+      return true;
+    }
     if (this.paths.has(id) || this.info.has(id)) return true;
     const { SessionManager } = await SDK();
     const infos = this._selectSessionInfos(await SessionManager.listAll());
@@ -333,7 +346,7 @@ export class RealSupervisor {
     }
   }
 
-  async _attach(id, cwd, modelRef, { reconcile = true } = {}) {
+  async _attach(id, cwd, modelRef) {
     const cached = id && this.live.get(id);
     if (cached) return cached;
     const { SessionManager } = await SDK();
@@ -358,11 +371,7 @@ export class RealSupervisor {
       this.pendingSyncHeads.delete(session.sessionId);
       await session.navigateTree(pendingHead, { summarize: false });
     }
-    if (!reconcile) return this.live.get(session.sessionId);
-    const sync = await this.syncAdapter?.beforePrompt?.(session.sessionId);
-    return sync?.switched
-      ? this.live.get(sync.sessionId || session.sessionId) || this.live.get(session.sessionId)
-      : this.live.get(session.sessionId);
+    return this.live.get(session.sessionId);
   }
 
   _endTurnWithError(id, st, error) {
@@ -649,12 +658,13 @@ export class RealSupervisor {
     return { id };
   }
 
-  async message(id, text, mode, images = [], clientMessageId = null) {
+  async message(id, text, mode, images = [], clientMessageId = null, snapshotToken = null) {
     let st = await this._attachById(id);
     if (!["steer", "followUp"].includes(mode) && !String(text || "").startsWith("/")) {
       const sync = await this.syncAdapter?.beforePrompt?.(id);
       if (sync?.sessionId) id = sync.sessionId;
       if (sync?.switched) st = await this._attachById(id);
+      await this.syncAdapter?.assertSnapshot?.(id, snapshotToken, st.session.sessionFile);
     }
     if (!isUsableModel(st.session.model)) {
       throw Object.assign(new Error("model_required"), { code: "model_required" });
@@ -674,7 +684,7 @@ export class RealSupervisor {
         throw error;
       }
     }
-    st.session.prompt(text, { images }).catch(err => {
+    this._startPrompt(id, () => st.session.prompt(text, { images }), err => {
       if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
       this._endTurnWithError(id, st, err);
     });
@@ -723,7 +733,7 @@ export class RealSupervisor {
     return { url: gist.html_url };
   }
 
-  async command(id, text, mode) {
+  async command(id, text, mode, snapshotToken = null) {
     const commandText = this.syncAdapter?.commandText?.(text) || text;
     const parsed = parseSlashCommand(commandText);
     if (!parsed) throw Object.assign(new Error("invalid_slash_command"), { code: "invalid_slash_command" });
@@ -803,8 +813,9 @@ export class RealSupervisor {
     const st = await this._attachById(id);
     const extensionCommand = st.session.extensionRunner?.getCommand?.(parsed.name);
     if (extensionCommand) {
-      await extensionCommand.handler(parsed.args, st.session.extensionRunner.createCommandContext());
-      return { action: "handled", name: parsed.name };
+      if (parsed.name !== "sync") await this.syncAdapter?.assertSnapshot?.(id, snapshotToken, st.session.sessionFile);
+      const result = await extensionCommand.handler(parsed.args, st.session.extensionRunner.createCommandContext());
+      return { action: "handled", name: parsed.name, ...(result?.outcome ? result : {}) };
     }
     const commands = await this.commands(id);
     const known = commands.some(command => command.name === parsed.name);
@@ -812,8 +823,30 @@ export class RealSupervisor {
     const options = st.session.isStreaming
       ? { source: "rpc", streamingBehavior: mode === "followUp" ? "followUp" : "steer" }
       : { source: "rpc" };
-    await st.session.prompt(parsed.text, options);
+    await this.syncAdapter?.assertSnapshot?.(id, snapshotToken, st.session.sessionFile);
+    this._startPrompt(id, () => st.session.prompt(parsed.text, options), error => this._endTurnWithError(id, st, error));
     return { action: "handled", name: parsed.name };
+  }
+
+  _startPrompt(id, task, onError) {
+    this.pendingPrompts.set(id, (this.pendingPrompts.get(id) || 0) + 1);
+    void Promise.resolve().then(task).catch(onError).finally(() => {
+      const remaining = this.pendingPrompts.get(id) - 1;
+      if (remaining) this.pendingPrompts.set(id, remaining);
+      else this.pendingPrompts.delete(id);
+    });
+  }
+
+  async withSyncOperation(id, task) {
+    if (this.syncOperations.has(id)) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
+    this.syncOperations.add(id);
+    try { return await task(); }
+    finally { this.syncOperations.delete(id); }
+  }
+
+  async trySyncOperation(id, task) {
+    if (this.syncOperations.has(id) || this.pendingPrompts.has(id) || this.isStreaming(id) || this.isCompacting(id)) return { outcome: "busy" };
+    return this.withSyncOperation(id, task);
   }
 
   async waitForIdle(id) {
@@ -839,6 +872,7 @@ export class RealSupervisor {
     const targetCwd = visibility.workspacePath || fallbackCwd;
     const existingTarget = this.live.get(targetId);
     if (existingTarget && existingTarget !== current) {
+      if (this.pendingPrompts.has(targetId) || this.syncOperations.has(targetId)) throw Object.assign(new Error("The target session is busy."), { code: "sync_busy" });
       if (existingTarget.session.isStreaming) throw Object.assign(new Error("The target session is still running."), { code: "session_streaming" });
     }
 
@@ -868,7 +902,7 @@ export class RealSupervisor {
       const previous = snapshot.get(id);
       if (!disposed.has(id) || !previous?.live) return;
       try {
-        await this._attach(id, this._boundCwd(id, previous.live.cwd), await this._preferredModel(id), { reconcile: false });
+        await this._attach(id, this._boundCwd(id, previous.live.cwd), await this._preferredModel(id));
       } catch {}
     };
 

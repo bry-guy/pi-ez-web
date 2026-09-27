@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { EventHub } from "../server/events.js";
 import { buildApi } from "../server/routes.js";
@@ -81,6 +84,40 @@ test("sync status exposes canonical details without exposing the lease token", a
   });
   assert.equal("leaseToken" in status, false);
   assert.equal(await adapter.stickyName("local-session"), "Canonical conversation");
+});
+
+test("snapshot tokens survive ordinary appends but reject missing and replaced snapshots", async () => {
+  let materializedFile = "/tmp/first.jsonl";
+  let etag = "e1";
+  const adapter = new PiSyncWebAdapter({ configProvider: () => ({ sync: { serverUrl: "https://sync.example" } }) });
+  adapter.bindingStore = async () => ({ get: async () => ({ materializedFile, lastEtag: etag }) });
+  const first = await adapter.snapshotToken("same-id");
+  assert.match(first, /^[a-f0-9]{64}$/);
+  etag = "e2";
+  assert.equal(await adapter.snapshotToken("same-id"), first);
+  materializedFile = "/tmp/replacement.jsonl";
+  assert.notEqual(await adapter.snapshotToken("same-id"), first);
+  await assert.rejects(adapter.assertSnapshot("same-id", first), error => error.code === "sync_snapshot_stale");
+  await assert.rejects(adapter.assertSnapshot("same-id", undefined), error => error.code === "sync_snapshot_stale");
+  const latest = await adapter.snapshotToken("same-id");
+  await assert.rejects(adapter.assertSnapshot("same-id", latest, "/tmp/first.jsonl"), error => error.code === "sync_snapshot_stale");
+});
+
+test("automatic check forwards the native outcome without using manual refresh", async () => {
+  const commands = [];
+  const adapter = new PiSyncWebAdapter({
+    supervisor: {
+      async trySyncOperation(_id, task) { return task(); },
+      async command(id, text) { commands.push([id, text]); return { outcome: "refreshed", sessionId: id }; },
+    },
+    configProvider: () => ({ sync: { serverUrl: "https://sync.example" } }),
+  });
+  adapter.extensionPath = async () => "/tmp/sync.js";
+  adapter.snapshotToken = async () => "opaque-token";
+  assert.deepEqual(await adapter.autoCheck("same-id"), { outcome: "refreshed", sessionId: "same-id", snapshotToken: "opaque-token" });
+  assert.deepEqual(commands, [["same-id", "/sync auto-check"]]);
+  adapter.supervisor.command = async () => ({ action: "handled" });
+  await assert.rejects(adapter.autoCheck("same-id"), error => error.code === "sync_client_unavailable");
 });
 
 test("blank synchronized titles do not block the first local name", async () => {
@@ -183,6 +220,120 @@ test("web command errors preserve synchronization HTTP status", async () => {
   });
   assert.equal(response.status, 423);
   assert.equal((await response.json()).error, "active_lease");
+});
+
+test("automatic-check route stays separate from manual refresh and rejects stale writes", async () => {
+  let snapshot = "first";
+  let messages = 0;
+  const adapter = {
+    withMutation: (_id, task) => task(),
+    state: () => ({ version: 1 }),
+    snapshotToken: async () => snapshot,
+    assertSnapshot: async (_id, expected) => {
+      if (expected !== snapshot) throw Object.assign(new Error("stale"), { code: "sync_snapshot_stale" });
+    },
+    autoCheck: async () => ({ outcome: "unchanged", snapshotToken: snapshot }),
+  };
+  const supervisor = {
+    meta: async () => ({ id: "same-id" }),
+    setSyncAdapter() {},
+    withSyncOperation: async (_id, task) => task(),
+    isStreaming: () => false,
+    isCompacting: () => false,
+    transcript: async () => [{ id: "one", role: "user", text: "old" }],
+    message: async () => { messages++; },
+  };
+  const api = buildApi(supervisor, { syncAdapter: adapter });
+  const url = "http://pi-web.test/sessions/same-id";
+  const check = await api.request(`${url}/sync/check`, { method: "POST" });
+  assert.deepEqual(await check.json(), { outcome: "unchanged", snapshotToken: "first" });
+  const transcript = await api.request(`${url}/transcript`);
+  assert.equal((await transcript.json()).snapshotToken, "first");
+  snapshot = "second";
+  const response = await api.request(`${url}/message`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "my draft", snapshotToken: "first" }),
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "sync_snapshot_stale");
+  assert.equal(messages, 0);
+});
+
+test("bang rejection happens before any command runs", async () => {
+  const adapter = {
+    withMutation: (_id, task) => task(),
+    state: () => ({}),
+    assertSnapshot: async () => { throw Object.assign(new Error("stale"), { code: "sync_snapshot_stale" }); },
+  };
+  const supervisor = {
+    setSyncAdapter() {},
+    withSyncOperation: async (_id, task) => task(),
+    meta: async () => ({ id: "same-id" }),
+    bangRecord: async () => { throw new Error("must not persist"); },
+  };
+  const api = buildApi(supervisor, { syncAdapter: adapter });
+  const response = await api.request("http://pi-web.test/sessions/same-id/bang", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cmd: "exit 7", snapshotToken: "old" }),
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "sync_snapshot_stale");
+});
+
+test("automatic refresh remains busy until bang persistence completes", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "piweb-bang-refresh-"));
+  let recording;
+  let complete;
+  const started = new Promise(resolve => { recording = resolve; });
+  const finish = new Promise(resolve => { complete = resolve; });
+  let busy = false;
+  const supervisor = {
+    setSyncAdapter() {},
+    meta: async () => ({ cwd }),
+    sessionFile: async () => "/session.jsonl",
+    withSyncOperation: async (_id, task) => {
+      if (busy) throw Object.assign(new Error("busy"), { code: "sync_busy" });
+      busy = true;
+      try { return await task(); } finally { busy = false; }
+    },
+    bangRecord: async () => { recording(); await finish; },
+  };
+  const adapter = { withMutation: (_id, task) => task(), state: () => ({}), assertSnapshot: async () => {} };
+  try {
+    const api = buildApi(supervisor, { syncAdapter: adapter });
+    const request = api.request("http://pi-web.test/sessions/same-id/bang", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cmd: "printf hello", snapshotToken: "current" }),
+    });
+    await started;
+    assert.equal(busy, true);
+    complete();
+    assert.equal((await request).status, 200);
+    assert.equal(busy, false);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("transcript never labels pre-replacement records with a new snapshot token", async () => {
+  let file = "/old.jsonl";
+  let token = "old";
+  const adapter = {
+    state: () => ({}),
+    snapshotToken: async (_id, actualFile) => {
+      if (actualFile !== file) throw Object.assign(new Error("changing"), { code: "sync_snapshot_stale" });
+      return token;
+    },
+  };
+  const supervisor = {
+    setSyncAdapter() {},
+    sessionFile: async () => file,
+    transcript: async () => { file = "/new.jsonl"; token = "new"; return [{ text: "old data" }]; },
+    isStreaming: () => false,
+    isCompacting: () => false,
+  };
+  const api = buildApi(supervisor, { syncAdapter: adapter });
+  const response = await api.request("http://pi-web.test/sessions/same-id/transcript");
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "sync_snapshot_stale");
 });
 
 test("browser extension UI handles an already-aborted dialog signal", async () => {

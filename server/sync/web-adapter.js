@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { loadConfig, syncConfig } from "../config.js";
 import { clientErrorCode, clientErrorMessage, createSyncClient, loadPiSyncModule, syncExtensionPath } from "./client.js";
 
@@ -56,6 +56,33 @@ export class PiSyncWebAdapter {
       switched: !!after && after.session?.sessionFile !== before,
       sessionId: after?.session?.sessionId || sessionId,
     };
+  }
+
+  async materializedFile(sessionId) {
+    if (!this.config().serverUrl) return null;
+    return (await (await this.bindingStore()).get(sessionId))?.materializedFile || null;
+  }
+
+  async snapshotToken(sessionId, sessionFile = undefined) {
+    const file = await this.materializedFile(sessionId);
+    if (file && sessionFile !== undefined && file !== sessionFile) throw adapterError("The synchronized snapshot is changing.", "sync_snapshot_stale");
+    return file ? createHash("sha256").update(file).digest("hex") : null;
+  }
+
+  async assertSnapshot(sessionId, expected, sessionFile = undefined) {
+    const current = await this.snapshotToken(sessionId, sessionFile);
+    if (current && current !== expected) throw adapterError("The synchronized conversation changed. Review it before sending again.", "sync_snapshot_stale");
+  }
+
+  async autoCheck(sessionId) {
+    if (!this.config().serverUrl) return { outcome: "unchanged" };
+    if (!await this.extensionPath()) throw adapterError("The pi-sync extension is not installed on this server.", "sync_client_unavailable", 503);
+    return this.supervisor.trySyncOperation(sessionId, async () => {
+      const result = await this.supervisor.command(sessionId, "/sync auto-check");
+      if (!["unchanged", "busy", "conflict", "refreshed"].includes(result?.outcome)) throw adapterError("The pi-sync extension did not complete its automatic check.", "sync_client_unavailable", 503);
+      this.listCache = null;
+      return { outcome: result.outcome, sessionId: result.sessionId || sessionId, snapshotToken: await this.snapshotToken(result.sessionId || sessionId) };
+    });
   }
 
   resetExtensionPath() {

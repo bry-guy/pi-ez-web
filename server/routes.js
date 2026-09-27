@@ -32,7 +32,7 @@ const SYNC_ERROR_STATUS = Object.freeze({
   sync_duplicate: 409, sync_identity_mismatch: 409, sync_workspace_mismatch: 409, sync_session_not_found: 409,
   workspace_mismatch: 409, workspace_required: 409,
   sync_workspace_setup_required: 409, sync_materialization_failed: 409,
-  sync_stale_etag: 409, sync_conflict: 409, conflict: 409, duplicate_enrollment: 409,
+  sync_stale_etag: 409, sync_snapshot_stale: 409, sync_busy: 409, sync_conflict: 409, conflict: 409, duplicate_enrollment: 409,
   session_streaming: 409, session_compacting: 409, session_binding_conflict: 409,
   active_lease: 423, lease_invalid: 423, lease_required: 423, sync_lease_uncertain: 423,
   request_too_large: 413,
@@ -184,6 +184,12 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   else sup.setSyncCoordinator?.(sync);
   const mutate = (id, task, options = {}) => typeof sync.withMutation === "function"
     ? sync.withMutation(id, task, options)
+    : task();
+  const withAdmission = (id, token, task) => syncAdapter && sup.withSyncOperation
+    ? sup.withSyncOperation(id, async () => {
+      await syncAdapter.assertSnapshot(id, token, await sup.sessionFile?.(id));
+      return task();
+    })
     : task();
   const beginStreamingMutation = id => typeof sync.beginMutation === "function"
     ? sync.beginMutation(id, { allowStreaming: true })
@@ -737,7 +743,9 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     if (sup.isStreaming(id)) return err(c, 409, "session_streaming");
     if (sup.isCompacting(id)) return err(c, 409, "session_compacting");
     try {
-      await sync.refresh(id, { progress: reporter.log });
+      await (syncAdapter && sup.withSyncOperation
+        ? sup.withSyncOperation(id, () => sync.refresh(id, { progress: reporter.log }))
+        : sync.refresh(id, { progress: reporter.log }));
       const status = await sync.status(id);
       hub.emit(id, "sync_state", { sync: status });
       const operation = reporter.finish({ httpStatus: 200, message: "Canonical conversation refreshed." });
@@ -764,6 +772,16 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   });
   api.post("/sessions/:id/sync", syncSession);
   api.post("/sessions/:id/sync/refresh", refreshSyncSession);
+  api.post("/sessions/:id/sync/check", async c => {
+    if (!syncAdapter) return err(c, 409, "sync_client_unavailable");
+    const id = c.req.param("id");
+    if (!await sup.meta(id)) return err(c, 404, "no_such_session");
+    try { return c.json(await syncAdapter.autoCheck(id)); }
+    catch (error) {
+      if (SYNC_ERROR_STATUS[error.code]) return err(c, SYNC_ERROR_STATUS[error.code], error.code);
+      throw error;
+    }
+  });
   // Keep the action name easy for non-browser clients. Both routes use the
   // configured Pi sync integration.
   api.post("/sessions/:id/enroll", syncSession);
@@ -783,7 +801,9 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const mode = body?.mode || "prompt";
     if (!text.trim().startsWith("/")) return err(c, 400, "invalid_slash_command");
     try {
-      const result = await mutate(id, () => sup.command(id, text.trim(), mode));
+      const result = await mutate(id, () => syncAdapter && sup.withSyncOperation
+        ? sup.withSyncOperation(id, () => sup.command(id, text.trim(), mode, body?.snapshotToken))
+        : sup.command(id, text.trim(), mode, body?.snapshotToken));
       if (result.action === "settings") return c.json({ ok: true, action: "settings" });
       return c.json({ ok: true, ...result });
     } catch (e) {
@@ -820,6 +840,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     const body = await c.req.json();
     const { text, mode = "prompt", images = [] } = body;
     const clientMessageId = typeof body?.clientMessageId === "string" ? body.clientMessageId.slice(0, 120) : null;
+    const snapshotToken = body?.snapshotToken;
     const messageText = typeof text === "string" ? text.trim() : "";
     if (!messageText && !Array.isArray(images)) return err(c, 400, "empty_message");
     if (!messageText && images.length === 0) return err(c, 400, "empty_message");
@@ -830,7 +851,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     let lease;
     try {
       lease = await beginStreamingMutation(id);
-      await sup.message(id, messageText, mode, images, clientMessageId);
+      await withAdmission(id, snapshotToken, () => sup.message(id, messageText, mode, images, clientMessageId, snapshotToken));
       // Real and mock supervisors call agentSettled after the asynchronous run
       // reaches idle. A synchronous/no-model failure has no active stream, so
       // finish the short mutation here instead.
@@ -838,6 +859,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
       return c.json({ ok: true });
     } catch (e) {
       if (lease?.managed) await sync.release?.(id, lease).catch(() => undefined);
+      if (e.code === "sync_snapshot_stale" || e.code === "sync_busy") return err(c, 409, e.code);
       if (e.code === "model_required") {
         return err(c, 409, "model_required", {
           message: "Connect a provider or choose an available model.",
@@ -865,13 +887,20 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     // Capture the sequence before reading the snapshot. Events emitted after
     // this point remain in the client's buffer and are replayed by seq.
     const seq = hub.currentSeq();
-    return c.json({
-      sessionId: id,
-      seq,
-      streaming: sup.isStreaming(id),
-      compacting: sup.isCompacting(id),
-      records: await sup.transcript(id),
-    });
+    try {
+      const file = await sup.sessionFile?.(id);
+      const before = await syncAdapter?.snapshotToken(id, file) || null;
+      const records = await sup.transcript(id);
+      const actualFile = await sup.sessionFile?.(id);
+      const after = await syncAdapter?.snapshotToken(id, actualFile) || null;
+      if (file !== actualFile || before !== after) return err(c, 409, "sync_snapshot_stale");
+      return c.json({
+        sessionId: id, seq, streaming: sup.isStreaming(id), compacting: sup.isCompacting(id), snapshotToken: after, records,
+      });
+    } catch (error) {
+      if (error.code === "sync_snapshot_stale") return err(c, 409, error.code);
+      throw error;
+    }
   });
 
   api.get("/sessions/:id/meta", async c => {
@@ -1258,8 +1287,9 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   api.post("/sessions/:id/bang", async c => {
     const id = c.req.param("id");
     return mutate(id, async () => {
-    const { cmd } = await c.req.json();
+    const { cmd, snapshotToken } = await c.req.json();
     if (!cmd?.trim()) return err(c, 400, "empty_command");
+    try { return await withAdmission(id, snapshotToken, async () => {
     const cwd = (await sessionWorkspace(id, sup)) || chatsDir();
     let env;
     try {
@@ -1285,6 +1315,10 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     hub.emit(id, "bang_end", { bangId, exit, durationMs, stdout: out });
     await sup.bangRecord(id, { id: bangId, role: "bang", cmd, meta, out });
     return c.json({ exit, durationMs });
+    }); } catch (error) {
+      if (error.code === "sync_snapshot_stale" || error.code === "sync_busy") return err(c, 409, error.code);
+      throw error;
+    }
     });
   });
 
