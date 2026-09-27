@@ -352,12 +352,7 @@ async function openSwitchedSession(sourceId, targetId) {
 }
 
 function canCheckActiveSync(id) {
-  const session = findSessionInState(store.state, id);
-  const transcript = store.transcript(id);
-  return viewingSession(id) && !!session?.synchronized
-    && globalThis.document?.visibilityState === "visible"
-    && globalThis.navigator?.onLine !== false && !store.state.offline
-    && !transcript.streaming && !transcript.compacting && !store.hasDraft(id);
+  return !!findSessionInState(store.state, id)?.synchronized && canCatchUpSession(id);
 }
 
 export async function checkActiveSync() {
