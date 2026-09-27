@@ -89,24 +89,22 @@ live lease state machine for a web session. It remains for mock-mode behavior an
 existing coordinator tests until extension-only end-to-end validation replaces
 them.
 
-The initial cutover gives prompt turns and explicit sync operations the
-extension-owned lifecycle. Before a normal prompt, the web host asks the
-extension to reconcile the local binding: the canonical server snapshot is
-authoritative, so a stale local copy—including one with an interrupted,
-unuploaded turn—is replaced before the prompt runs. The previous materialized
-file remains on disk as a recovery copy. Lease and transport failures still
-block because they do not establish whether the server accepted the turn.
-Remaining web-only durable operations that do not enter Pi's prompt or
-compaction lifecycle remain local until a later prompt or explicit
-synchronization operation. Automatic focus refresh is disabled in this path so
-those local entries are not silently replaced.
+Prompt turns and explicit sync operations use the extension-owned lifecycle.
+Attachment is passive; immediately before a normal prompt, the web host asks
+the extension to reconcile the local binding. If that replaces the snapshot,
+a message composed against the previous snapshot is rejected before it runs,
+with the draft kept in the browser. The previous materialized file remains on
+disk as a recovery copy. Bang persistence and prompt admission exclude
+background replacement; local divergence prevents the extension's automatic
+check from replacing unsynchronized entries.
 
-The web's existing sync endpoints remain as thin compatibility surfaces:
-manual enrollment and refresh invoke `/sync attach` and `/sync refresh` through
-the actual extension, while status reads the extension binding and server
-metadata without exposing lease tokens to browsers. Refresh remains available
-explicitly; automatic focus refresh is disabled so web-only local entries are
-not silently replaced before they are included in a later turn.
+Manual enrollment and refresh still invoke `/sync attach` and `/sync refresh`
+through the extension. The separate automatic check runs on demand for a
+visible selected conversation, roughly every 20 seconds and on focus or
+reconnect. The extension owns ETag, lease, idle, and conflict decisions; the
+browser reloads settled snapshots rather than remote token streams. Hidden
+tabs catch up on focus. Status reads the binding and server metadata without
+exposing lease tokens or local file paths to browsers.
 
 ## Sticky names
 

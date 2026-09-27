@@ -314,19 +314,20 @@ test("automatic refresh remains busy until bang persistence completes", async ()
 });
 
 test("transcript never labels pre-replacement records with a new snapshot token", async () => {
-  let file = "/old.jsonl";
+  const file = "/old.jsonl";
+  let bindingFile = file;
   let token = "old";
   const adapter = {
     state: () => ({}),
     snapshotToken: async (_id, actualFile) => {
-      if (actualFile !== file) throw Object.assign(new Error("changing"), { code: "sync_snapshot_stale" });
+      if (actualFile !== bindingFile) throw Object.assign(new Error("changing"), { code: "sync_snapshot_stale" });
       return token;
     },
   };
   const supervisor = {
     setSyncAdapter() {},
     sessionFile: async () => file,
-    transcript: async () => { file = "/new.jsonl"; token = "new"; return [{ text: "old data" }]; },
+    transcript: async () => { bindingFile = "/new.jsonl"; token = "new"; return [{ text: "old data" }]; },
     isStreaming: () => false,
     isCompacting: () => false,
   };
