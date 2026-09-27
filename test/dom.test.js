@@ -160,7 +160,9 @@ async function boot() {
       if (url.endsWith("/message") && options.method === "POST") {
         const request = { url, body: JSON.parse(options.body || "{}") };
         dom.window.__writeRequests = [...(dom.window.__writeRequests || []), request];
-        return dom.window.__staleWrites ? json({ error: "sync_snapshot_stale" }, false, 409) : json({ ok: true });
+        const response = () => dom.window.__staleWrites ? json({ error: "sync_snapshot_stale" }, false, 409) : json({ ok: true });
+        if (dom.window.__holdMessage) return new Promise(resolve => { dom.window.__releaseMessage = () => resolve(response()); });
+        return response();
       }
       if (url.endsWith("/bang") && options.method === "POST") {
         const request = { url, body: JSON.parse(options.body || "{}") };
@@ -402,6 +404,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     syncWorkspace: { gitRemote: "https://github.com/owner/demo.git", branch: "main", commit: "0123456789abcdef" },
   });
   Object.assign(currentProject.contexts[0].sessions[0], { synchronized: true, syncState: "available" });
+  Object.assign(state.projects[0].sessions.find(item => item.id === "s1"), {
+    synchronized: true, syncState: "available", syncSessionId: "sync-1", syncTitle: "Canonical session",
+  });
+  Object.assign(state.projects[0].contexts[0].sessions[0], { synchronized: true, syncState: "available" });
   store.notify("state");
   assert.deepEqual([...root.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
     ["Branch", "main"],
@@ -927,8 +933,6 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   applyEvent({ v: 1, seq: 101, sessionId: "sibling", type: "user_record", record: { id: "u-sibling", role: "user", text: "recent sibling" } });
   assert.equal(store.state.projects[0].sessions[0].id, "sibling");
 
-  const composer = root.querySelector("pi-composer");
-  const textarea = composer.querySelector("textarea");
   textarea.value = "foo";
   textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   root.querySelector("[data-id='sibling']").click();
@@ -954,6 +958,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   textarea.dispatchEvent(desktopEnter);
   assert.equal(desktopEnter.defaultPrevented, true, "desktop Enter sends");
   assert.equal(store.transcript("s1").records.some(record => record.pending), true);
+  while (composer.sendingIds.has("s1")) await new Promise(resolve => setImmediate(resolve));
 
   dom.setNarrowViewport(true);
   const pendingBeforeButton = store.transcript("s1").records.filter(record => record.pending).length;
@@ -961,6 +966,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   composer.querySelector(".send-btn").click();
   assert.equal(store.transcript("s1").records.filter(record => record.pending).length, pendingBeforeButton + 1);
+  while (composer.sendingIds.has("s1")) await new Promise(resolve => setImmediate(resolve));
   dom.setNarrowViewport(false);
 
   textarea.value = "/";
@@ -1199,6 +1205,41 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   dom.window.__resolveState();
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(store.state.sessionId, "sibling", "selection changes during state refresh prevent stale SSE navigation");
+
+  selectSession("p1", "s1");
+  store.transcript("s1").snapshotToken = "newer-edit-token";
+  textarea.value = "first submission";
+  textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  dom.window.__holdMessage = true;
+  const sending = composer.send();
+  store.setDraft("newer unsent text", "s1");
+  store.setDraftAttachments([{ type: "image", data: "Zm9v", mimeType: "image/png", name: "later.png" }], "s1");
+  dom.window.__releaseMessage();
+  await sending;
+  assert.equal(store.draft("s1"), "newer unsent text", "a completed send cannot clear newer text");
+  assert.equal(store.draftAttachments("s1").length, 1, "a completed send cannot clear newer attachments");
+  assert.equal(textarea.value, "newer unsent text");
+
+  dom.window.__staleWrites = true;
+  const failing = composer.send();
+  store.setDraft("latest unsent text", "s1");
+  store.setDraftAttachments([{ type: "image", data: "YmFy", mimeType: "image/png", name: "latest.png" }], "s1");
+  dom.window.__releaseMessage();
+  await failing;
+  assert.equal(store.draft("s1"), "latest unsent text", "a failed send cannot restore over newer text");
+  assert.equal(store.draftAttachments("s1")[0].name, "latest.png", "a failed send cannot restore over newer attachments");
+  dom.window.__holdMessage = false;
+  dom.window.__staleWrites = false;
+  store.clearDraft("s1");
+
+  state.chats.push({ id: "sync-chat", title: "Standalone sync", synchronized: true, streaming: false });
+  await refreshState();
+  const { selectChat } = await import("../public/js/shell.js");
+  const chatChecksBefore = checkCount();
+  selectChat("sync-chat");
+  await checkActiveSync();
+  assert.ok(checkCount() > chatChecksBefore, "standalone synchronized chats check on selection");
+  assert.equal(store.state.chatId, "sync-chat");
 
   dom.window.close();
 });

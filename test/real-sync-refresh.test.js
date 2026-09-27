@@ -193,13 +193,26 @@ async function scenario() {
     const tabTwo = await transcript(api);
     assert.equal(tabOne.snapshotToken, tabTwo.snapshotToken);
 
+    const liveSession = supervisor.live.get(id).session;
+    const originalModel = Object.getOwnPropertyDescriptor(liveSession, "model");
+    const originalPrompt = Object.getOwnPropertyDescriptor(liveSession, "prompt");
+    Object.defineProperty(liveSession, "model", { configurable: true, value: { provider: "test", id: "model", api: "test" } });
     let finishPrompt;
-    const pendingPrompt = new Promise(resolve => { finishPrompt = resolve; });
-    supervisor._startPrompt(id, () => pendingPrompt, error => { throw error; });
-    remote = appendMessage(remote, "remote-one", "remote history one");
-    etag = "e2";
-    assert.equal((await check()).outcome, "busy");
-    finishPrompt();
+    let signalPromptStarted;
+    const promptStarted = new Promise(resolve => { signalPromptStarted = resolve; });
+    liveSession.prompt = () => { signalPromptStarted(); return new Promise(resolve => { finishPrompt = resolve; }); };
+    try {
+      const pending = await request(api, `/sessions/${id}/message`, { text: "pending admission", snapshotToken: tabOne.snapshotToken });
+      assert.equal(pending.status, 200, JSON.stringify(pending.body));
+      await promptStarted;
+      remote = appendMessage(remote, "remote-one", "remote history one");
+      etag = "e2";
+      assert.equal((await check()).outcome, "busy");
+    } finally {
+      finishPrompt?.();
+      if (originalModel) Object.defineProperty(liveSession, "model", originalModel); else delete liveSession.model;
+      if (originalPrompt) Object.defineProperty(liveSession, "prompt", originalPrompt); else delete liveSession.prompt;
+    }
     await new Promise(resolve => setImmediate(resolve));
     const first = await check();
     assert.equal(first.outcome, "refreshed");
@@ -254,18 +267,35 @@ async function scenario() {
     assert.equal((await persistedBinding()).materializedFile, secondBinding.materializedFile);
     assert.equal((await transcript(api)).snapshotToken, secondTranscript.snapshotToken);
 
-    const localEntry = appendMessage(remote, "local-only", "local unsynchronized history").entries.at(-1);
-    fs.appendFileSync(secondBinding.materializedFile, `${JSON.stringify(localEntry)}\n`);
-    const localBytes = fs.readFileSync(secondBinding.materializedFile, "utf8");
-    const fingerprint = secondBinding.lastFingerprint;
+    const bangOnly = await request(api, `/sessions/${id}/bang`, {
+      cmd: "printf 'bang-only divergence'", snapshotToken: secondTranscript.snapshotToken,
+    });
+    assert.equal(bangOnly.status, 200);
+    const bangOnlyBytes = fs.readFileSync(secondBinding.materializedFile, "utf8");
+    assert.ok(bangOnlyBytes.includes("pi-web:bang"));
     remote = appendMessage(remote, "remote-three", "remote history three");
     etag = "e4";
+    assert.equal((await check()).outcome, "conflict", "a bang alone prevents automatic replacement");
+    assert.equal((await persistedBinding()).materializedFile, secondBinding.materializedFile);
+    assert.equal(fs.readFileSync(secondBinding.materializedFile, "utf8"), bangOnlyBytes);
+
+    const manual = await request(api, `/sessions/${id}/sync/refresh`, {});
+    assert.equal(manual.status, 200, JSON.stringify(manual.body));
+    const baselineBinding = await persistedBinding();
+    const baselineTranscript = await transcript(api);
+    assert.notEqual(baselineTranscript.snapshotToken, secondTranscript.snapshotToken);
+    const localEntry = appendMessage(remote, "local-only", "local unsynchronized history").entries.at(-1);
+    fs.appendFileSync(baselineBinding.materializedFile, `${JSON.stringify(localEntry)}\n`);
+    const localBytes = fs.readFileSync(baselineBinding.materializedFile, "utf8");
+    const fingerprint = baselineBinding.lastFingerprint;
+    remote = appendMessage(remote, "remote-four", "remote history four");
+    etag = "e5";
     const conflict = await check();
     assert.equal(conflict.outcome, "conflict");
-    assert.equal(fs.readFileSync(secondBinding.materializedFile, "utf8"), localBytes);
+    assert.equal(fs.readFileSync(baselineBinding.materializedFile, "utf8"), localBytes);
     const afterConflict = await persistedBinding();
-    assert.equal(afterConflict.materializedFile, secondBinding.materializedFile);
-    assert.equal(afterConflict.lastEtag, "e3");
+    assert.equal(afterConflict.materializedFile, baselineBinding.materializedFile);
+    assert.equal(afterConflict.lastEtag, "e4");
     assert.equal(afterConflict.lastFingerprint, fingerprint);
 
     const decoy = appendMessage(remote, "decoy-entry", "unbound decoy history");
@@ -278,7 +308,7 @@ async function scenario() {
     const restartedApi = buildApi(restartedSupervisor, { syncAdapter: restartedAdapter });
     assert.equal(await restartedSupervisor.sessionFile(id), afterConflict.materializedFile);
     const restarted = await transcript(restartedApi);
-    assert.equal(restarted.snapshotToken, secondTranscript.snapshotToken);
+    assert.equal(restarted.snapshotToken, baselineTranscript.snapshotToken);
     assert.ok(restarted.records.some(record => record.text === "local unsynchronized history"));
     assert.equal(restarted.records.some(record => record.text === "unbound decoy history"), false);
 
@@ -299,6 +329,8 @@ async function scenario() {
     assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "busy");
     finishBangPersistence();
     assert.equal((await bangRequest).status, 200);
+    const bangEntries = fs.readFileSync(afterConflict.materializedFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    assert.ok(bangEntries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"));
     assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "conflict");
   } finally {
     for (const current of [supervisor, restartedSupervisor]) {

@@ -103,6 +103,7 @@ export function selectChat(chatId) {
   saveActiveSession({ kind: "chat", id: chatId });
   store.markRead(chatId);
   openTranscript(chatId);
+  void checkActiveSync();
 }
 
 export function restoreLastSelection() {

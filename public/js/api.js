@@ -313,8 +313,7 @@ function startRecovery() {
 }
 
 function viewingSession(id) {
-  return !!id && store.state.view === "chat" && !store.state.chatId
-    && store.state.sessionId === id && store.activeKey() === id;
+  return !!id && store.state.view === "chat" && store.activeKey() === id;
 }
 
 function canCatchUpSession(id) {
@@ -337,16 +336,15 @@ function clearCatchUpNotice(id) {
 }
 
 async function openSwitchedSession(sourceId, targetId) {
-  const stillViewingSource = () => viewingSession(sourceId);
-  if (!stillViewingSource()) return false;
+  if (!canCatchUpSession(sourceId)) return false;
   const { selectSessionById } = await import("./shell.js");
-  if (!stillViewingSource()) return false;
+  if (!canCatchUpSession(sourceId)) return false;
   for (let attempt = 0; attempt < 2; attempt++) {
     await refreshState();
-    if (!stillViewingSource()) return false;
+    if (!canCatchUpSession(sourceId)) return false;
     if (targetId === sourceId) {
       await openTranscript(sourceId, { scrollToLatest: false });
-      return stillViewingSource();
+      return canCatchUpSession(sourceId);
     }
     if (selectSessionById(targetId)) return true;
   }
@@ -393,7 +391,13 @@ export async function checkActiveSync() {
     }
     try {
       const result = await api.checkSyncSession(id);
-      if (!viewingSession(id) || store.hasDraft(id)) return;
+      if (!canCatchUpSession(id)) return;
+      if (result.outcome === "refreshed" && result.sessionId && result.sessionId !== id) {
+        pendingSessionSwitches.set(id, result.sessionId);
+        const opened = await openSwitchedSession(id, result.sessionId);
+        if (opened && pendingSessionSwitches.get(id) === result.sessionId) pendingSessionSwitches.delete(id);
+        return;
+      }
       const tokenChanged = typeof result.snapshotToken === "string"
         && result.snapshotToken !== store.transcript(id).snapshotToken;
       if (result.outcome !== "refreshed" && !tokenChanged) return;

@@ -1091,18 +1091,18 @@ class PiComposer extends HTMLElement {
         store.setDraft(rawText, id);
         store.setDraftAttachments(attachments, id);
       }
-      if (store.activeKey() === id) {
-        this.ta.value = store.draft(id);
-        this.attachments = store.draftAttachments(id).slice();
-        this.renderAttachments();
-      }
       store.setError(err.error === "model_required"
         ? "No model is available. Connect a provider or choose one in Settings."
         : syncFailureMessage(err, "Send failed"));
     } finally {
       this.sendingIds.delete(id);
       store.setDraftSending(false, id);
-      if (store.activeKey() === id) this.sync();
+      if (store.activeKey() === id) {
+        this.ta.value = store.draft(id);
+        this.attachments = store.draftAttachments(id).slice();
+        this.renderAttachments();
+        this.sync();
+      }
     }
   }
 
