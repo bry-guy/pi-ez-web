@@ -193,8 +193,14 @@ async function scenario() {
     const tabTwo = await transcript(api);
     assert.equal(tabOne.snapshotToken, tabTwo.snapshotToken);
 
+    let finishPrompt;
+    const pendingPrompt = new Promise(resolve => { finishPrompt = resolve; });
+    supervisor._startPrompt(id, () => pendingPrompt, error => { throw error; });
     remote = appendMessage(remote, "remote-one", "remote history one");
     etag = "e2";
+    assert.equal((await check()).outcome, "busy");
+    finishPrompt();
+    await new Promise(resolve => setImmediate(resolve));
     const first = await check();
     assert.equal(first.outcome, "refreshed");
     assert.equal(first.sessionId, id);
@@ -275,6 +281,25 @@ async function scenario() {
     assert.equal(restarted.snapshotToken, secondTranscript.snapshotToken);
     assert.ok(restarted.records.some(record => record.text === "local unsynchronized history"));
     assert.equal(restarted.records.some(record => record.text === "unbound decoy history"), false);
+
+    const originalBangRecord = restartedSupervisor.bangRecord.bind(restartedSupervisor);
+    let signalBangPersistence;
+    const bangPersistenceStarted = new Promise(resolve => { signalBangPersistence = resolve; });
+    let finishBangPersistence;
+    restartedSupervisor.bangRecord = async (...args) => {
+      signalBangPersistence();
+      await new Promise(resolve => { finishBangPersistence = resolve; });
+      return originalBangRecord(...args);
+    };
+    const bangRequest = request(restartedApi, `/sessions/${id}/bang`, {
+      cmd: "printf 'persisted bang'",
+      snapshotToken: restarted.snapshotToken,
+    });
+    await bangPersistenceStarted;
+    assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "busy");
+    finishBangPersistence();
+    assert.equal((await bangRequest).status, 200);
+    assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "conflict");
   } finally {
     for (const current of [supervisor, restartedSupervisor]) {
       if (!current) continue;
