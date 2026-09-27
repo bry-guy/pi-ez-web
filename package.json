@@ -4,6 +4,7 @@
   "description": "Self-hostable web UI for Pi coding-agent sessions",
   "main": "index.js",
   "scripts": {
+    "pretest": "npm run build --prefix vendor/pi-sync",
     "test": "node test/run-suite.js",
     "test:dom": "node --test test/dom.test.js",
     "start": "node server/index.js",

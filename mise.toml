@@ -3,8 +3,13 @@
 node = "22"
 
 [tasks.bootstrap]
-description = "Install JavaScript dependencies"
-run = "npm ci"
+description = "Install app and vendored pi-sync dependencies"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+npm ci
+npm ci --prefix vendor/pi-sync
+'''
 
 [tasks.dev]
 description = "Start the mock server with isolated local state"

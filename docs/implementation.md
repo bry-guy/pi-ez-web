@@ -113,8 +113,10 @@ version 5 and includes capability markers for workspace and branch features.
 
 ## Verification
 
+Run `mise run bootstrap` once to install the app and vendored pi-sync dependencies. The app test script rebuilds the vendored extension before the real JSON-mode host test; generated `vendor/pi-sync/dist/` is not tracked.
+
 ```sh
-npm test               # no credentials: git, mock HTTP+SSE, SDK, and DOM gates
+npm test               # no credentials: git, mock HTTP+SSE, real sync host, SDK, and DOM gates
 npm run test:dom       # DOM interaction gate alone
 npm run verify:real    # with ~/.pi/agent: real turn, model, worktree, and edit gate
 ```
