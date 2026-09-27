@@ -825,8 +825,12 @@ export class RealSupervisor {
     const options = st.session.isStreaming
       ? { source: "rpc", streamingBehavior: mode === "followUp" ? "followUp" : "steer" }
       : { source: "rpc" };
-    await this.syncAdapter?.assertSnapshot?.(id, snapshotToken, st.session.sessionFile);
-    this._startPrompt(id, () => st.session.prompt(parsed.text, options), error => this._endTurnWithError(id, st, error));
+    if (this.syncAdapter) {
+      await this.syncAdapter.assertSnapshot(id, snapshotToken, st.session.sessionFile);
+      this._startPrompt(id, () => st.session.prompt(parsed.text, options), error => this._endTurnWithError(id, st, error));
+    } else {
+      await st.session.prompt(parsed.text, options);
+    }
     return { action: "handled", name: parsed.name };
   }
 
