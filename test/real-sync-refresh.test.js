@@ -41,6 +41,10 @@ async function scenario() {
       if (url.pathname === "/v1/health" && request.method === "GET") {
         return send(response, 200, { status: "ok", formatVersion: 1, heartbeatSeconds: 20, leaseExpirySeconds: 120 });
       }
+      if (url.pathname === "/v1/sessions" && request.method === "POST") {
+        remote = await readBody(request);
+        return send(response, 201, { formatVersion: 1, session: remote, etag });
+      }
       if (url.pathname === "/v1/sessions" && request.method === "GET") {
         return send(response, 200, {
           formatVersion: 1,
@@ -90,9 +94,11 @@ async function scenario() {
     server.listen(0, "127.0.0.1", resolve);
   });
   const serverUrl = `http://127.0.0.1:${server.address().port}`;
+  const unrelatedExtension = path.join(root, "unrelated.ts");
+  fs.writeFileSync(unrelatedExtension, 'export default pi => pi.registerCommand("test-unrelated", { description: "kept", handler: async () => {} });\n');
   fs.writeFileSync(path.join(webHome, "config.json"), JSON.stringify({
     sync: { serverUrl, allConversations: false },
-    pi: { profile: null, profileSource: "disabled", packages: [], extensions: [] },
+    pi: { profile: null, profileSource: "disabled", packages: [], extensions: [path.join(repo, "vendor/pi-sync/extensions/sync.ts"), unrelatedExtension] },
   }));
 
   try {
@@ -106,6 +112,24 @@ async function scenario() {
     supervisor = new RealSupervisor(hub);
     adapter = new PiSyncWebAdapter({ hub, supervisor });
     const api = buildApi(supervisor, { syncAdapter: adapter });
+    const empty = await supervisor.createSession({ cwd });
+    const emptyCommands = await supervisor.commands(empty.id);
+    assert.deepEqual(emptyCommands.filter(command => command.name.startsWith("sync")).map(command => command.name), ["sync"]);
+    assert.ok(emptyCommands.some(command => command.name === "test-unrelated"));
+    assert.ok(emptyCommands.some(command => command.name === "skill:synchronized-workspace"));
+    const activeSync = supervisor.live.get(empty.id).session.extensionRunner.extensions.filter(extension => extension.commands.has("sync"));
+    assert.equal(activeSync.length, 1);
+    assert.equal(path.resolve(activeSync[0].path), path.resolve(await adapter.extensionPath()));
+    assert.ok(!supervisor.piConfiguration.runtime.errors.some(error => /sync/.test(error.error)));
+    const enrolled = await api.request(`/sessions/${empty.id}/sync`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const enrollmentBody = await enrolled.json();
+    assert.equal(enrolled.status, 200, JSON.stringify({ error: enrollmentBody.error, code: enrollmentBody.code }));
+    assert.equal((await adapter.status(empty.id)).synchronized, true);
+    assert.equal((await adapter.autoCheck(empty.id)).outcome, "unchanged");
+    await supervisor.reloadPiConfiguration({ sessionId: empty.id });
+    const reloadedCommands = await supervisor.commands(empty.id);
+    assert.deepEqual(reloadedCommands.filter(command => command.name.startsWith("sync")).map(command => command.name), ["sync"]);
+    assert.ok(reloadedCommands.some(command => command.name === "test-unrelated"));
     const created = await supervisor.createSession({ cwd });
     const id = created.id;
     const initialFile = supervisor.paths.get(id);

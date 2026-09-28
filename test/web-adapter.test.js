@@ -150,7 +150,7 @@ test("beforePrompt delegates stale-session reconciliation to the extension", asy
   assert.deepEqual(await adapter.beforePrompt("local-session"), { switched: true, sessionId: "local-session" });
 });
 
-test("browser enrollment dispatches /sync attach without an endpoint argument", async () => {
+test("browser enrollment passes the configured server URL to /sync attach", async () => {
   const commands = [];
   let statusCalls = 0;
   const adapter = new PiSyncWebAdapter({
@@ -161,7 +161,7 @@ test("browser enrollment dispatches /sync attach without an endpoint argument", 
   adapter.status = async () => ({ synchronized: statusCalls++ > 0 });
 
   const result = await adapter.enroll("session-attach");
-  assert.deepEqual(commands, [["session-attach", "/sync attach"]]);
+  assert.deepEqual(commands, [["session-attach", "/sync attach https://sync.example"]]);
   assert.equal(result.created, true);
 });
 

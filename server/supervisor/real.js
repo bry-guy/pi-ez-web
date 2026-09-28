@@ -239,6 +239,14 @@ export class RealSupervisor {
           agentDir,
           settingsManager,
           additionalExtensionPaths: extensionPaths,
+          ...(syncExtensionPath ? { extensionsOverride: result => ({
+            ...result,
+            extensions: result.extensions.filter(extension =>
+              !extension.commands?.has("sync") ||
+              path.resolve(extension.path || "") === path.resolve(syncExtensionPath) ||
+              !/(?:^|[/\\])pi-sync[/\\](?:.*[/\\])?extensions[/\\]sync\.[jt]s$/.test(extension.path || "")
+            ),
+          }) } : {}),
         });
         if (resolveOnly) {
           const packageManager = new SDKModule.DefaultPackageManager({ cwd, agentDir, settingsManager });
