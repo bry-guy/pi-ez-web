@@ -1239,7 +1239,7 @@ header.bar { background: color-mix(in oklch, var(--bg) 82%, transparent); backdr
 /* transcript: centered reading column */
 .col-pad, .composer-pad { width: 100%; max-width: 800px; padding-inline: 24px; }
 .col-pad { padding-top: 32px; }
-.msg { margin-bottom: 26px; animation: piRise .32s var(--ease) both; }
+.msg { margin-bottom: 26px; }
 @keyframes piRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .bubble { background: var(--user-surface); border-radius: 22px; padding: 11px 18px; font-size: 15px; box-shadow: none; }
 .user-message-content { width: auto; max-width: min(80%, calc(100% - 42px)); }
