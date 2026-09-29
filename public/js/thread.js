@@ -41,6 +41,8 @@ function syncFailureMessage(error, prefix) {
 }
 
 /* ---------------- thread ---------------- */
+const EMPTY_STATE = `<div class="empty-pi"><div class="tile">π</div><h1 class="empty-greeting">What shall we <em>build</em>?</h1></div>`;
+
 class PiThread extends HTMLElement {
   connectedCallback() {
     this.renderCache = new WeakMap();
@@ -179,8 +181,7 @@ class PiThread extends HTMLElement {
       this.historyLimit = HISTORY_PAGE_SIZE;
       this.scrollOnNextRender = true;
     }
-    if (!activeKey) { this.innerHTML = ""; return; }
-    if (!activeKey) { this.innerHTML = ""; return; }
+    if (!activeKey) { this.innerHTML = EMPTY_STATE; return; }
     const visibleRecords = this.visibleRecords(t.records);
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
@@ -192,7 +193,7 @@ class PiThread extends HTMLElement {
     const notice = this.renderCommandNotice();
     const history = this.historyRecords(visibleRecords);
     if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
-      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div><h1 class="empty-greeting">What shall we <em>build</em>?</h1></div>`;
+      this.innerHTML = EMPTY_STATE;
       return;
     }
     const records = history.records.map(m => this.renderRecordCached(m)).join("");

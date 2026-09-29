@@ -1203,7 +1203,8 @@ button:active:not(:disabled) { transform: scale(.97); }
 .markdown-content pre code, .markdown-content :not(pre) > code, .block pre, .diff-body, .diff-line,
 .file-code code, .bang .bh-cmd, .bang .sigil, .block-head .bh-arg, .logs-server-list, .command-option,
 .branch-option, .branch-picker-trigger, .workspace-branch, .confirm-commits code, .auth-device strong,
-.github-login-state strong, .git-url-input, .repo-row .rr-name, .file-row, .file-path, .row.mono { font-family: var(--code); }
+.github-login-state strong, .git-url-input, .file-row, .file-path { font-family: var(--code); }
+.row.mono { font-family: var(--sans); font-size: 13.5px; font-weight: 500; }
 
 /* shell */
 aside.rail { background: var(--rail-bg); box-shadow: inset -1px 0 0 var(--hairline); width: 272px; flex-basis: 272px; }
