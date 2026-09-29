@@ -30,6 +30,21 @@ RUN apt-get update \
       unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# mise and yadm let deployment prestart hooks install the operator's dotfiles
+# and project tools. Downloads are pinned by SHA-256.
+RUN set -eu; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSL --proto '=https' --tlsv1.2 --max-time 60 -o "$tmp/mise" \
+      'https://github.com/jdx/mise/releases/download/v2026.8.5/mise-v2026.8.5-linux-x64'; \
+    echo "ee362b6d96c648e27325a8bc7ee866bde4fffc20c88c777c5eb5c3b5c6f3e226  $tmp/mise" | sha256sum -c -; \
+    curl -fsSL --proto '=https' --tlsv1.2 --max-time 60 -o "$tmp/yadm.tar.gz" \
+      'https://github.com/yadm-dev/yadm/archive/refs/tags/3.5.0.tar.gz'; \
+    echo "2a15ed91238dd2f15db9905eb56702272c079ad9c37c505dfee69c6b5e9054b6  $tmp/yadm.tar.gz" | sha256sum -c -; \
+    tar -xzf "$tmp/yadm.tar.gz" -C "$tmp" yadm-3.5.0/yadm; \
+    install -m 0755 "$tmp/mise" /usr/local/bin/mise; \
+    install -m 0755 "$tmp/yadm-3.5.0/yadm" /usr/local/bin/yadm; \
+    rm -rf "$tmp"
+
 COPY package.json package-lock.json ./
 
 # Pi is a production dependency: the real supervisor imports its SDK in-process.
