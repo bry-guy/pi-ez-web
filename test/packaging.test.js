@@ -36,7 +36,10 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   const cleanAt = piSyncBuildRun.indexOf("npm cache clean --force");
   assert.ok(buildAt >= 0 && cleanAt > buildAt);
   assert.doesNotMatch(dockerfile, /git clone/);
-  assert.doesNotMatch(dockerfile, /\b(mise|fnox|tofu|kubectl|yadm)\b/i);
+  // mise and yadm are credential-free prestart tools; secret and cluster tools stay out.
+  assert.match(dockerfile, /install -m 0755 "\$tmp\/mise" \/usr\/local\/bin\/mise/);
+  assert.match(dockerfile, /install -m 0755 "\$tmp\/yadm-3\.5\.0\/yadm" \/usr\/local\/bin\/yadm/);
+  assert.doesNotMatch(dockerfile, /\b(fnox|tofu|kubectl)\b/i);
   assert.doesNotMatch(dockerfile, /\bop\b/);
   assert.doesNotMatch(dockerfile, /MISE_|FNOX_|OP_VERSION|OPENTOFU_|KUBECTL_/);
   assert.match(dockerfile, /build-essential/);
