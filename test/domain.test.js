@@ -14,4 +14,5 @@ test("unnamed sessions use a compact start-of-session fallback", () => {
   assert.equal(titleOf({ name: "Named session", firstMessage: "ignored" }), "Named session");
   assert.equal(titleOf({ name: null, firstMessage: "first prompt" }), "first prompt");
   assert.equal(titleOf({ name: null, firstMessage: "" }), "New session");
+  assert.equal(titleOf({ name: null, firstMessage: "Fix **the** `parser`" }), "Fix the parser");
 });

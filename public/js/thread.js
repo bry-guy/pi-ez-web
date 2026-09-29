@@ -192,7 +192,7 @@ class PiThread extends HTMLElement {
     const notice = this.renderCommandNotice();
     const history = this.historyRecords(visibleRecords);
     if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
-      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div></div>`;
+      this.innerHTML = `<div class="empty-pi"><div class="tile">π</div><h1 class="empty-greeting">What shall we <em>build</em>?</h1></div>`;
       return;
     }
     const records = history.records.map(m => this.renderRecordCached(m)).join("");

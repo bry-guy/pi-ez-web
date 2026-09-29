@@ -139,6 +139,14 @@ class PiSettings extends HTMLElement {
   async onClick(e) {
     if (e.target.closest("[data-act='close-settings']")) { store.set({ view: "chat" }); return; }
     if (e.target.closest("[data-act='open-logs']")) { store.set({ logsOpen: true, logsError: null }); return; }
+    const theme = e.target.closest("[data-theme-choice]");
+    if (theme) {
+      const value = theme.dataset.themeChoice;
+      document.documentElement.dataset.theme = value;
+      try { localStorage.setItem("pi-theme", value); } catch { /* storage is optional */ }
+      for (const b of this.querySelectorAll("[data-theme-choice]")) b.setAttribute("aria-pressed", String(b === theme));
+      return;
+    }
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
     if (e.target.closest("[data-act='save-repository-settings']")) return this.saveRepositorySettings();
     if (e.target.closest("[data-act='save-sync-settings']")) return this.saveSyncSettings();
@@ -445,6 +453,13 @@ class PiSettings extends HTMLElement {
     this.innerHTML = `<div class="col-pad">
       <div class="screen-title-row"><div class="screen-title">Settings</div><div class="settings-title-actions"><button class="settings-action quiet" data-act="open-logs">Logs</button><button class="ghost-btn settings-close" data-act="close-settings" title="Close settings" aria-label="Close settings">×</button></div></div>
       ${feedback}
+      <section class="settings-section">
+        <div class="settings-section-title">Appearance</div>
+        <div class="settings-card settings-card-spaced"><div class="settings-row">
+          <div class="sr-main"><div class="sr-title">Theme</div><div class="sr-sub">Stored in this browser.</div></div>
+          <div class="segmented" role="group" aria-label="Theme">${[["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) => `<button data-theme-choice="${value}" aria-pressed="${(document.documentElement.dataset.theme || "system") === value}">${label}</button>`).join("")}</div>
+        </div></div>
+      </section>
       <section class="settings-section">
         <div class="settings-section-title">AI providers</div>
         <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>

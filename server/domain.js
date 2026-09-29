@@ -225,7 +225,8 @@ export function titleOf(s) {
 }
 
 export function truncateSessionStart(value, max = 48) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
+  // Titles are plain text; drop inline markdown markers from the first prompt.
+  const text = String(value || "").replace(/[*_`#>~]+/g, "").replace(/\s+/g, " ").trim();
   return text ? text.slice(0, max) : "New session";
 }
 
