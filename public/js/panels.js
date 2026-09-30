@@ -451,7 +451,7 @@ class PiSettings extends HTMLElement {
       ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
       : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
     this.innerHTML = `<div class="col-pad">
-      <div class="screen-title-row"><div class="screen-title">Settings</div><div class="settings-title-actions"><button class="settings-action quiet" data-act="open-logs">Logs</button><button class="ghost-btn settings-close" data-act="close-settings" title="Close settings" aria-label="Close settings">×</button></div></div>
+      <div class="screen-title-row"><div class="screen-title">Settings</div><div class="settings-title-actions"><button class="ghost-btn settings-close" data-act="close-settings" title="Close settings" aria-label="Close settings">×</button></div></div>
       ${feedback}
       <section class="settings-section">
         <div class="settings-section-title">Appearance</div>
@@ -476,10 +476,10 @@ class PiSettings extends HTMLElement {
             <div class="sr-main"><div class="sr-title">Additional packages</div><div class="sr-sub">Optional packages added on top of the profile. Enter one Pi npm/git package source per line; missing packages install on Apply.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piPackages" rows="4" placeholder="npm:context-mode&#10;git:github.com/owner/pi-extension">${esc((piConfig.packages || []).join("\n"))}</textarea>
           </div>
-          <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Additional extensions</div><div class="sr-sub">Optional server-local extension files or directories, one path per line. These are not package names; relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
+          <details class="settings-advanced" ${(piConfig.extensions || []).length ? "open" : ""}><summary>Advanced</summary><div class="settings-row settings-path-row">
+            <div class="sr-main"><div class="sr-title">Local extension paths</div><div class="sr-sub">Optional server-local extension files or directories, one path per line. These are not package names; relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
-          </div>
+          </div></details>
           <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${extensionList}${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
           <div class="settings-row settings-actions-row"><span class="settings-mono">Apply fetches the profile, installs missing packages, and reloads idle sessions. Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-save" data-act="save-pi-configuration">Apply</button>${piOperation}</div></div>
         </div>
@@ -487,16 +487,16 @@ class PiSettings extends HTMLElement {
       <section class="settings-section">
         <div class="settings-section-title">Conversation synchronization</div>
         <div class="settings-card settings-card-spaced">
-          <div class="settings-row settings-path-row">
+          ${syncServerEditable ? `<div class="settings-row settings-path-row">
             <div class="sr-main"><div class="sr-title">Sync server</div><div class="sr-sub">Canonical enrolled conversations live in the configured pi-sync service. Leave this empty to keep local-only behavior.</div></div>
-            <input class="settings-inline-input" data-setting="syncServerUrl" value="${esc(syncServerUrl)}" placeholder="https://pi-sync.example${syncServerEditable ? "" : " (deployment controlled)"}" ${syncServerEditable ? "" : "disabled"}>
-          </div>
+            <input class="settings-inline-input" data-setting="syncServerUrl" value="${esc(syncServerUrl)}" placeholder="https://pi-sync.example">
+          </div>` : ""}
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Synchronize all conversations</div><div class="sr-sub">Records the deployment-wide preference for the reconciliation pass. Individual conversations can be enrolled now.</div></div>
+            <div class="sr-main"><div class="sr-title">Synchronize all conversations</div><div class="sr-sub">${syncAllEditable ? "Enroll every conversation automatically. Otherwise use <span class=\"settings-mono\">/sync</span> in a conversation." : "Set by the deployment. Use <span class=\"settings-mono\">/sync</span> to enroll a conversation."}</div></div>
             <label class="sync-toggle"><input type="checkbox" data-setting="syncAllConversations" ${syncAll ? "checked" : ""} ${syncAllEditable ? "" : "disabled"}><span>${syncAll ? "On" : "Off"}</span></label>
           </div>
-          <div class="settings-row"><div class="sr-main"><div class="sr-title">${esc(syncLabel)}</div><div class="sr-sub">${syncState.implementation === "fake" ? "Using the development coordinator; no network calls are made." : syncState.error?.message || "Individual conversations can be enrolled from the active session."}</div></div><span class="status-dot ${syncState.connection === "available" ? "" : "off"}"></span></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">${syncServerEditable && syncAllEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><button class="settings-save" data-act="save-sync-settings" ${syncServerEditable || syncAllEditable ? "" : "disabled"}>Save</button></div>
+          <div class="settings-row"><div class="sr-main"><div class="sr-title">${esc(syncLabel)}</div><div class="sr-sub">${syncState.implementation === "fake" ? "Using the development coordinator; no network calls are made." : esc(syncState.error?.message || syncServerUrl)}</div></div><span class="status-dot ${syncState.connection === "available" ? "" : "off"}"></span></div>
+          ${syncServerEditable || syncAllEditable ? `<div class="settings-row settings-actions-row"><span></span><button class="settings-save" data-act="save-sync-settings">Save</button></div>` : ""}
         </div>
       </section>
       <section class="settings-section">
@@ -516,7 +516,9 @@ class PiSettings extends HTMLElement {
           <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div></div>
         </div>
       </section>
-      <div class="settings-card">
+      <section class="settings-section">
+        <div class="settings-section-title">Defaults</div>
+      <div class="settings-card settings-card-spaced">
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Default model</div><div class="sr-sub">Automatic uses the first available authenticated model.${store.state.defaultModelStatus === "unavailable" ? " The configured model is currently unavailable." : ""}</div></div>
           <pi-model-picker data-mode="default" data-variant="settings"></pi-model-picker>
@@ -527,14 +529,19 @@ class PiSettings extends HTMLElement {
             ${thinkingLevels.map(level => `<option value="${level}" ${level === defaultThinkingLevel ? "selected" : ""}>${level}</option>`).join("")}
           </select>
         </div>
-        <div class="settings-row settings-path-row">
+        ${store.state.reposRootSource === "environment" ? "" : `<div class="settings-row settings-path-row">
           <div class="sr-main"><div class="sr-title">Local repositories</div><div class="sr-sub">Folder scanned by the project picker. Empty uses <span class="settings-mono">~/src</span>${store.state.reposRootSource === "environment" ? ". <span class=\"settings-mono\">PI_WEB_REPOS_ROOT</span> currently overrides this value" : ""}.</div></div>
           <div class="settings-path-control">
             <input class="repos-root-input" aria-label="Local repositories path" value="${esc(store.state.reposRoot || "")}" placeholder="~/src">
-            <button class="settings-save" data-act="save-repos-root" ${store.state.reposRootSource === "environment" ? "disabled" : ""}>Save</button>
+            <button class="settings-save" data-act="save-repos-root">Save</button>
           </div>
-        </div>
+        </div>`}
       </div>
+      </section>
+      <section class="settings-section">
+        <div class="settings-section-title">Diagnostics</div>
+        <div class="settings-card settings-card-spaced"><div class="settings-row"><div class="sr-main"><div class="sr-title">Server logs</div><div class="sr-sub">Recent operations and server output.</div></div><button class="settings-action" data-act="open-logs">Open logs</button></div></div>
+      </section>
     </div>`;
   }
 }
@@ -1841,6 +1848,18 @@ class PiApp extends HTMLElement {
       </div></div>`;
     this.scrim = this.querySelector(".drawer-scrim");
     this.scrim.addEventListener("click", () => store.set({ drawerOpen: false }));
+    // Swipe left anywhere while the mobile drawer is open to close it.
+    let swipe = null;
+    this.addEventListener("touchstart", e => {
+      const onDrawer = e.target.closest?.("aside.rail, .drawer-scrim") && !e.target.closest("input, textarea, select");
+      swipe = mobile() && store.state.drawerOpen && onDrawer && e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    }, { passive: true });
+    this.addEventListener("touchcancel", () => { swipe = null; }, { passive: true });
+    this.addEventListener("touchend", e => {
+      const touch = e.changedTouches[0];
+      if (swipe && touch && swipe.x - touch.clientX > 60 && Math.abs(touch.clientY - swipe.y) < 50) store.set({ drawerOpen: false });
+      swipe = null;
+    }, { passive: true });
     this.addEventListener("click", e => {
       if (e.target.closest("[data-act='reload']")) location.reload();
       if (e.target.closest("[data-act='update']")) {

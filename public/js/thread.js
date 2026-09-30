@@ -1108,7 +1108,6 @@ class PiComposer extends HTMLElement {
   }
 
   sync() {
-    const id = store.activeKey();
     const t = store.transcript();
     const p = store.project();
     const compacting = !!t.compacting;
@@ -1131,7 +1130,6 @@ class PiComposer extends HTMLElement {
     if (this.commandQuery() !== null && activeId) void this.syncCommands();
     else this.renderCommands();
     const error = store.state.error;
-    const nQueued = store.state.queued[id] || 0;
     this.ta.classList.toggle("busy", t.streaming || compacting);
     this.ta.classList.toggle("error", !!error);
     this.ta.placeholder = error || (compacting

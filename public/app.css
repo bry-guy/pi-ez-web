@@ -1327,7 +1327,30 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
   aside.rail { box-shadow: var(--elevation-2); }
   .empty-pi { padding-top: 16vh; }
   .bubble { max-width: 100%; }
+  /* iOS Safari zooms into inputs below 16px and never zooms back out. */
+  input, select, textarea { font-size: 16px !important; }
+  /* 44px touch targets. */
+  .hamburger, .mini-btn, .ghost-btn, .attach-btn, .send-btn, .settings-close { min-width: 44px; min-height: 44px; }
+  .row, .modal-row, .session-row { min-height: 44px; }
+  .rail-logo, .row-close, .row-add, .row .mini-btn, .model-chip, .thinking-chip, pi-context-meter button { min-width: 44px; min-height: 44px; }
+  .rail-search { min-height: 44px; }
+  /* Tool blocks: let arguments and meta wrap instead of crushing the name. */
+  .block-head { flex-wrap: wrap; row-gap: 2px; }
+  .block-head .bh-arg { flex: 1 1 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .block-head .bh-meta { flex-basis: 100%; margin-left: 22px; }
+  /* Project header: one title line, then scrollable status chips. */
+  .bar-main { min-width: 0; }
+  .bar-sub, .bar-status { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .bar-sub::-webkit-scrollbar, .bar-status::-webkit-scrollbar { display: none; }
+  aside.rail { width: min(86vw, 320px); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+.settings-advanced > summary { padding: 12px 16px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.settings-advanced[open] > summary { color: var(--text); }
+@media (max-width: 760px) {
+  /* The project row itself is the 44px target; keep its caret compact. */
+  .row { align-items: center; }
+  .row [role=button] { min-height: 44px; min-width: 28px; display: inline-flex; align-items: center; justify-content: center; }
 }
