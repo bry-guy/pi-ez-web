@@ -55,8 +55,8 @@ function unavailableContext(project, binding) {
   };
 }
 
-function projectContexts(project, bindings) {
-  const live = ws.listContexts(project.repoPath);
+function projectContexts(project, bindings, primaryBranch) {
+  const live = ws.listContexts(project.repoPath, primaryBranch);
   const paths = new Set(live.map(context => pathKey(context.path)));
   const unavailable = Object.values(bindings)
     .filter(binding => binding?.projectId === project.id && binding.workspacePath && !paths.has(pathKey(binding.workspacePath)))
@@ -111,7 +111,11 @@ export async function sessionsUsingWorkspace(project, workspacePath, sup) {
 export async function projectState(project, sup, sync = null) {
   const cfg = loadConfig();
   const bindings = loadBindings();
-  const contexts = projectContexts(project, bindings);
+  // Read repository-level Git facts once per snapshot and share them.
+  const branches = ws.listBranches(project.repoPath);
+  const currentBranch = ws.currentBranch(project.repoPath);
+  const defaultBranch = ws.defaultBranch(project.repoPath, branches, currentBranch);
+  const contexts = projectContexts(project, bindings, defaultBranch);
   const pathToContext = Object.fromEntries(contexts.map(context => [pathKey(context.path), context]));
   const worktrees = Object.fromEntries(contexts.filter(context => context.branch).map(context => [context.branch, context.path]));
 
@@ -175,9 +179,9 @@ export async function projectState(project, sup, sync = null) {
     name: project.name,
     repoPath: project.repoPath,
     source: project.source || { type: "local" },
-    defaultBranch: ws.defaultBranch(project.repoPath),
-    branch: ws.currentBranch(project.repoPath),
-    branches: ws.listBranches(project.repoPath),
+    defaultBranch,
+    branch: currentBranch,
+    branches,
     remoteBranches: ws.listRemoteBranches(project.repoPath),
     contexts: publicContexts,
     worktrees,

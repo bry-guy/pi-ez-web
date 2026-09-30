@@ -114,3 +114,37 @@ test("network Git operations use protocol credentials without changing Git seman
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("contextStatus reads branch, upstream, and change counts fresh on each call", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ctx-status-"));
+  const g = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: isolatedEnvironment({ GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }) });
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  g(root, "init", "-q", "--bare", "-b", "main", origin);
+  g(root, "clone", "-q", origin, repo);
+  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+  g(repo, "add", "a.txt");
+  g(repo, "commit", "-qm", "one");
+  g(repo, "push", "-q", "-u", "origin", "main");
+
+  const clean = ws.contextStatus({ repoPath: repo, workspacePath: repo, primaryBranch: "main" });
+  assert.equal(clean.branch, "main");
+  assert.equal(clean.upstream, "origin/main");
+  assert.equal(clean.status, "clean");
+  assert.deepEqual([clean.ahead, clean.behind], [0, 0]);
+
+  fs.writeFileSync(path.join(repo, "a.txt"), "b\n");
+  fs.writeFileSync(path.join(repo, "new.txt"), "n\n");
+  g(repo, "commit", "-qam", "two");
+  fs.writeFileSync(path.join(repo, "a.txt"), "c\n");
+  g(repo, "add", "a.txt");
+  fs.writeFileSync(path.join(repo, "a.txt"), "d\n");
+  const next = ws.contextStatus({ repoPath: repo, workspacePath: repo, primaryBranch: "main" });
+  assert.notEqual(next.head, clean.head);
+  assert.equal(next.status, "dirty");
+  assert.equal(next.ahead, 1);
+  assert.deepEqual(next.statusDetails, { total: 2, staged: 1, unstaged: 1, untracked: 1, conflicts: 0 });
+
+  g(repo, "switch", "-q", "--detach");
+  assert.equal(ws.contextStatus({ repoPath: repo, workspacePath: repo, primaryBranch: "main" }).detached, true);
+});

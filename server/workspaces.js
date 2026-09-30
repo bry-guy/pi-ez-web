@@ -58,9 +58,7 @@ export function validateBranchName(value) {
   return branch;
 }
 
-export function defaultBranch(repoPath) {
-  const localBranches = listBranches(repoPath);
-  const current = currentBranch(repoPath);
+export function defaultBranch(repoPath, localBranches = listBranches(repoPath), current = currentBranch(repoPath)) {
   let remoteHead = null;
   try {
     const symbolic = git(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").trim();
@@ -346,7 +344,61 @@ export function listWorktreeRecords(repoPath) {
   return records;
 }
 
+// One `git status --porcelain=v2 --branch` read yields branch, HEAD, upstream,
+// ahead/behind, and change counts; the sidebar snapshot calls this per worktree.
+function snapshotStatus(dir) {
+  const out = git(dir, "status", "--porcelain=v2", "--branch");
+  const result = { branch: null, head: null, upstream: null, ahead: 0, behind: 0, details: { total: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 } };
+  for (const line of out.split(/\r?\n/)) {
+    if (!line) continue;
+    if (line.startsWith("# branch.oid ")) { const oid = line.slice(13).trim(); result.head = oid === "(initial)" ? null : oid; continue; }
+    if (line.startsWith("# branch.head ")) { const head = line.slice(14).trim(); result.branch = head === "(detached)" ? null : head; continue; }
+    if (line.startsWith("# branch.upstream ")) { result.upstream = line.slice(18).trim() || null; continue; }
+    if (line.startsWith("# branch.ab ")) {
+      const [ahead, behind] = line.slice(12).trim().split(/\s+/).map(n => Math.abs(Number(n)));
+      result.ahead = Number.isFinite(ahead) ? ahead : 0;
+      result.behind = Number.isFinite(behind) ? behind : 0;
+      continue;
+    }
+    if (line.startsWith("#") || line.startsWith("! ")) continue;
+    const d = result.details;
+    d.total++;
+    if (line.startsWith("? ")) { d.untracked++; continue; }
+    if (line.startsWith("u ")) { d.conflicts++; continue; }
+    const code = line.slice(2, 4);
+    if (code[0] !== ".") d.staged++;
+    if (code[1] !== ".") d.unstaged++;
+  }
+  return result;
+}
+
 export function contextStatus({ repoPath, workspacePath, record = null, primaryBranch = defaultBranch(repoPath) }) {
+  let snap = null;
+  let statusError = null;
+  try { snap = snapshotStatus(workspacePath); }
+  catch (error) { statusError = String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400); }
+  if (!snap) return legacyContextStatus({ repoPath, workspacePath, record, primaryBranch, statusError });
+  const kind = path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree";
+  const branch = snap.branch || (snap.head ? null : record?.branch) || null;
+  const externalMain = !!branch && branch === primaryBranch && kind === "worktree";
+  const head = snap.head || record?.head || null;
+  const dirty = snap.details.total > 0;
+  return {
+    branch, path: workspacePath, kind, dirty,
+    upstream: snap.upstream, ahead: snap.ahead, behind: snap.behind,
+    externalMain, protected: externalMain,
+    id: contextId(repoPath, workspacePath),
+    head,
+    commit: commitDetails(workspacePath, head),
+    statusDetails: snap.details,
+    detached: !branch,
+    primaryBranch,
+    status: dirty ? "dirty" : "clean",
+    statusError: null,
+  };
+}
+
+function legacyContextStatus({ repoPath, workspacePath, record, primaryBranch, statusError }) {
   const status = workspaceStatus({
     repoPath,
     workspacePath,
@@ -363,15 +415,16 @@ export function contextStatus({ repoPath, workspacePath, record = null, primaryB
     detached: !status.branch,
     primaryBranch,
     status: status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean",
-    statusError: dirtyState(workspacePath).error,
+    statusError: statusError || dirtyState(workspacePath).error,
   };
 }
 
-export function listContexts(repoPath) {
+export function listContexts(repoPath, primaryBranch = defaultBranch(repoPath)) {
   return listWorktreeRecords(repoPath).map(record => contextStatus({
     repoPath,
     workspacePath: record.path,
     record,
+    primaryBranch,
   }));
 }
 
