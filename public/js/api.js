@@ -133,6 +133,17 @@ export function refreshState() {
   if (stateRefreshPromise) return stateRefreshPromise;
   const request = (async () => {
     const s = await api.state();
+    applyState(s);
+  })();
+  stateRefreshPromise = request;
+  request.then(
+    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
+    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
+  );
+  return request;
+}
+
+function applyState(s) {
   const active = findSessionInState(s, store.activeKey());
   store.set({
     projects: s.projects,
@@ -159,14 +170,7 @@ export function refreshState() {
     const transcript = store.state.transcripts[chat.id] ||= { records: [], streaming: false, seq: -1 };
     transcript.streaming = !!chat.streaming;
   }
-    store.notify("transcript");
-  })();
-  stateRefreshPromise = request;
-  request.then(
-    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
-    () => { if (stateRefreshPromise === request) stateRefreshPromise = null; },
-  );
-  return request;
+  store.notify("transcript");
 }
 
 function seedStreaming(nodes) {

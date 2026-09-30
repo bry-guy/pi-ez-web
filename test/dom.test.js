@@ -1102,6 +1102,19 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   scroller.dispatchEvent(new dom.window.Event("scroll"));
   assert.ok(thread.querySelectorAll(".assist").length > initialRendered);
 
+  // Unchanged state must not rebuild the transcript: rebuilding drops taps
+  // and costs a full layout on every background refresh.
+  const firstNode = thread.querySelector("[data-rec]");
+  assert.ok(firstNode);
+  store.notify("state");
+  store.notify("transcript");
+  assert.equal(thread.querySelector("[data-rec]"), firstNode);
+  // A real change still re-renders.
+  longRecords.at(-1).text = "message changed";
+  store.state.transcripts.s1 = { ...store.state.transcripts.s1, records: [...longRecords] };
+  store.notify("transcript");
+  assert.match(thread.textContent, /message changed/);
+
   store.set({ workspaceSettingsOpen: false });
   root.querySelector("pi-header [data-act='workspace-settings']")?.click();
   assert.ok(root.querySelector(".session-picker"));

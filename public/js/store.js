@@ -49,6 +49,17 @@ function findSessionPath(nodes, id, path = []) {
   return null;
 }
 
+// Skip DOM writes when markup is unchanged: rewriting identical HTML still
+// costs layout and replaces nodes mid-tap, which drops the tap's click.
+// Callers pass the same esc()/renderMarkdown()-built markup they previously
+// assigned directly; this helper adds no new untrusted input path.
+export function setHTML(el, html) {
+  if (el.__html === html) return false;
+  el.innerHTML = html;
+  el.__html = html;
+  return true;
+}
+
 export const store = {
   state: {
     view: "chat",            // chat | settings

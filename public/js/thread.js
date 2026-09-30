@@ -1,12 +1,17 @@
 import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
-import { store } from "./store.js";
+import { setHTML, store } from "./store.js";
 import { closeConversation, esc, mobile, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["running", "queued"]);
 const HISTORY_PAGE_SIZE = 500;
+// Per-tab reading position: the first visible record and its offset, or "at bottom".
+const scrollKey = id => `pi-ez-web:scroll:${id}`;
+function savedScroll(id) {
+  try { return JSON.parse(globalThis.sessionStorage?.getItem(scrollKey(id)) || "null"); } catch { return null; }
+}
 const agentRecord = record => record?.role === "activity" && record.kind === "agent";
 const liveAgent = record => agentRecord(record) && LIVE_AGENT_STATUSES.has(record.status);
 const agentRunId = record => record?.runId || String(record?.id || record?.key || "agent").replace(/^activity:agent:/, "");
@@ -48,7 +53,9 @@ class PiThread extends HTMLElement {
     this.renderCache = new WeakMap();
     this.onScroll = () => {
       const scroller = this.scroller;
-      if (!scroller || scroller.scrollTop > 360) return;
+      if (!scroller) return;
+      if (!this.scrollSaveFrame) this.scrollSaveFrame = requestAnimationFrame(() => { this.scrollSaveFrame = 0; this.saveScroll(); });
+      if (scroller.scrollTop > 360) return;
       this.loadEarlier();
     };
     this.bindScroller();
@@ -117,6 +124,7 @@ class PiThread extends HTMLElement {
     const body = holder.querySelector(".markdown-content");
     if (!body) return this.render();
     body.innerHTML = renderMarkdown(last.text);
+    this.__html = null; // streamed text changed the DOM outside render()
     const think = this.querySelector(".pi-think");
     if (think && last.text) this.render(); // thinking -> streaming transition
     this.autoscroll();
@@ -130,6 +138,36 @@ class PiThread extends HTMLElement {
       const raf = globalThis.requestAnimationFrame || this.ownerDocument?.defaultView?.requestAnimationFrame?.bind(this.ownerDocument.defaultView);
       raf?.(() => { if (this.isConnected) sc.scrollTop = sc.scrollHeight; });
     }
+  }
+
+  saveScroll() {
+    const id = this.renderedKey;
+    const scroller = this.scroller;
+    if (!id || !scroller || this.restoring) return;
+    const recs = this.querySelectorAll("[data-rec]");
+    if (!recs.length) return;
+    let value = { bottom: true };
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight >= 160) {
+      const top = scroller.getBoundingClientRect().top;
+      const el = [...recs].find(node => node.getBoundingClientRect().bottom > top) || recs[recs.length - 1];
+      value = { rec: el.dataset.rec, offset: Math.round(el.getBoundingClientRect().top - top) };
+    }
+    try { globalThis.sessionStorage?.setItem(scrollKey(id), JSON.stringify(value)); } catch { /* storage is optional */ }
+  }
+
+  restoreScroll(saved) {
+    const scroller = this.scroller || this.closest(".scrollable");
+    const el = [...this.querySelectorAll("[data-rec]")].find(node => node.dataset.rec === saved.rec);
+    if (!scroller || !el) return false;
+    const apply = () => {
+      if (!el.isConnected) return;
+      scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (saved.offset || 0);
+    };
+    this.restoring = true;
+    apply();
+    // Late layout (fonts, code blocks) can shift the anchor; settle it next frame.
+    requestAnimationFrame(() => { apply(); this.restoring = false; });
+    return true;
   }
 
   loadEarlier() {
@@ -181,7 +219,7 @@ class PiThread extends HTMLElement {
       this.historyLimit = HISTORY_PAGE_SIZE;
       this.scrollOnNextRender = true;
     }
-    if (!activeKey) { this.innerHTML = EMPTY_STATE; return; }
+    if (!activeKey) { setHTML(this, EMPTY_STATE); return; }
     const visibleRecords = this.visibleRecords(t.records);
     const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
     // There can be a real gap between turn_start and message_start, and again
@@ -191,17 +229,30 @@ class PiThread extends HTMLElement {
     const thinking = t.streaming && !liveAssistant;
     const activity = this.renderActivity(t.records);
     const notice = this.renderCommandNotice();
+    const restore = this.scrollOnNextRender && visibleRecords.length ? savedScroll(activeKey) : null;
+    if (restore?.rec) {
+      const index = visibleRecords.findIndex(record => record.id === restore.rec);
+      if (index >= 0) this.historyLimit = Math.max(this.historyLimit || HISTORY_PAGE_SIZE, visibleRecords.length - index + 1);
+    }
     const history = this.historyRecords(visibleRecords);
     if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
-      this.innerHTML = EMPTY_STATE;
+      setHTML(this, EMPTY_STATE);
       return;
     }
-    const records = history.records.map(m => this.renderRecordCached(m)).join("");
+    const records = history.records.map(m => {
+      const html = this.renderRecordCached(m);
+      return m.id && html.startsWith("<div ") ? `<div data-rec="${esc(m.id)}" ${html.slice(5)}` : html;
+    }).join("");
     const earlier = "";
     const indicator = thinking
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
-    this.innerHTML = earlier + records + indicator + activity + notice;
+    setHTML(this, earlier + records + indicator + activity + notice);
+    if (restore?.rec && this.restoreScroll(restore)) {
+      delete t.scrollToLatest;
+      this.scrollOnNextRender = false;
+      return;
+    }
     const forceScroll = this.scrollOnNextRender || !!t.scrollToLatest;
     this.autoscroll(forceScroll);
     delete t.scrollToLatest;
@@ -556,14 +607,14 @@ class PiModelPicker extends HTMLElement {
     const empty = !options && !unavailable
       ? `<div class="model-empty">No models available.<br><span>Connect a provider in Settings.</span></div>` : "";
     const popoverId = this._popoverId ||= `model-popover-${Math.random().toString(36).slice(2, 9)}`;
-    this.innerHTML = `<div class="model-picker">
+    setHTML(this, `<div class="model-picker">
       <button class="${variant}" data-model-toggle aria-haspopup="listbox" aria-controls="${popoverId}" aria-expanded="${this.open}"
         title="Choose model">${esc(chipLabel)}</button>
       ${this.open ? `<div id="${popoverId}" class="model-popover" role="dialog" aria-label="Choose model">
         <div class="model-popover-head">Choose model</div>
         <div class="model-list" role="listbox">${automatic}${unavailable}${options || empty}</div>
       </div>` : ""}
-    </div>`;
+    </div>`);
     if (this.open) this.positionPopover();
   }
 }
@@ -699,7 +750,7 @@ class PiComposer extends HTMLElement {
         </div>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <pi-thinking-picker></pi-thinking-picker>
-        <button class="stop-btn hidden"><span class="sq"></span>Stop</button>
+        <button class="stop-btn hidden" type="button" aria-label="Stop" title="Stop"><span class="sq" aria-hidden="true"></span>Stop</button>
         <button class="composer-expand-btn hidden" type="button" title="Expand message editor" aria-label="Expand message editor" aria-expanded="false">↑</button>
         <button class="send-btn" type="button" title="Send" aria-label="Send message">↑</button>
       </div>

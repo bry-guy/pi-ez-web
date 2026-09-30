@@ -1882,7 +1882,7 @@ class PiApp extends HTMLElement {
     window.addEventListener("resize", this.onResize);
     this.gitRefreshTimer = setInterval(() => {
       // Do not update workspace state while a picker or confirmation is active.
-      if (store.inProject() && !store.state.sessionPicker && !store.state.confirm) {
+      if (document.visibilityState === "visible" && store.inProject() && !store.state.sessionPicker && !store.state.confirm) {
         void refreshState().catch(() => {});
         if (store.state.filesOpen) void this.ensureFiles(true);
       }

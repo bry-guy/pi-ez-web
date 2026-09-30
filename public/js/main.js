@@ -3,7 +3,7 @@ import "./thread.js";
 import "./panels.js";
 import { checkActiveSync, connectSSE, openTranscript, refreshState, resumeConnection } from "./api.js";
 import { store } from "./store.js";
-import { restoreLastSelection, selectChat, selectSession } from "./shell.js";
+import { openSavedSelectionEarly, restoreLastSelection, selectChat, selectSession } from "./shell.js";
 
 let updateReloadRequested = false;
 
@@ -48,12 +48,13 @@ async function registerServiceWorker() {
 window.addEventListener("offline", () => store.set({ offline: true, reconnecting: false }));
 window.addEventListener("online", resumeConnection);
 window.addEventListener("focus", checkActiveSync);
-setInterval(() => { void checkActiveSync(); }, 20_000);
+setInterval(() => { if (document.visibilityState === "visible") void checkActiveSync(); }, 20_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resumeConnection(); });
 window.addEventListener("pageshow", resumeConnection);
 await loadUiConfig();
 void registerServiceWorker();
 connectSSE();
+const earlyId = openSavedSelectionEarly();
 try {
   await refreshState();
 } catch {
@@ -62,7 +63,15 @@ try {
 
 // Restore the last selected session; fall back to the most recent chat, then a project session.
 const s = store.state;
-if (!s.fatalError && !restoreLastSelection() && s.chats[0]) selectChat(s.chats[0].id);
+if (!s.fatalError && store.activeKey() && store.activeKey() !== earlyId) {
+  // The user picked another conversation while startup state was loading; keep it.
+} else if (!s.fatalError && earlyId && restoreLastSelection()) {
+  // Saved conversation still exists; restoreLastSelection() applied its full selection.
+} else if (!s.fatalError && earlyId && store.activeKey() === earlyId) {
+  // Saved conversation was closed or moved: drop the stale early selection, then fall back.
+  store.set({ chatId: null, sessionId: null, projectId: null });
+  if (s.chats[0]) selectChat(s.chats[0].id);
+} else if (!s.fatalError && !restoreLastSelection() && s.chats[0]) selectChat(s.chats[0].id);
 else if (!s.fatalError && !store.activeKey()) {
   const p = s.projects[0];
   if (p?.sessions[0]) { store.state.openTree[p.id] = true; selectSession(p.id, p.sessions[0].id); }

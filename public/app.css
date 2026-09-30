@@ -1354,3 +1354,16 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
   .row { align-items: center; }
   .row [role=button] { min-height: 44px; min-width: 28px; display: inline-flex; align-items: center; justify-content: center; }
 }
+
+/* Composer footer: buttons keep their size; model/thinking chips shrink and ellipsize. */
+.composer-foot > * { flex: 0 0 auto; }
+.composer-foot > pi-model-picker, .composer-foot > pi-thinking-picker { display: flex; flex: 0 1 auto; min-width: 0; }
+.composer-foot > pi-thinking-picker { flex-shrink: 0; }
+.thinking-picker { display: flex; min-width: 0; }
+.model-chip, .thinking-chip { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 480px) {
+  .composer-foot { gap: 2px; padding: 2px 6px 6px 4px; }
+  .stop-btn { font-size: 0; gap: 0; width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .stop-btn .sq { width: 12px; height: 12px; }
+  .model-chip, .thinking-chip { padding-inline: 8px; }
+}

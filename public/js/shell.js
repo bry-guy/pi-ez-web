@@ -1,6 +1,6 @@
 import { api, checkActiveSync, openTranscript, refreshState, transcriptLoading } from "./api.js";
 import { activeOperations, beginOperation, completeOperation, operationForScope, operationHint } from "./operations.js";
-import { store } from "./store.js";
+import { setHTML, store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
@@ -104,6 +104,17 @@ export function selectChat(chatId) {
   store.markRead(chatId);
   openTranscript(chatId);
   void checkActiveSync();
+}
+
+// On reload, open the saved conversation before /api/state returns so its
+// transcript loads in parallel. main.js validates it once state arrives.
+export function openSavedSelectionEarly() {
+  const saved = savedActiveSession();
+  if (!saved?.id || !["chat", "session"].includes(saved.kind)) return null;
+  const isChat = saved.kind === "chat";
+  store.set({ view: "chat", chatId: isChat ? saved.id : null, sessionId: isChat ? null : saved.id, projectId: isChat ? null : saved.projectId || null });
+  openTranscript(saved.id);
+  return saved.id;
 }
 
 export function restoreLastSelection() {
@@ -352,8 +363,8 @@ class PiSidebar extends HTMLElement {
           data-label="${esc(cRow.title)}" data-branch="" title="Close chat">×</button>
       </div>`;
       }).join("");
-    this.querySelector(".projects-list").innerHTML = projRows.join("");
-    this.querySelector(".chats-list").innerHTML = chatRows;
+    setHTML(this.querySelector(".projects-list"), projRows.join(""));
+    setHTML(this.querySelector(".chats-list"), chatRows);
   }
 }
 
@@ -481,11 +492,11 @@ class PiHeader extends HTMLElement {
     const sidebarControl = mobile()
       ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
-    this.innerHTML = `<header class="bar">
+    setHTML(this, `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${statusArea}${operationArea}</div>
       ${filesBtn}
-    </header>`;
+    </header>`);
   }
 
   statusBits(status) {
