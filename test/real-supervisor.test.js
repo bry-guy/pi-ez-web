@@ -755,3 +755,19 @@ test("real sessions can be created without provider credentials", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("session summaries are reused until the session file changes", () => {
+  const supervisor = new RealSupervisor({});
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-summary-")), "s.jsonl");
+  fs.writeFileSync(file, "a\n");
+  let opens = 0;
+  let cwd = "/one";
+  const SessionManager = { open: () => { opens++; return { getCwd: () => cwd, getBranch: () => [] }; } };
+  assert.equal(supervisor._sessionSummary(SessionManager, file).cwd, "/one");
+  assert.equal(supervisor._sessionSummary(SessionManager, file).cwd, "/one");
+  assert.equal(opens, 1);
+  cwd = "/two";
+  fs.appendFileSync(file, "b\n");
+  assert.equal(supervisor._sessionSummary(SessionManager, file).cwd, "/two");
+  assert.equal(opens, 2);
+});

@@ -82,6 +82,7 @@ export class RealSupervisor {
     this.live = new Map();       // sessionId -> attached runtime state
     this.paths = new Map();      // sessionId -> session file path
     this.info = new Map();       // sessionId -> discovered SessionInfo metadata
+    this.sessionSummaries = new Map(); // session file -> { stamp, cwd, model }; re-read when mtime/size change
     this.runtime = null;         // shared ModelRuntime for all attached sessions
     this.runtimePromise = null;   // prevents concurrent runtime initialization
     this.attachPromises = new Map(); // sessionId -> in-flight attach
@@ -134,11 +135,8 @@ export class RealSupervisor {
     const infos = this._selectSessionInfos(await SessionManager.list(cwd));
     for (const info of infos) this.paths.set(info.id, info.path);
     return infos.map(info => {
-      let manager;
-      try { manager = SessionManager.open(info.path); } catch { /* malformed/removed session */ }
-      const recordedCwd = info.cwd || manager?.getCwd?.() || cwd;
-      const branch = manager?.getBranch?.() || [];
-      const model = modelRefFromEntries(branch);
+      const { cwd: openedCwd, model } = this._sessionSummary(SessionManager, info.path);
+      const recordedCwd = info.cwd || openedCwd || cwd;
       const item = {
         id: info.id,
         cwd: recordedCwd,
@@ -152,6 +150,19 @@ export class RealSupervisor {
       this.info.set(info.id, { ...item, path: info.path, parentSessionPath: info.parentSessionPath || null });
       return item;
     });
+  }
+
+  _sessionSummary(SessionManager, filePath) {
+    let stamp = null;
+    try { const stat = fs.statSync(filePath); stamp = `${stat.mtimeMs}:${stat.size}`; } catch { /* removed session */ }
+    const cached = this.sessionSummaries.get(filePath);
+    if (stamp && cached?.stamp === stamp) return cached;
+    let manager;
+    try { manager = SessionManager.open(filePath); } catch { /* malformed/removed session */ }
+    const summary = { stamp, cwd: manager?.getCwd?.() || null, model: modelRefFromEntries(manager?.getBranch?.() || []) };
+    if (stamp) this.sessionSummaries.set(filePath, summary);
+    else this.sessionSummaries.delete(filePath);
+    return summary;
   }
 
   _selectSessionInfos(infos) {
