@@ -1,4 +1,6 @@
-node_modules/
+node_modules
+vendor/pi-sync/dist/
+.pi/validation/
 .DS_Store
 .env
 .env.*

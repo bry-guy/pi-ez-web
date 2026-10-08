@@ -98,7 +98,3 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
 export function operationRequestId(c, body = {}) {
   return body?.operationId || c.req.header("x-pi-operation-id") || null;
 }
-
-export function operationResult(result, operation) {
-  return operation ? { ...result, operation: operation.snapshot() } : result;
-}

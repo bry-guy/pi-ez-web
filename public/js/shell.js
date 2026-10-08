@@ -62,8 +62,8 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null, hookResult: null,
-    workspaceSettingsOpen: false, model: node?.model || store.state.effectiveDefaultModel || null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null,
+    model: node?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
@@ -96,8 +96,8 @@ export function selectChat(chatId) {
   const chat = store.state.chats.find(c => c.id === chatId);
   store.set({
     view: "chat", chatId, sessionId: null, projectId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
-    workspaceSettingsOpen: false, filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
-    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null, hookResult: null,
+    filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
+    fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
   });
   saveActiveSession({ kind: "chat", id: chatId });
@@ -372,13 +372,6 @@ class PiSidebar extends HTMLElement {
 class PiHeader extends HTMLElement {
   connectedCallback() {
     this.unsub = store.subscribe(w => { if (w === "state" || w === "transcript") this.render(); });
-    this.onDocumentKeydown = e => {
-      if (e.key === "Escape" && store.state.workspaceSettingsOpen) {
-        e.preventDefault();
-        store.set({ workspaceSettingsOpen: false });
-      }
-    };
-    document.addEventListener("keydown", this.onDocumentKeydown);
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
       if ((e.key === "Enter" || e.key === " ") && !e.target.matches("button,input,select")) {
@@ -390,12 +383,9 @@ class PiHeader extends HTMLElement {
   }
   disconnectedCallback() {
     this.unsub?.();
-    document.removeEventListener("keydown", this.onDocumentKeydown);
   }
 
   async onClick(e) {
-    const scrim = this.querySelector(".workspace-scrim");
-    if (e.target === scrim) { store.set({ workspaceSettingsOpen: false }); return; }
     const t = e.target.closest("[data-act]");
     if (!t) return;
     const act = t.dataset.act;
@@ -406,13 +396,11 @@ class PiHeader extends HTMLElement {
         ? { drawerOpen: !store.state.drawerOpen }
         : { railOpen: !store.state.railOpen });
     } else if (act === "settings") {
-      store.set({ view: "settings", workspaceSettingsOpen: false });
+      store.set({ view: "settings" });
     } else if (act === "workspace-settings") {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
       void refreshState().catch(() => {});
-    } else if (act === "close-workspace-settings") {
-      store.set({ workspaceSettingsOpen: false });
     } else if (act === "files") {
       this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
     }
@@ -473,10 +461,10 @@ class PiHeader extends HTMLElement {
       sessionId: s.sessionId || s.chatId, projectId: s.projectId,
       contextId: node?.contextId, workspacePath: node?.workspacePath,
     };
-    const latestOperation = s.view === "chat" && !s.sessionPicker && !s.workspaceSettingsOpen
+    const latestOperation = s.view === "chat" && !s.sessionPicker
       ? operationForScope(null, operationScope)
       : null;
-    const operation = s.view === "chat" && !s.sessionPicker && !s.workspaceSettingsOpen
+    const operation = s.view === "chat" && !s.sessionPicker
       ? activeOperations(operationScope)[0] || (latestOperation?.status === "error" ? latestOperation : null)
       : null;
     const operationStatus = operation?.status === "error" ? "error" : "running";

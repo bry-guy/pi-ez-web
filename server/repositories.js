@@ -131,7 +131,3 @@ export async function cloneRepository({ source, url, fullName, github, root = re
     }
   }
 }
-
-export function validateRepositoryPath(raw) {
-  return resolvePath(raw);
-}

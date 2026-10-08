@@ -1,6 +1,7 @@
 # Authentication, session, and picker follow-up
 
-Status: investigation complete; implementation pending
+Status: Source at audit base `ffb5499` contains partial implementations;
+unchecked acceptance criteria remain unverified.
 
 ## Goals
 

@@ -14,6 +14,7 @@ import { findProjectByWorkspace } from "../lifecycle.js";
 import { gitCredentialEnvironment } from "../git-credentials.js";
 import { resolveProjectEnvironment } from "../project-environment.js";
 import { settleSync } from "../sync/settlement.js";
+import { writeLog } from "../logging.js";
 
 function errorDetails(error) {
   const parts = [];
@@ -433,23 +434,13 @@ export class RealSupervisor {
         break;
       }
       case "compaction_start": {
-        const record = normalizeActivity({
-          id: "activity:compaction", kind: "status", key: "compaction", status: "running",
-          title: "Compacting", summary: "context…",
-        }, { source: "pi" });
+        const record = compactionStartActivity();
         st.liveRecords.set(record.id, record);
         hub.emit(id, "activity", { record });
         break;
       }
       case "compaction_end": {
-        const aborted = !!evt.aborted;
-        const failed = !aborted && !evt.result;
-        const record = normalizeActivity({
-          id: "activity:compaction", kind: "status", key: "compaction",
-          status: aborted ? "aborted" : failed ? "failed" : "completed",
-          title: aborted ? "Compaction cancelled" : failed ? "Compaction failed" : "Context compacted",
-          summary: evt.errorMessage || (aborted ? "Compaction cancelled." : "Session context compacted."),
-        }, { source: "pi" });
+        const record = compactionEndActivity(evt);
         st.liveRecords.set(record.id, record);
         hub.emit(id, "activity", { record });
         break;
@@ -496,10 +487,7 @@ export class RealSupervisor {
         break;
       case "tool_execution_start": {
         st.toolMeta.set(evt.toolCallId, { name: evt.toolName, t0: Date.now(), args: evt.args });
-        const record = {
-          id: evt.toolCallId, role: "tool", tool: evt.toolName,
-          arg: summarizeArgs(evt.toolName, evt.args), meta: "", out: "",
-        };
+        const record = toolStartRecord(evt);
         st.liveRecords.set(record.id, record);
         hub.emit(id, "tool_start", {
           toolId: evt.toolCallId, name: evt.toolName,
@@ -519,7 +507,7 @@ export class RealSupervisor {
         const record = st.liveRecords.get(evt.toolCallId);
         if (record) {
           record.out = output;
-          record.meta = [evt.isError ? "error" : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
+          record.meta = toolResultMeta(evt.isError, durationMs);
         }
         hub.emit(id, "tool_end", {
           toolId: evt.toolCallId, ok: !evt.isError, output,
@@ -527,7 +515,7 @@ export class RealSupervisor {
         });
         const diff = maybeDiff(evt.toolName, m.args, evt.result);
         if (diff) {
-          const diffRecord = { id: `${evt.toolCallId}:d`, role: "diff", file: diff.path, add: `+${diff.adds}`, del: `−${diff.dels}`, lines: flattenHunks(diff.hunks) };
+          const diffRecord = toolDiffRecord(evt.toolCallId, diff);
           st.liveRecords.set(diffRecord.id, diffRecord);
           hub.emit(id, "diff", { toolId: evt.toolCallId, ...diff });
         }
@@ -999,10 +987,24 @@ export class RealSupervisor {
       } else {
         try { replacement?.dispose?.(); } catch {}
       }
-      try { committed?.rollback?.(); } catch {}
+      const rollbackErrors = Array.isArray(error?.rollbackErrors) ? [...error.rollbackErrors] : [];
+      try {
+        committed?.rollback?.();
+      } catch (rollbackError) {
+        rollbackErrors.push(...(rollbackError instanceof AggregateError ? rollbackError.errors : [rollbackError]));
+      }
       restoreMaps();
       await restoreLive(fromId);
       if (targetId !== fromId) await restoreLive(targetId);
+      if (rollbackErrors.length) {
+        if (error && (typeof error === "object" || typeof error === "function")) {
+          try { Object.defineProperty(error, "rollbackErrors", { value: rollbackErrors, configurable: true }); } catch {}
+        }
+        writeLog("error", "session_visibility_recovery_failed", {
+          sourceSessionId: fromId,
+          failureCount: rollbackErrors.length,
+        });
+      }
       throw error;
     }
   }
@@ -1578,6 +1580,39 @@ export function entriesToRecords(entries) {
 
 function cloneRecord(record) {
   return { ...record, ...(record.lines ? { lines: record.lines.map(line => ({ ...line })) } : {}) };
+}
+
+function compactionStartActivity() {
+  return normalizeActivity({
+    id: "activity:compaction", kind: "status", key: "compaction", status: "running",
+    title: "Compacting", summary: "context…",
+  }, { source: "pi" });
+}
+
+function compactionEndActivity(evt) {
+  const aborted = !!evt.aborted;
+  const failed = !aborted && !evt.result;
+  return normalizeActivity({
+    id: "activity:compaction", kind: "status", key: "compaction",
+    status: aborted ? "aborted" : failed ? "failed" : "completed",
+    title: aborted ? "Compaction cancelled" : failed ? "Compaction failed" : "Context compacted",
+    summary: evt.errorMessage || (aborted ? "Compaction cancelled." : "Session context compacted."),
+  }, { source: "pi" });
+}
+
+function toolStartRecord(evt) {
+  return {
+    id: evt.toolCallId, role: "tool", tool: evt.toolName,
+    arg: summarizeArgs(evt.toolName, evt.args), meta: "", out: "",
+  };
+}
+
+function toolResultMeta(isError, durationMs) {
+  return [isError ? "error" : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
+}
+
+function toolDiffRecord(toolCallId, diff) {
+  return { id: `${toolCallId}:d`, role: "diff", file: diff.path, add: `+${diff.adds}`, del: `−${diff.dels}`, lines: flattenHunks(diff.hunks) };
 }
 
 function flattenHunks(hunks) {

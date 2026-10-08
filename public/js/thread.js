@@ -60,7 +60,7 @@ class PiThread extends HTMLElement {
     };
     this.bindScroller();
     this.unsub = store.subscribe(w => {
-      if (w === "state" || w === "transcript" || w === "anim") this.render();
+      if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
     });
     this.addEventListener("click", e => this.onClick(e));

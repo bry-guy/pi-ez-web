@@ -27,11 +27,6 @@ export async function sessionSyncState(sessionId, sync) {
   }
 }
 
-export function reconcileBindings(_cfg, _bindings) {
-  // A missing worktree is useful information: keep the binding so the session
-  // can be shown under an unavailable Git context instead of disappearing.
-}
-
 function unavailableContext(project, binding) {
   const workspacePath = binding.workspacePath;
   return {
@@ -55,13 +50,16 @@ function unavailableContext(project, binding) {
   };
 }
 
-function projectContexts(project, bindings, primaryBranch) {
-  const live = ws.listContexts(project.repoPath, primaryBranch);
+function projectContextsFromLive(project, bindings, live) {
   const paths = new Set(live.map(context => pathKey(context.path)));
   const unavailable = Object.values(bindings)
     .filter(binding => binding?.projectId === project.id && binding.workspacePath && !paths.has(pathKey(binding.workspacePath)))
     .map(binding => unavailableContext(project, binding));
   return [...live, ...unavailable.filter((context, index, list) => list.findIndex(item => item.id === context.id) === index)];
+}
+
+function projectContexts(project, bindings, primaryBranch) {
+  return projectContextsFromLive(project, bindings, ws.listContexts(project.repoPath, primaryBranch));
 }
 
 async function discoverProjectSessions(contexts, bindings, closed, sup, projectId = null) {
@@ -93,8 +91,17 @@ async function discoverProjectSessions(contexts, bindings, closed, sup, projectI
 
 export async function sessionsUsingWorkspace(project, workspacePath, sup) {
   const bindings = loadBindings();
+  return sessionsForContexts(project, workspacePath, sup, bindings, projectContexts(project, bindings));
+}
+
+export async function sessionsUsingWorkspaceAsync(project, workspacePath, sup) {
+  const live = await ws.listContextsAsync(project.repoPath);
+  const bindings = loadBindings();
+  return sessionsForContexts(project, workspacePath, sup, bindings, projectContextsFromLive(project, bindings, live));
+}
+
+async function sessionsForContexts(project, workspacePath, sup, bindings, contexts) {
   const closed = loadClosed();
-  const contexts = projectContexts(project, bindings);
   const discovered = await discoverProjectSessions(contexts, bindings, closed, sup, project.id);
   return discovered
     .filter(session => !session.closed && pathKey(session.cwd) === pathKey(workspacePath))
@@ -112,10 +119,11 @@ export async function projectState(project, sup, sync = null) {
   const cfg = loadConfig();
   const bindings = loadBindings();
   // Read repository-level Git facts once per snapshot and share them.
-  const branches = ws.listBranches(project.repoPath);
-  const currentBranch = ws.currentBranch(project.repoPath);
-  const defaultBranch = ws.defaultBranch(project.repoPath, branches, currentBranch);
-  const contexts = projectContexts(project, bindings, defaultBranch);
+  const branches = await ws.listBranchesAsync(project.repoPath);
+  const currentBranch = await ws.currentBranchAsync(project.repoPath);
+  const defaultBranch = await ws.defaultBranchAsync(project.repoPath, branches, currentBranch);
+  const liveContexts = await ws.listContextsAsync(project.repoPath, defaultBranch);
+  const contexts = projectContextsFromLive(project, bindings, liveContexts);
   const pathToContext = Object.fromEntries(contexts.map(context => [pathKey(context.path), context]));
   const worktrees = Object.fromEntries(contexts.filter(context => context.branch).map(context => [context.branch, context.path]));
 
@@ -182,7 +190,7 @@ export async function projectState(project, sup, sync = null) {
     defaultBranch,
     branch: currentBranch,
     branches,
-    remoteBranches: ws.listRemoteBranches(project.repoPath),
+    remoteBranches: await ws.listRemoteBranchesAsync(project.repoPath),
     contexts: publicContexts,
     worktrees,
     workspaceStatus,

@@ -2,13 +2,13 @@
   "name": "pi-ez-web",
   "version": "0.1.0",
   "description": "Self-hostable web UI for Pi coding-agent sessions",
-  "main": "index.js",
   "scripts": {
     "pretest": "npm run build --prefix vendor/pi-sync",
-    "test": "node test/run-suite.js",
+    "test": "node --test --test-concurrency=2 test/*.test.js",
     "test:dom": "node --test test/dom.test.js",
     "start": "node server/index.js",
     "dev": "PI_WEB_MODE=mock node server/index.js",
+    "browser": "playwright open",
     "verify:real": "node scripts/verify-real.js"
   },
   "keywords": [],

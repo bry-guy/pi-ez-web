@@ -88,6 +88,7 @@ export async function createIsolatedServerFixture({ createProject: createInitial
       body: JSON.stringify(body ?? {}),
     });
     const get = route => fetch(base + route);
+    const remove = route => fetch(base + route, { method: "DELETE", headers, body: "{}" });
     const state = async () => (await get("/api/state")).json();
     const project = async (id = projectId) => {
       const snapshot = await state();
@@ -144,6 +145,7 @@ export async function createIsolatedServerFixture({ createProject: createInitial
 
     return {
       get,
+      remove,
       git,
       makeRepo,
       post,
@@ -158,6 +160,7 @@ export async function createIsolatedServerFixture({ createProject: createInitial
       mainSessionId,
       projectId,
       close: cleanup,
+      supervisor,
     };
   } catch (error) {
     await cleanup();

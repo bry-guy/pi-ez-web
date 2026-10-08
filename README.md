@@ -23,6 +23,18 @@ docker compose up --build -d
 
 Open [http://127.0.0.1:3141](http://127.0.0.1:3141); use the port you set if it differs. Compose builds the image locally and stores state in the `pi-ez-web-data` volume. No `config.json` is needed for the first start.
 
+For a local browser check, start the mock server in one terminal:
+
+```sh
+PORT=3141 npm run dev
+```
+
+Then open a browser in another terminal:
+
+```sh
+npm run browser -- --device="iPhone 13" http://localhost:3141
+```
+
 ## First chat
 
 1. In **Settings**, connect a model provider with its browser sign-in or API key.

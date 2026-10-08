@@ -142,11 +142,6 @@ export function completeOperationSnapshot(snapshot) {
   completeOperation(operation, result);
 }
 
-export function showCompletedOperation(kind, title, result, command = "") {
-  const operation = beginOperation(kind, title, command, "Result received.");
-  completeOperation(operation, result);
-}
-
 export function combineOperationResults(...results) {
   const values = results.filter(Boolean);
   return {

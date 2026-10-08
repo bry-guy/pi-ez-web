@@ -282,7 +282,17 @@ export function worktreeRoot(cfg) {
 
 const closedPath = () => path.join(appHome(), "closed.json");
 export function loadClosed() {
-  try { return new Set(JSON.parse(fs.readFileSync(closedPath(), "utf8"))); } catch { return new Set(); }
+  let raw;
+  try { raw = fs.readFileSync(closedPath(), "utf8"); }
+  catch (error) {
+    if (error.code === "ENOENT") return new Set();
+    throw error;
+  }
+  const ids = JSON.parse(raw);
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== "string" || id.length === 0)) {
+    throw new TypeError("Closed-session archive must contain an array of session IDs.");
+  }
+  return new Set(ids);
 }
 export function saveClosed(set) {
   writeJson(closedPath(), [...set]);
@@ -326,6 +336,12 @@ export function prepareSessionVisibilityReplacement(sourceId, targetId, fallback
     : null;
   const workspacePath = inherited?.workspacePath || target?.workspacePath || fallbackWorkspace || null;
   let committed = null;
+  const restore = (bindings, closed) => {
+    const errors = [];
+    try { saveBindings(bindings); } catch (error) { errors.push(error); }
+    try { saveClosed(closed); } catch (error) { errors.push(error); }
+    return errors;
+  };
 
   return {
     workspacePath,
@@ -341,8 +357,10 @@ export function prepareSessionVisibilityReplacement(sourceId, targetId, fallback
         if (JSON.stringify(nextBindings) !== JSON.stringify(beforeBindings)) saveBindings(nextBindings);
         if (nextClosed.size !== beforeClosed.size) saveClosed(nextClosed);
       } catch (error) {
-        try { saveBindings(beforeBindings); } catch {}
-        try { saveClosed(beforeClosed); } catch {}
+        const rollbackErrors = restore(beforeBindings, beforeClosed);
+        if (rollbackErrors.length && error && (typeof error === "object" || typeof error === "function")) {
+          Object.defineProperty(error, "rollbackErrors", { value: rollbackErrors, configurable: true });
+        }
         throw error;
       }
       committed = { bindings: beforeBindings, closed: beforeClosed };
@@ -351,8 +369,8 @@ export function prepareSessionVisibilityReplacement(sourceId, targetId, fallback
           if (!committed) return;
           const previous = committed;
           committed = null;
-          saveBindings(previous.bindings);
-          saveClosed(previous.closed);
+          const errors = restore(previous.bindings, previous.closed);
+          if (errors.length) throw new AggregateError(errors, "Session visibility rollback failed.");
         },
       };
     },

@@ -32,3 +32,22 @@ test("service worker caches only the app shell and bypasses API traffic", async 
   assert.match(worker, /request\.mode === "navigate"/);
   assert.doesNotMatch(worker, /cache\.put\(request, response\.clone\(\)\).*api/);
 });
+
+test("service worker precaches the complete local frontend module graph", async () => {
+  const worker = await read("sw.js");
+  const shell = worker.match(/const SHELL = \[([\s\S]*?)\];/)[1];
+  const cached = new Set([...shell.matchAll(/"([^"]+)"/g)].map(match => match[1]));
+  const pending = [new URL("js/main.js", root)];
+  const seen = new Set();
+  while (pending.length) {
+    const file = pending.pop();
+    if (seen.has(file.href)) continue;
+    seen.add(file.href);
+    assert.ok(cached.has(`/${file.pathname.slice(root.pathname.length)}`), `${file.href} is missing from the shell cache`);
+    const source = await readFile(file, "utf8");
+    for (const match of source.matchAll(/^\s*import\s+(?:[^;]*?\s+from\s+)?["']([^"']+)["']/gm)) {
+      if (match[1].startsWith(".")) pending.push(new URL(match[1], file));
+    }
+  }
+  assert.ok(seen.size > 10);
+});

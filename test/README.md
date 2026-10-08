@@ -1,6 +1,6 @@
 # Test layout
 
-`npm test` runs each child with `--test-concurrency=2`; `run-suite.js` permits at most two child Node test processes, with one test file per child. This keeps the Git-backed integration tests bounded without changing runtime behavior.
+`npm test` runs top-level `*.test.js` files with Node's test runner, capped at two concurrent processes. Each file remains isolated in its own process, keeping environment changes and Git-backed fixtures separate.
 
 The original server integration matrix included these Git route permutations. Their important contracts remain covered elsewhere:
 

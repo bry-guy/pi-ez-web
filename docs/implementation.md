@@ -40,7 +40,6 @@ public/               index.html + app.css + ES modules; no build step
                          marked + DOMPurify are served locally for safe GFM replies
 test/                 workspaces (real git) · server integration (mock+SSE) · SDK/auth/clone surfaces · DOM gate
 scripts/verify-real.js  credentialed end-to-end smoke
-docs/archive/CHECKLIST.md  archived real-browser click-through gate
 ```
 
 Pi-web state lives in `~/.pi-web-ui/` (`config.json`, `bindings.json`,
@@ -100,8 +99,11 @@ version 5 and includes capability markers for workspace and branch features.
   the detected primary branch. Creating from it fetches and fast-forwards the
   local primary branch when possible.
 - Merge to the primary branch is local, confirmed, and requires a clean source
-  plus a clean, up-to-date primary checkout. It never pushes or deletes
-  automatically. Push is a separate explicit, non-force operation.
+  plus a clean, up-to-date primary checkout. It never pushes; on success,
+  affected sessions return to the primary branch, the merged local branch is
+  deleted, and its separate clean source worktree is removed when applicable.
+  The primary checkout is retained. Push is a separate explicit, non-force
+  operation.
 - Delete is a separate confirmed local branch/worktree operation. Affected
   sessions move to the primary branch, or active/affected sessions may be
   closed from the confirmation dialog. Ordinary session close archives one
@@ -148,6 +150,6 @@ GitHub device login/private repository cloning and public HTTPS Git URLs.
 available. Chats and project sessions can be created without a model and return
 `409 model_required` on the first prompt when no provider is usable.
 
-The design (tokens, screens, event contract) is preserved in the archived
-[PLAN.md](archive/PLAN.md) and design README; the UI is a direct port of the
+The design (tokens, screens, event contract) is preserved in the [Revision 2
+design handoff](../design/revision-2/README.md); the UI is a direct port of the
 approved prototype.

@@ -2,16 +2,27 @@
 // by the web UI. Session state is still path-based; Git is never inferred from a
 // stale session branch binding.
 import { createHash } from "node:crypto";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 import { slug } from "./config.js";
 import { gitCredentialEnvironment } from "./git-credentials.js";
+import { parseStatusV2, parseWorktreeRecords } from "./git-parsers.js";
 
 export const MAIN_BRANCH = "main";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+const execFileAsync = promisify(execFile);
+
+async function gitReadAsync(cwd, ...args) {
+  const child = execFileAsync("git", args, { cwd, encoding: "utf8" });
+  child.child.stdin?.end();
+  const { stdout } = await child;
+  return stdout;
 }
 
 function gitLogged(cwd, args, report, env = process.env) {
@@ -37,8 +48,16 @@ export function currentBranch(dir) {
   try { return git(dir, "symbolic-ref", "--quiet", "--short", "HEAD").trim() || null; } catch { return null; }
 }
 
+export async function currentBranchAsync(dir) {
+  try { return (await gitReadAsync(dir, "symbolic-ref", "--quiet", "--short", "HEAD")).trim() || null; } catch { return null; }
+}
+
 export function currentHead(dir) {
   try { return git(dir, "rev-parse", "HEAD").trim() || null; } catch { return null; }
+}
+
+export async function currentHeadAsync(dir) {
+  try { return (await gitReadAsync(dir, "rev-parse", "HEAD")).trim() || null; } catch { return null; }
 }
 
 function gitFailure(code, error, fallback = code) {
@@ -58,12 +77,34 @@ export function validateBranchName(value) {
   return branch;
 }
 
+export async function validateBranchNameAsync(value) {
+  const branch = String(value || "").trim();
+  if (!branch || branch.startsWith("-") || branch.includes("..") || branch.endsWith("/")) {
+    throw Object.assign(new Error("bad_branch"), { code: "bad_branch" });
+  }
+  try { await gitReadAsync(process.cwd(), "check-ref-format", "--branch", branch); }
+  catch (error) { throw gitFailure("bad_branch", error, "Invalid branch name"); }
+  return branch;
+}
+
 export function defaultBranch(repoPath, localBranches = listBranches(repoPath), current = currentBranch(repoPath)) {
   let remoteHead = null;
   try {
     const symbolic = git(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").trim();
     remoteHead = symbolic.replace(/^origin\//, "") || null;
   } catch { /* origin/HEAD is optional */ }
+  const candidates = [remoteHead, current === "main" || current === "master" ? current : null, "main", "master", current];
+  return candidates.find(branch => branch && localBranches.includes(branch)) || current || MAIN_BRANCH;
+}
+
+export async function defaultBranchAsync(repoPath, localBranches, current) {
+  if (localBranches === undefined) localBranches = await listBranchesAsync(repoPath);
+  if (current === undefined) current = await currentBranchAsync(repoPath);
+  let remoteHead = null;
+  try {
+    const symbolic = (await gitReadAsync(repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")).trim();
+    remoteHead = symbolic.replace(/^origin\//, "") || null;
+  } catch {}
   const candidates = [remoteHead, current === "main" || current === "master" ? current : null, "main", "master", current];
   return candidates.find(branch => branch && localBranches.includes(branch)) || current || MAIN_BRANCH;
 }
@@ -75,6 +116,13 @@ export function branchUpstream(repoPath, branch = null) {
   } catch { return null; }
 }
 
+export async function branchUpstreamAsync(repoPath, branch = null) {
+  branch ||= await defaultBranchAsync(repoPath);
+  try {
+    return (await gitReadAsync(repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branch}@{upstream}`)).trim() || null;
+  } catch { return null; }
+}
+
 export function mainExternalWorktree(repoPath, primaryBranch = defaultBranch(repoPath)) {
   return listContexts(repoPath).find(context => context.branch === primaryBranch && context.kind === "worktree") || null;
 }
@@ -83,14 +131,15 @@ export function mainExternalWorktree(repoPath, primaryBranch = defaultBranch(rep
 // an upstream, fast-forward it after fetching. Callers use this at
 // branch-creation and merge boundaries, never as an implicit session-open side
 // effect.
-function runGitProcess(cwd, args, report) {
+function runGitProcess(cwd, args, report, env = gitCredentialEnvironment()) {
   return new Promise((resolve, reject) => {
     const command = `git ${args.join(" ")}`;
     const startedAt = Date.now();
     report?.({ type: "process_start", phase: "git", command, cwd, message: `Running ${command}.` });
-    const child = spawn("git", args, { cwd, env: gitCredentialEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
     child.stdout.on("data", chunk => {
       const value = String(chunk);
       stdout += value;
@@ -102,10 +151,14 @@ function runGitProcess(cwd, args, report) {
       report?.({ type: "process_output", phase: "git", command, cwd, stream: "stderr", output: value });
     });
     child.on("error", error => {
+      if (settled) return;
+      settled = true;
       report?.({ type: "process_end", phase: "git", command, cwd, stream: "stderr", output: stderr || error.message, exit: 1, durationMs: Date.now() - startedAt, message: `${command} failed.` });
       reject(Object.assign(error, { stderr, stdout, status: 1 }));
     });
     child.on("close", code => {
+      if (settled) return;
+      settled = true;
       const exit = typeof code === "number" ? code : 1;
       report?.({ type: "process_end", phase: "git", command, cwd, stream: exit === 0 ? "stdout" : "stderr", output: exit === 0 ? stdout : stderr || stdout, exit, durationMs: Date.now() - startedAt, message: exit === 0 ? `${command} completed.` : `${command} failed.` });
       if (exit === 0) resolve(stdout);
@@ -152,6 +205,10 @@ function refHead(workspacePath, ref) {
   try { return git(workspacePath, "rev-parse", "--verify", ref).trim() || null; } catch { return null; }
 }
 
+async function refHeadAsync(workspacePath, ref) {
+  try { return (await gitReadAsync(workspacePath, "rev-parse", "--verify", ref)).trim() || null; } catch { return null; }
+}
+
 export function pushPreview(workspacePath, { limit = 100 } = {}) {
   const branch = currentBranch(workspacePath);
   if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
@@ -179,6 +236,33 @@ export function pushPreview(workspacePath, { limit = 100 } = {}) {
   } catch (error) { throw gitFailure("push_preview_failed", error); }
 }
 
+export async function pushPreviewAsync(workspacePath, { limit = 100 } = {}) {
+  const branch = await currentBranchAsync(workspacePath);
+  if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
+  const configuredUpstream = await branchUpstreamAsync(workspacePath, branch);
+  const upstream = configuredUpstream || `origin/${branch}`;
+  const remote = upstream.split("/", 1)[0];
+  const candidates = [configuredUpstream, await remoteBranchForLocalAsync(workspacePath, branch), `${remote}/${await defaultBranchAsync(workspacePath)}`];
+  let baseRef;
+  for (const ref of candidates) {
+    if (ref && await refHeadAsync(workspacePath, ref)) { baseRef = ref; break; }
+  }
+  const head = await refHeadAsync(workspacePath, "HEAD");
+  if (!head) throw Object.assign(new Error("push_preview_failed"), { code: "push_preview_failed" });
+  const range = baseRef ? `${baseRef}..HEAD` : "HEAD";
+  try {
+    const commitCount = Number((await gitReadAsync(workspacePath, "rev-list", "--count", range)).trim()) || 0;
+    const commits = commitCount
+      ? (await gitReadAsync(workspacePath, "log", "--no-decorate", "--format=%H%x00%h%x00%s", "-n", String(Math.max(1, limit)), range))
+        .split("\n").filter(Boolean).map(line => {
+          const [hash, shortHash, ...subject] = line.split("\0");
+          return { hash, shortHash, subject: subject.join("\0") };
+        })
+      : [];
+    return { branch, upstream, remote, head, baseRef, baseHead: baseRef ? await refHeadAsync(workspacePath, baseRef) : null, commitCount, commits, dirty: await isDirtyAsync(workspacePath) };
+  } catch (error) { throw gitFailure("push_preview_failed", error); }
+}
+
 export function pushWorkspace(workspacePath, { report = null } = {}) {
   const branch = currentBranch(workspacePath);
   if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
@@ -186,6 +270,16 @@ export function pushWorkspace(workspacePath, { report = null } = {}) {
     const upstream = branchUpstream(workspacePath, branch);
     const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
     return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: gitLogged(workspacePath, args, report, gitCredentialEnvironment()), stderr: "" };
+  } catch (error) { throw gitFailure("git_push_failed", error); }
+}
+
+export async function pushWorkspaceAsync(workspacePath, { report = null } = {}) {
+  const branch = await currentBranchAsync(workspacePath);
+  if (!branch) throw Object.assign(new Error("detached_head"), { code: "detached_head" });
+  try {
+    const upstream = await branchUpstreamAsync(workspacePath, branch);
+    const args = upstream ? ["push"] : ["push", "-u", "origin", branch];
+    return { branch, upstream: upstream || `origin/${branch}`, command: `git ${args.join(" ")}`, stdout: await runGitProcess(workspacePath, args, report), stderr: "" };
   } catch (error) { throw gitFailure("git_push_failed", error); }
 }
 
@@ -199,6 +293,26 @@ export function mergeBranch(repoPath, branch, { report = null } = {}) {
   }
 }
 
+export async function mergeBranchAsync(repoPath, branch, { report = null, beforeMerge = null } = {}) {
+  await validateBranchNameAsync(branch);
+  await beforeMerge?.();
+  try {
+    return await runGitProcess(repoPath, ["merge", "--no-ff", "--no-edit", branch], report, process.env);
+  } catch (error) {
+    try { await gitReadAsync(repoPath, "merge", "--abort"); } catch {}
+    throw gitFailure("merge_conflict", error);
+  }
+}
+
+export async function deleteLocalBranchAsync(repoPath, branch, primaryBranch = null, beforeDelete = null) {
+  primaryBranch ||= await defaultBranchAsync(repoPath);
+  await validateBranchNameAsync(branch);
+  if (branch === primaryBranch) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
+  await beforeDelete?.();
+  try { return await gitReadAsync(repoPath, "branch", "-D", branch); }
+  catch (error) { throw gitFailure("branch_delete_failed", error); }
+}
+
 export function deleteLocalBranch(repoPath, branch, primaryBranch = defaultBranch(repoPath)) {
   validateBranchName(branch);
   if (branch === primaryBranch) throw Object.assign(new Error("cannot_delete_main"), { code: "cannot_delete_main" });
@@ -206,31 +320,45 @@ export function deleteLocalBranch(repoPath, branch, primaryBranch = defaultBranc
   catch (error) { throw gitFailure("branch_delete_failed", error); }
 }
 
-export async function prepareMainAsync(repoPath, { fetch = true, primaryBranch = null, report = null } = {}) {
-  primaryBranch ||= defaultBranch(repoPath);
-  const external = mainExternalWorktree(repoPath, primaryBranch);
+export async function prepareMainAsync(repoPath, { fetch = true, primaryBranch = null, report = null, beforeUpdate = null } = {}) {
+  primaryBranch ||= await defaultBranchAsync(repoPath);
+  const external = (await listContextsAsync(repoPath, primaryBranch)).find(context => context.branch === primaryBranch && context.kind === "worktree");
   if (external) throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external", workspacePath: external.path });
-  const branch = currentBranch(repoPath);
+  const branch = await currentBranchAsync(repoPath);
   if (branch !== primaryBranch) {
-    assertCleanCheckout(repoPath);
+    if (await isDirtyAsync(repoPath)) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
+    await beforeUpdate?.();
     try { await runGitProcess(repoPath, ["switch", primaryBranch], report); }
     catch (error) { throw gitFailure("git_switch_failed", error); }
   }
-  const upstream = branchUpstream(repoPath, primaryBranch);
+  const upstream = await branchUpstreamAsync(repoPath, primaryBranch);
   if (!upstream || !fetch) return { branch: primaryBranch, upstream, fetched: false, fastForwarded: false };
-  assertCleanCheckout(repoPath);
+  if (await isDirtyAsync(repoPath)) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
   const remote = upstream.split("/")[0];
   try { await runGitProcess(repoPath, ["fetch", "--prune", remote], report); }
   catch (error) { throw gitFailure("main_fetch_failed", error); }
+  const before = await currentHeadAsync(repoPath);
+  await beforeUpdate?.();
   try {
-    const before = currentHead(repoPath);
     await runGitProcess(repoPath, ["merge", "--ff-only", upstream], report);
-    return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== currentHead(repoPath) };
+    return { branch: primaryBranch, upstream, fetched: true, fastForwarded: before !== await currentHeadAsync(repoPath) };
   } catch (error) { throw gitFailure("main_not_fast_forwardable", error); }
 }
 
 export function isDirty(dir) {
-  try { return git(dir, "status", "--porcelain").trim().length > 0; } catch { return false; }
+  const status = dirtyState(dir);
+  if (status.dirty == null) throw Object.assign(new Error("git_status_unavailable"), { code: "git_status_unavailable", detail: status.error });
+  return status.dirty;
+}
+
+export async function isDirtyAsync(dir) {
+  try { return (await gitReadAsync(dir, "status", "--porcelain")).trim().length > 0; }
+  catch (error) {
+    throw Object.assign(new Error("git_status_unavailable"), {
+      code: "git_status_unavailable",
+      detail: String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400),
+    });
+  }
 }
 
 function dirtyState(dir) {
@@ -317,68 +445,40 @@ export function contextId(repoPath, workspacePath) {
 }
 
 export function listWorktreeRecords(repoPath) {
-  const out = git(repoPath, "worktree", "list", "--porcelain");
-  const records = [];
-  let record = null;
-  const finish = () => {
-    if (!record) return;
-    record.path = logicalWorktreePath(repoPath, record.path);
-    records.push(record);
-    record = null;
-  };
-  for (const line of out.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      finish();
-      record = { path: line.slice(9).trim(), head: null, branch: null, detached: false };
-    } else if (!record) {
-      continue;
-    } else if (line.startsWith("HEAD ")) {
-      record.head = line.slice(5).trim() || null;
-    } else if (line.startsWith("branch ")) {
-      record.branch = line.slice(7).trim().replace(/^refs\/heads\//, "") || null;
-    } else if (line === "detached") {
-      record.detached = true;
-    }
-  }
-  finish();
-  return records;
+  return parseWorktreeRecords(git(repoPath, "worktree", "list", "--porcelain"))
+    .map(record => ({ ...record, path: logicalWorktreePath(repoPath, record.path) }));
+}
+
+export async function listWorktreeRecordsAsync(repoPath) {
+  return parseWorktreeRecords(await gitReadAsync(repoPath, "worktree", "list", "--porcelain"))
+    .map(record => ({ ...record, path: logicalWorktreePath(repoPath, record.path) }));
 }
 
 // One `git status --porcelain=v2 --branch` read yields branch, HEAD, upstream,
 // ahead/behind, and change counts; the sidebar snapshot calls this per worktree.
 function snapshotStatus(dir) {
-  const out = git(dir, "status", "--porcelain=v2", "--branch");
-  const result = { branch: null, head: null, upstream: null, ahead: 0, behind: 0, details: { total: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 } };
-  for (const line of out.split(/\r?\n/)) {
-    if (!line) continue;
-    if (line.startsWith("# branch.oid ")) { const oid = line.slice(13).trim(); result.head = oid === "(initial)" ? null : oid; continue; }
-    if (line.startsWith("# branch.head ")) { const head = line.slice(14).trim(); result.branch = head === "(detached)" ? null : head; continue; }
-    if (line.startsWith("# branch.upstream ")) { result.upstream = line.slice(18).trim() || null; continue; }
-    if (line.startsWith("# branch.ab ")) {
-      const [ahead, behind] = line.slice(12).trim().split(/\s+/).map(n => Math.abs(Number(n)));
-      result.ahead = Number.isFinite(ahead) ? ahead : 0;
-      result.behind = Number.isFinite(behind) ? behind : 0;
-      continue;
-    }
-    if (line.startsWith("#") || line.startsWith("! ")) continue;
-    const d = result.details;
-    d.total++;
-    if (line.startsWith("? ")) { d.untracked++; continue; }
-    if (line.startsWith("u ")) { d.conflicts++; continue; }
-    const code = line.slice(2, 4);
-    if (code[0] !== ".") d.staged++;
-    if (code[1] !== ".") d.unstaged++;
-  }
-  return result;
+  return parseStatusV2(git(dir, "status", "--porcelain=v2", "--branch"));
 }
 
-export function contextStatus({ repoPath, workspacePath, record = null, primaryBranch = defaultBranch(repoPath) }) {
-  let snap = null;
-  let statusError = null;
-  try { snap = snapshotStatus(workspacePath); }
-  catch (error) { statusError = String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400); }
-  if (!snap) return legacyContextStatus({ repoPath, workspacePath, record, primaryBranch, statusError });
+function contextStatusResult({ repoPath, workspacePath, record, primaryBranch, snap, statusError, commit }) {
   const kind = path.resolve(workspacePath) === path.resolve(repoPath) ? "checkout" : "worktree";
+  if (!snap) {
+    const branch = record?.branch || null;
+    const externalMain = !!branch && branch === primaryBranch && kind === "worktree";
+    return {
+      branch, path: workspacePath, kind, dirty: null,
+      upstream: null, ahead: null, behind: null,
+      externalMain, protected: externalMain,
+      id: contextId(repoPath, workspacePath),
+      head: record?.head || null,
+      commit: null,
+      statusDetails: null,
+      detached: record?.detached ?? !branch,
+      primaryBranch,
+      status: "unknown",
+      statusError,
+    };
+  }
   const branch = snap.branch || (snap.head ? null : record?.branch) || null;
   const externalMain = !!branch && branch === primaryBranch && kind === "worktree";
   const head = snap.head || record?.head || null;
@@ -389,7 +489,7 @@ export function contextStatus({ repoPath, workspacePath, record = null, primaryB
     externalMain, protected: externalMain,
     id: contextId(repoPath, workspacePath),
     head,
-    commit: commitDetails(workspacePath, head),
+    commit,
     statusDetails: snap.details,
     detached: !branch,
     primaryBranch,
@@ -398,25 +498,34 @@ export function contextStatus({ repoPath, workspacePath, record = null, primaryB
   };
 }
 
-function legacyContextStatus({ repoPath, workspacePath, record, primaryBranch, statusError }) {
-  const status = workspaceStatus({
-    repoPath,
-    workspacePath,
-    branch: currentBranch(workspacePath) || record?.branch || null,
-    primaryBranch,
-  });
-  const head = currentHead(workspacePath) || record?.head || null;
-  return {
-    ...status,
-    id: contextId(repoPath, workspacePath),
-    head,
-    commit: commitDetails(workspacePath, head),
-    statusDetails: gitStatusDetails(workspacePath),
-    detached: !status.branch,
-    primaryBranch,
-    status: status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean",
-    statusError: statusError || dirtyState(workspacePath).error,
-  };
+export function contextStatus({ repoPath, workspacePath, record = null, primaryBranch = defaultBranch(repoPath) }) {
+  let snap = null;
+  let statusError = null;
+  try { snap = snapshotStatus(workspacePath); }
+  catch (error) { statusError = String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400); }
+  const head = snap?.head || record?.head || null;
+  const commit = snap ? commitDetails(workspacePath, head) : null;
+  return contextStatusResult({ repoPath, workspacePath, record, primaryBranch, snap, statusError, commit });
+}
+
+async function commitDetailsAsync(dir, fallbackHash = null) {
+  try {
+    const [hash, shortHash, subject] = (await gitReadAsync(dir, "show", "-s", "--format=%H%x00%h%x00%s", "HEAD")).trim().split(String.fromCharCode(0));
+    return { hash: hash || fallbackHash, shortHash: shortHash || (hash || fallbackHash || "").slice(0, 8), subject: subject || "" };
+  } catch {
+    return fallbackHash ? { hash: fallbackHash, shortHash: fallbackHash.slice(0, 8), subject: "" } : null;
+  }
+}
+
+export async function contextStatusAsync({ repoPath, workspacePath, record = null, primaryBranch }) {
+  if (primaryBranch === undefined) primaryBranch = await defaultBranchAsync(repoPath);
+  let snap = null;
+  let statusError = null;
+  try { snap = parseStatusV2(await gitReadAsync(workspacePath, "status", "--porcelain=v2", "--branch")); }
+  catch (error) { statusError = String(error?.stderr || error?.message || "Git status unavailable").trim().slice(0, 400); }
+  const head = snap?.head || record?.head || null;
+  const commit = snap ? await commitDetailsAsync(workspacePath, head) : null;
+  return contextStatusResult({ repoPath, workspacePath, record, primaryBranch, snap, statusError, commit });
 }
 
 export function listContexts(repoPath, primaryBranch = defaultBranch(repoPath)) {
@@ -428,10 +537,15 @@ export function listContexts(repoPath, primaryBranch = defaultBranch(repoPath)) 
   }));
 }
 
-export function resolveContext(repoPath, id) {
-  const context = listContexts(repoPath).find(item => item.id === String(id || ""));
-  if (!context) throw Object.assign(new Error("no_such_context"), { code: "no_such_context" });
-  return context;
+export async function listContextsAsync(repoPath, primaryBranch) {
+  if (primaryBranch === undefined) primaryBranch = await defaultBranchAsync(repoPath);
+  const records = await listWorktreeRecordsAsync(repoPath);
+  return Promise.all(records.map(record => contextStatusAsync({
+    repoPath,
+    workspacePath: record.path,
+    record,
+    primaryBranch,
+  })));
 }
 
 export function pullWorkspace(workspacePath) {
@@ -440,6 +554,17 @@ export function pullWorkspace(workspacePath) {
       stdout: execFileSync("git", ["pull", "--ff-only"], { cwd: workspacePath, encoding: "utf8", env: gitCredentialEnvironment(), stdio: ["ignore", "pipe", "pipe"] }),
       stderr: "",
     };
+  } catch (error) {
+    throw Object.assign(new Error("git_pull_failed"), {
+      code: "git_pull_failed",
+      detail: String(error.stderr || error.stdout || error.message || "git pull failed").trim().slice(0, 1000),
+    });
+  }
+}
+
+export async function pullWorkspaceAsync(workspacePath, { report = null } = {}) {
+  try {
+    return { stdout: await runGitProcess(workspacePath, ["pull", "--ff-only"], report), stderr: "" };
   } catch (error) {
     throw Object.assign(new Error("git_pull_failed"), {
       code: "git_pull_failed",
@@ -468,15 +593,48 @@ export function switchWorkspace({ repoPath, workspacePath, branch, fromRef = nul
   }
 }
 
+export async function switchWorkspaceAsync({ repoPath, workspacePath, branch, fromRef = null, primaryBranch = null }) {
+  primaryBranch ||= await defaultBranchAsync(repoPath);
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+    throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+  }
+  const args = ["switch"];
+  if (fromRef) args.push("-c", branch, fromRef);
+  else args.push(branch);
+  try {
+    return { stdout: await gitReadAsync(workspacePath, ...args), stderr: "" };
+  } catch (error) {
+    throw Object.assign(new Error("git_switch_failed"), {
+      code: "git_switch_failed",
+      detail: String(error.stderr || error.stdout || error.message || "git switch failed").trim().slice(0, 1000),
+    });
+  }
+}
+
 export function listBranches(repoPath) {
   try {
     return git(repoPath, "branch", "--format=%(refname:short)").split("\n").map(s => s.trim()).filter(Boolean);
   } catch { return []; }
 }
 
+export async function listBranchesAsync(repoPath) {
+  try {
+    return (await gitReadAsync(repoPath, "branch", "--format=%(refname:short)")).split("\n").map(s => s.trim()).filter(Boolean);
+  } catch { return []; }
+}
+
 export function listRemoteBranches(repoPath) {
   try {
     return git(repoPath, "branch", "--remotes", "--format=%(refname:short)")
+      .split("\n")
+      .map(s => s.trim())
+      .filter(branch => branch && !branch.endsWith("/HEAD"));
+  } catch { return []; }
+}
+
+export async function listRemoteBranchesAsync(repoPath) {
+  try {
+    return (await gitReadAsync(repoPath, "branch", "--remotes", "--format=%(refname:short)"))
       .split("\n")
       .map(s => s.trim())
       .filter(branch => branch && !branch.endsWith("/HEAD"));
@@ -493,6 +651,12 @@ export function remoteBranchForLocal(repoPath, branch) {
   const local = String(branch || "").trim();
   if (!local) return null;
   return listRemoteBranches(repoPath).find(remote => localBranchForRemote(remote) === local) || null;
+}
+
+export async function remoteBranchForLocalAsync(repoPath, branch) {
+  const local = String(branch || "").trim();
+  if (!local) return null;
+  return (await listRemoteBranchesAsync(repoPath)).find(remote => localBranchForRemote(remote) === local) || null;
 }
 
 // Git reports canonical paths on macOS (for example /private/var/... even when
@@ -534,6 +698,14 @@ export function listWorktrees(repoPath) {
   return map;
 }
 
+export async function listWorktreesAsync(repoPath) {
+  const map = {};
+  for (const context of await listContextsAsync(repoPath)) {
+    if (context.branch) map[context.branch] = context.path;
+  }
+  return map;
+}
+
 export function prune(repoPath) {
   try { git(repoPath, "worktree", "prune"); } catch { /* non-fatal */ }
 }
@@ -568,6 +740,23 @@ export function ensureWorkspace({ repoPath, worktreeRoot, projectId, branch, fro
   return wt;
 }
 
+export async function ensureWorkspaceAsync({ repoPath, worktreeRoot, projectId, branch, fromRef, primaryBranch, report = null, beforeCreate = null }) {
+  primaryBranch ??= await defaultBranchAsync(repoPath);
+  branch = await validateBranchNameAsync(branch);
+  if (branch === primaryBranch) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+  const existing = Object.fromEntries((await listContextsAsync(repoPath)).filter(context => context.branch).map(context => [context.branch, context.path]));
+  if (existing[branch]) return existing[branch];
+  const wt = worktreePathFor(worktreeRoot, projectId, branch);
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  const branches = await listBranchesAsync(repoPath);
+  const args = branches.includes(branch)
+    ? ["worktree", "add", wt, branch]
+    : ["worktree", "add", "-b", branch, wt, fromRef || "HEAD"];
+  await beforeCreate?.();
+  await runGitProcess(repoPath, args, report, process.env);
+  return wt;
+}
+
 export function removeWorkspace({ repoPath, workspacePath, force = false, primaryBranch = defaultBranch(repoPath) }) {
   const branch = currentBranch(workspacePath);
   if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
@@ -581,6 +770,19 @@ export function removeWorkspace({ repoPath, workspacePath, force = false, primar
   const args = ["worktree", "remove"];
   if (force) args.push("--force");
   git(repoPath, ...args, workspacePath.replace(/\/$/, ""));
+}
+
+export async function removeWorkspaceAsync({ repoPath, workspacePath, force = false, primaryBranch = null, beforeRemove = null }) {
+  primaryBranch ||= await defaultBranchAsync(repoPath);
+  const branch = await currentBranchAsync(workspacePath);
+  if (branch === primaryBranch && path.resolve(workspacePath) !== path.resolve(repoPath)) {
+    throw Object.assign(new Error("main_worktree_external"), { code: "main_worktree_external" });
+  }
+  if (!force && await isDirtyAsync(workspacePath)) throw Object.assign(new Error("workspace_dirty"), { code: "workspace_dirty" });
+  await beforeRemove?.();
+  const args = ["worktree", "remove"];
+  if (force) args.push("--force");
+  await gitReadAsync(repoPath, ...args, workspacePath.replace(/\/$/, ""));
 }
 
 // Legacy Git-mutating fork helper. Conversation forks now select an existing
@@ -627,14 +829,52 @@ export function forkWorkspace({ repoPath, worktreeRoot, projectId, parentWorkspa
   }
 }
 
-// Startup diagnostics can surface app-owned transfer stashes left behind by a
-// crash. The caller decides where to present the warning.
-export function piWebStashes(repoPath) {
+export async function forkWorkspaceAsync({ repoPath, worktreeRoot, projectId, parentWorkspace, parentBranch, existingBranches, forkBranchBase, branch: requestedBranch, primaryBranch = null, beforeMutation = null }) {
+  primaryBranch ||= await defaultBranchAsync(repoPath);
+  const stem = parentBranch.replace(/^(feat|spike|fix|branch)\//, "");
+  let n = 1, branch = String(requestedBranch || "").trim();
+  if (branch) {
+    if (branch === primaryBranch) throw Object.assign(new Error("main_worktree_forbidden"), { code: "main_worktree_forbidden" });
+    if (existingBranches.includes(branch)) throw Object.assign(new Error("branch_exists"), { code: "branch_exists" });
+  } else if (forkBranchBase) {
+    do { branch = `${forkBranchBase}.${n++}`; } while (existingBranches.includes(branch));
+  } else {
+    do { branch = `branch/${stem}-${n++}`; } while (existingBranches.includes(branch));
+  }
+  const dirty = await isDirtyAsync(parentWorkspace);
+  if (dirty && path.resolve(parentWorkspace) === path.resolve(repoPath)) throw Object.assign(new Error("checkout_dirty"), { code: "checkout_dirty" });
+  let stashRef = null;
+  let wt = null;
+  let created = false;
+  if (dirty) {
+    await beforeMutation?.();
+    const marker = `pi-web-ui fork transfer ${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await gitReadAsync(parentWorkspace, "stash", "push", "-u", "-m", marker);
+    stashRef = (await gitReadAsync(parentWorkspace, "rev-parse", "refs/stash")).trim();
+  }
   try {
-    return git(repoPath, "stash", "list", "--format=%H%x09%s")
-      .split("\n").map(s => s.trim()).filter(Boolean)
-      .filter(s => s.includes("\tpi-web-ui fork transfer "));
-  } catch { return []; }
+    const parentHead = (await gitReadAsync(parentWorkspace, "rev-parse", "HEAD")).trim();
+    wt = worktreePathFor(worktreeRoot, projectId, branch);
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    await beforeMutation?.();
+    await gitReadAsync(repoPath, "worktree", "add", "-b", branch, wt, parentHead);
+    created = true;
+    if (stashRef) await gitReadAsync(wt, "stash", "apply", "--index", stashRef);
+    return { branch, workspacePath: wt };
+  } catch (error) {
+    if (created) Object.assign(error, { branch, workspacePath: wt });
+    throw error;
+  } finally {
+    if (stashRef) {
+      try { await gitReadAsync(parentWorkspace, "stash", "apply", "--index", stashRef); }
+      catch (error) { throw Object.assign(gitFailure("stash_restore_failed", error), { stashRef, workspacePath: wt }); }
+      try {
+        const entries = (await gitReadAsync(parentWorkspace, "stash", "list", "--format=%gd%x00%H")).trim().split("\n");
+        const entry = entries.map(line => line.split("\0")).find(([, hash]) => hash === stashRef);
+        if (entry) await gitReadAsync(parentWorkspace, "stash", "drop", entry[0]);
+      } catch {}
+    }
+  }
 }
 
 // Repo picker: shallow scan for git repos under a root dir.

@@ -1,0 +1,162 @@
+export function register(api, deps) {
+  const { path, loadConfig, newId, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup } = deps;
+
+
+  api.get("/repos", c => {
+    const root = c.req.query("root") ? resolvePath(c.req.query("root")) : reposRoot(loadConfig());
+    return c.json({ root, repos: ws.findRepos(root).map(p => ({ path: p, name: path.basename(p) })) });
+  });
+
+  api.post("/projects", async c => {
+    const body = await c.req.json();
+    const cfg = loadConfig();
+    const source = body.source || (body.repoPath ? "local" : repositorySource(cfg));
+    let repoPath = null;
+    let sourceInfo = { type: "local" };
+    let cloned = false;
+    if (source === "local") {
+      repoPath = body.repoPath ? resolvePath(body.repoPath) : null;
+      if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
+    } else {
+      try {
+        const result = await cloneRepository({
+          source,
+          url: body.url,
+          fullName: body.fullName,
+          github,
+          root: reposRoot(cfg),
+          signal: c.req.raw?.signal,
+        });
+        repoPath = result.repoPath;
+        sourceInfo = result.source;
+        cloned = result.cloned;
+      } catch (e) {
+        const statuses = {
+          github_auth_required: 401,
+          github_not_configured: 409,
+          github_not_found: 404,
+          github_rate_limited: 403,
+          github_unavailable: 502,
+          invalid_github_repository: 400,
+          invalid_git_url: 400,
+          invalid_repository_name: 400,
+          unsupported_repository_source: 400,
+          repository_exists: 409,
+          clone_in_progress: 409,
+          clone_failed: 502,
+        };
+        if (statuses[e.code]) return err(c, statuses[e.code], e.code, e.code === "clone_failed" ? { message: e.message } : {});
+        throw e;
+      }
+    }
+    if (cfg.projects.some(p => p.repoPath === repoPath)) return err(c, 409, "project_exists");
+    const project = {
+      id: newId("p"), name: body.name || path.basename(repoPath), repoPath, source: sourceInfo,
+      hooks: normalizeHooks(body.hooks),
+    };
+    cfg.projects.push(project);
+    saveConfig(cfg);
+    // First session runs in the repository checkout; Git state remains user-owned.
+    const { id: sessionId } = await sup.createSession({ cwd: repoPath });
+    const context = projectContext(project, null);
+    if (context) bindSessionToContext(sessionId, project, context);
+    hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id, contextId: context?.id || null } });
+    const setupNeeded = !!projectHooks(cfg, project).setup;
+    return c.json({ id: project.id, sessionId, repoPath, cloned, contextId: context?.id || null, branch: context?.branch || null, workspacePath: context?.path || repoPath, setup: null, setupNeeded });
+  });
+
+  api.post("/projects/:id/fetch", async c => {
+    const id = c.req.param("id");
+    const project = loadConfig().projects.find(item => item.id === id);
+    if (!project) return err(c, 404, "no_such_project");
+    const body = (await c.req.json().catch(() => ({}))) || {};
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), kind: "fetch", title: "Fetch Git branches" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/projects/${id}/fetch` });
+    return withRepositoryAdmission(c, project.repoPath, async identity => {
+      const currentProject = loadConfig().projects.find(item => item.id === id);
+      if (!currentProject) return err(c, 404, "no_such_project");
+      await assertRepositoryIdentity(identity, currentProject.repoPath);
+      try {
+        const result = await ws.fetchRepositoryAsync(currentProject.repoPath, { report: reporter.log });
+        const operation = reporter.finish({ httpStatus: 200, message: "Fetched Git branches." });
+        return c.json({ ok: true, projectId: id, ...result, operation });
+      } catch (e) {
+        if (e.code === "git_fetch_failed") {
+          const operation = reporter.finish({ status: "error", httpStatus: 409, message: e.detail || e.message || e.code });
+          return err(c, 409, e.code, { detail: e.detail, operation });
+        }
+        reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
+        throw e;
+      }
+    }, reporter);
+  });
+
+  api.post("/projects/:id/sessions", async c => {
+    const initialProject = loadConfig().projects.find(p => p.id === c.req.param("id"));
+    if (!initialProject) return err(c, 404, "no_such_project");
+    const body = (await c.req.json().catch(() => ({}))) || {};
+    const name = typeof body.name === "string" ? body.name.trim() || null : null;
+    const mode = body.mode === "fork" ? "fork" : "new";
+    const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: body.sourceSessionId || null, kind: mode === "fork" ? "fork" : "create-session", title: mode === "fork" ? "Fork session" : "Create session" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/projects/${c.req.param("id")}/sessions` });
+    return withRepositoryAdmission(c, initialProject.repoPath, async identity => {
+      const project = loadConfig().projects.find(item => item.id === initialProject.id);
+      if (!project) return err(c, 404, "no_such_project");
+      await assertRepositoryIdentity(identity, project.repoPath);
+      const mainBranch = await ws.defaultBranchAsync(project.repoPath);
+      let branch = typeof body.branch === "string" && body.branch.trim() ? body.branch.trim() : null;
+      const legacyContext = body.contextId ? await projectContextAsync(project, body.contextId) : null;
+      if (!branch && legacyContext) branch = legacyContext.branch;
+      branch ||= mainBranch;
+      try {
+        let sourceSessionId = null;
+      let atRecordId = null;
+      if (mode === "fork") {
+        sourceSessionId = String(body.sourceSessionId || "");
+        if (!sourceSessionId || !(await sessionBelongsToProject(sourceSessionId, project, sup))) {
+          const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The source session was not found in this project." });
+          return err(c, 404, "no_such_source_session", { operation });
+        }
+        atRecordId = typeof body.atRecordId === "string" && body.atRecordId ? body.atRecordId : null;
+        if (atRecordId && !(await sup.transcript(sourceSessionId)).some(record => record.id === atRecordId && record.role === "user")) {
+          const operation = reporter.finish({ status: "error", httpStatus: 400, message: "The fork record must be a user message." });
+          return err(c, 400, "bad_fork_record", { operation });
+        }
+      }
+      const existed = !!(await branchContextAsync(project, branch));
+      const context = await ensureBranchContext(project, branch, body.baseBranch || mainBranch, { syncMain: true, report: reporter.log });
+      const setupNeeded = !existed && context.kind !== "checkout" && !!projectHooks(loadConfig(), project).setup;
+      if (mode === "fork") {
+        reporter.log({ type: "phase", phase: "fork-session", message: `Forking from session ${sourceSessionId}.` });
+        const { id: sessionId } = await sup.fork(sourceSessionId, atRecordId, { cwd: context.path, name });
+        bindSessionToContext(sessionId, project, context);
+        hub.emit(sessionId, "session_forked", { session: { id: sessionId, contextId: context.id, branch: context.branch }, parentSessionId: sourceSessionId });
+        const operation = reporter.finish({ httpStatus: 200, message: `Forked session ${sessionId} on ${context.branch}.` });
+        return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, forkedFrom: sourceSessionId, setup: null, setupNeeded, operation });
+      }
+      reporter.log({ type: "phase", phase: "create-session", message: `Creating the Pi session in ${context.path}.` });
+      const { id: sessionId } = await sup.createSession({ cwd: context.path, name });
+      bindSessionToContext(sessionId, project, context);
+      hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch } });
+      const operation = reporter.finish({ httpStatus: 200, message: `Created session ${sessionId} on ${context.branch}.` });
+      return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, setup: null, setupNeeded, operation });
+    } catch (e) {
+      const statuses = { bad_branch: 400, no_such_base_branch: 404, checkout_dirty: 409, git_status_unavailable: 409, main_worktree_external: 409, main_fetch_failed: 409, main_not_fast_forwardable: 409, git_switch_failed: 409 };
+      if (statuses[e.code]) {
+        const operation = reporter.finish({ status: "error", httpStatus: statuses[e.code], message: e.detail || e.message || e.code });
+        return err(c, statuses[e.code], e.code, { ...(e.detail ? { detail: e.detail } : {}), operation });
+      }
+      if (e.code === "bad_fork_record") {
+        const operation = reporter.finish({ status: "error", httpStatus: 400, message: e.message || e.code });
+        return err(c, 400, e.code, { operation });
+      }
+      if (String(e?.message || "").startsWith("unknown")) {
+        const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The source session was not found." });
+        return err(c, 404, "no_such_source_session", { operation });
+      }
+        reporter.finish({ status: "error", httpStatus: 500, message: e.message || String(e) });
+        throw e;
+      }
+    }, reporter);
+  });
+}

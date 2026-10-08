@@ -72,7 +72,6 @@ export const store = {
     openTools: {},
     openActivity: {},
     openDirs: {},
-    workspaceSettingsOpen: false,
     confirm: null,          // merge | push | deleteBranch confirmation payload
     operation: null,         // most recent operation status
     operations: [],           // recent client-visible operations for Logs
@@ -97,12 +96,10 @@ export const store = {
     defaultModelStatus: "automatic",
     modelError: null,
     models: [],              // registry-backed { id, provider, label }
-    animIdx: 0,
     error: null,             // transient composer/action error
     commandNotice: null,     // last web-adapted Pi slash-command result
     extensionUi: null,
     extensionStatuses: {},
-    hookResult: null,        // last configured project hook result
     fatalError: null,        // unrecoverable wire-contract error
     fileError: null,
     filePath: null,
@@ -305,5 +302,3 @@ export const store = {
     return this.state.view === "chat" && !this.state.chatId && !!this.state.sessionId;
   },
 };
-
-setInterval(() => { store.state.animIdx++; store.notify("anim"); }, 4600);

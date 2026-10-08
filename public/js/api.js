@@ -221,7 +221,7 @@ export async function openTranscript(id, { scrollToLatest = true, operation = nu
   if (!id) return;
   if (loading.has(id)) { reloadAfterLoad.add(id); return; }
   const startedAt = Date.now();
-  operation && appendOperationEvent(operation.id, { type: "request", message: `GET /api/sessions/${id}/transcript` });
+  if (operation) appendOperationEvent(operation.id, { type: "request", message: `GET /api/sessions/${id}/transcript` });
   loading.add(id);
   buffers.set(id, []);
   try {
@@ -467,31 +467,32 @@ function tOf(id) {
 }
 function byId(records, id) { return records.find(r => r.id === id); }
 
-export function applyEvent(evt, replay = false) {
+// Event families that never touch transcript sequence state; true means handled.
+function applyUiEvent(evt) {
   if (evt.type === "session_switched" && evt.toSessionId) {
-    if (!viewingSession(evt.sessionId)) return;
+    if (!viewingSession(evt.sessionId)) return true;
     pendingSessionSwitches.set(evt.sessionId, evt.toSessionId);
     void checkActiveSync();
-    return;
+    return true;
   }
   if (evt.type === "extension_ui_request") {
     store.set({ extensionUi: { ...evt, sessionId: evt.sessionId } });
-    return;
+    return true;
   }
   if (evt.type === "extension_ui_notify") {
     store.set({ commandNotice: { sessionId: evt.sessionId, title: "Pi", message: evt.message || "", level: evt.level || "info" } });
-    return;
+    return true;
   }
   if (evt.type === "extension_ui_status") {
     store.set(state => ({ extensionStatuses: {
       ...state.extensionStatuses,
       [evt.sessionId]: { ...(state.extensionStatuses[evt.sessionId] || {}), [evt.key]: evt.text },
     } }));
-    return;
+    return true;
   }
   if (evt.type === "extension_ui_title") {
     if (evt.sessionId === store.activeKey() && typeof document !== "undefined") document.title = evt.title || "pi";
-    return;
+    return true;
   }
   if (evt.type === "extension_ui_editor") {
     if (evt.sessionId === store.activeKey() && typeof document !== "undefined") {
@@ -510,23 +511,20 @@ export function applyEvent(evt, replay = false) {
         field.dispatchEvent(new Event("input", { bubbles: true }));
       }
     }
-    return;
+    return true;
   }
   if (evt.type === "operation_log") {
     appendOperationEvent(evt.operationId, evt.event);
-    return;
+    return true;
   }
   if (evt.type === "operation_complete") {
     completeOperationSnapshot(evt.operation);
-    return;
+    return true;
   }
-  const t = tOf(evt.sessionId);
-  const seq = Number(evt.seq);
-  if (Number.isFinite(seq)) {
-    const lastSeq = Number.isFinite(Number(t.seq)) ? Number(t.seq) : -1;
-    if (seq <= lastSeq) return;
-    t.seq = seq;
-  }
+  return false;
+}
+
+function applyTranscriptEvent(evt, t, replay) {
   const recs = t.records;
   switch (evt.type) {
     case "user_record": {
@@ -654,29 +652,43 @@ export function applyEvent(evt, replay = false) {
     case "session_closed": {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
+      const selection = [store.state.chatId, store.state.sessionId, store.state.projectId];
       const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null };
       refreshState().then(() => {
         const s = store.state;
+        if (s.chatId !== selection[0] || s.sessionId !== selection[1] || s.projectId !== selection[2]) return;
         if (wasChat) {
-          store.set({ ...fileReset, chatId: null, filesOpen: false, workspaceSettingsOpen: false });
+          store.set({ ...fileReset, chatId: null, filesOpen: false });
           return;
         }
         if (!wasSession) return;
         const p = s.projects.find(x => x.id === s.projectId);
         if (p?.sessions[0]) {
-          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, workspaceSettingsOpen: false, model: p.sessions[0].model || s.effectiveDefaultModel || null });
+          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, model: p.sessions[0].model || s.effectiveDefaultModel || null });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
-          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, workspaceSettingsOpen: false, filesOpen: false });
+          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, filesOpen: false });
           openTranscript(s.chats[0].id);
         } else {
-          store.set({ ...fileReset, sessionId: null, chatId: null, workspaceSettingsOpen: false, filesOpen: false });
+          store.set({ ...fileReset, sessionId: null, chatId: null, filesOpen: false });
         }
       }).catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;
     }
     default: break;
   }
+}
+
+export function applyEvent(evt, replay = false) {
+  if (applyUiEvent(evt)) return;
+  const t = tOf(evt.sessionId);
+  const seq = Number(evt.seq);
+  if (Number.isFinite(seq)) {
+    const lastSeq = Number.isFinite(Number(t.seq)) ? Number(t.seq) : -1;
+    if (seq <= lastSeq) return;
+    t.seq = seq;
+  }
+  applyTranscriptEvent(evt, t, replay);
   if (["turn_end", "bang_end"].includes(evt.type)
     && findSessionInState({ projects: store.state.projects, chats: [] }, evt.sessionId)) {
     refreshState().catch(err => store.setError(`Could not refresh workspace state: ${err.message || err}`));

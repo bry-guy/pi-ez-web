@@ -57,6 +57,26 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.doesNotMatch(dockerfile, /npm install --no-save/);
 });
 
+test("local packaging supports lockfile-based vendor installs and browser checks", () => {
+  const pkg = readJson("package.json");
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
+  const dockerignore = fs.readFileSync(path.join(root, ".dockerignore"), "utf8");
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+
+  assert.equal(pkg.main, undefined);
+  assert.equal(pkg.scripts.browser, "playwright open");
+  assert.ok(fs.existsSync(path.join(root, "vendor/pi-sync/package-lock.json")));
+  assert.match(dockerfile, /npm ci --include=dev --ignore-scripts --no-audit --no-fund --prefix \/tmp\/pi-sync/);
+  assert.match(gitignore, /^node_modules$/m);
+  assert.match(gitignore, /^vendor\/pi-sync\/dist\/$/m);
+  assert.match(gitignore, /^\.pi\/validation\/$/m);
+  assert.doesNotMatch(gitignore, /^\.pi\/?$/m);
+  assert.match(dockerignore, /^vendor\/pi-sync\/dist\/$/m);
+  assert.ok(readme.includes("PORT=3141 npm run dev"));
+  assert.ok(readme.includes('npm run browser -- --device="iPhone 13" http://localhost:3141'));
+});
+
 test("project hook capability is advertised by the server", () => {
   const version = fs.readFileSync(path.join(root, "server/version.js"), "utf8");
   assert.match(version, /project-hooks/);
@@ -106,7 +126,14 @@ test("self-hosting examples keep state persistent and secrets out of defaults", 
 
 test("image publication workflow publishes immutable GHCR images", () => {
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
+  const testsJob = workflow.match(/^  tests:\n([\s\S]*?)(?=^  publish:)/m)?.[1];
 
+  assert.ok(testsJob);
+  assert.match(testsJob, /    permissions:\n      contents: read\n    steps:/);
+  assert.match(testsJob, /uses: actions\/checkout@v4[\s\S]*?ref: \$\{\{ github\.sha \}\}/);
+  assert.match(testsJob, /uses: actions\/setup-node@v4[\s\S]*?node-version: 22[\s\S]*?cache: npm[\s\S]*?cache-dependency-path: \|[\s\S]*?package-lock\.json[\s\S]*?vendor\/pi-sync\/package-lock\.json/);
+  assert.match(testsJob, /run: npm ci[\s\S]*?run: npm ci --include=dev --ignore-scripts --prefix vendor\/pi-sync[\s\S]*?run: npm test/);
+  assert.match(workflow, /^  publish:\n    needs: tests$/m);
   assert.match(workflow, /permissions:\n  contents: read\n  packages: write\n/);
   assert.doesNotMatch(workflow, /contents: write|id-token: write/);
   assert.match(workflow, /group: pi-ez-web-image-\$\{\{ github\.ref \}\}/);

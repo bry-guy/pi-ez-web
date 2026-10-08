@@ -59,7 +59,7 @@ RUN npm ci --omit=dev --ignore-scripts \
 COPY vendor/pi-sync /tmp/pi-sync
 RUN set -eux; \
     test "$(cat /tmp/pi-sync/UPSTREAM_COMMIT)" = "$PI_SYNC_BASE_COMMIT"; \
-    npm install --include=dev --ignore-scripts --no-audit --no-fund --package-lock=false --prefix /tmp/pi-sync; \
+    npm ci --include=dev --ignore-scripts --no-audit --no-fund --prefix /tmp/pi-sync; \
     npm run build --prefix /tmp/pi-sync; \
     mkdir -p node_modules/@bry-guy/pi-sync; \
     cp /tmp/pi-sync/package.json node_modules/@bry-guy/pi-sync/; \

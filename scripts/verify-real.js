@@ -106,7 +106,8 @@ try {
 
   // Restart the server and attach to the same chat. The transcript is owned
   // by Pi; the app process and supervisor cache are intentionally discarded.
-  const chatCwd = path.join(process.env.PI_WEB_HOME, "chats");
+  const chatCwd = meta.cwd;
+  if (typeof chatCwd !== "string" || !chatCwd.trim()) fail("chat metadata returned an empty cwd");
   stopServer();
   await boot();
   const coldMeta = await (await get(`/api/sessions/${chat.id}/meta`)).json();

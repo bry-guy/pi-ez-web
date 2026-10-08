@@ -1,6 +1,8 @@
 # Browser pi-sync refresh: minimal implementation plan
 
-**Status:** Implemented on the isolated branch; local JSON-mode integration and browser DOM tests pass. Live credentialed CLI-to-web acceptance remains unverified. Not pushed, merged, or deployed.
+**Status:** Source at audit base `ffb5499` contains partial implementations;
+unchecked acceptance criteria, including live credentialed CLI-to-web acceptance,
+remain unverified.
 
 ## Goal and limits
 

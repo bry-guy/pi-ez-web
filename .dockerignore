@@ -1,5 +1,6 @@
 .git
 node_modules
+vendor/pi-sync/dist/
 .mise
 .pi-web-ui
 *.log

@@ -1,7 +1,7 @@
 # Repository sources and model-provider remediation tickets
 
-> **Status:** Proposed implementation plan. Nothing in this document describes
-> current production behavior until its ticket is merged.
+> **Status:** Source at audit base `ffb5499` contains partial implementations;
+> unchecked acceptance criteria remain unverified.
 >
 > **Audience:** A junior engineer implementing one reviewed ticket at a time,
 > with mandatory senior review where marked.

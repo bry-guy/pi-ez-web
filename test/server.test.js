@@ -197,7 +197,7 @@ test("plain chats use isolated scratch workspaces and retain legacy discovery", 
   const forkedChat = await forkResponse.json();
   const forkedMeta = await (await get(`/api/sessions/${forkedChat.id}/meta`)).json();
   assert.equal(forkedMeta.cwd, metaB.cwd);
-  const mergeResponse = await post(`/api/sessions/${b.id}/merge`, {});
+  const mergeResponse = await post(`/api/sessions/${b.id}/merge-local`, {});
   assert.equal(mergeResponse.status, 404);
   assert.equal((await mergeResponse.json()).error, "no_project_for_session");
 

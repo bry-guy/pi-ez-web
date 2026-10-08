@@ -261,5 +261,3 @@ export function readFileView({ workspace, repoPath, path: rawPath, target = NO_D
     diff: diffForFile({ workspace, repoPath, relative: file.relative, content, binary: false, target }),
   };
 }
-
-export const fileExplorerLimits = Object.freeze({ maxFileBytes: MAX_FILE_BYTES, maxHighlightBytes: MAX_HIGHLIGHT_BYTES });

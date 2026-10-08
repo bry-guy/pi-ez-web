@@ -299,9 +299,17 @@ export class GitHubDeviceFlowManager {
 
   async start() {
     if (this.activeId) throw coded("github_flow_active");
-    const device = await this.client.startDeviceFlow();
+    const id = `ghf_${randomUUID()}`;
+    this.activeId = id;
+    let device;
+    try {
+      device = await this.client.startDeviceFlow();
+    } catch (error) {
+      if (this.activeId === id) this.activeId = null;
+      throw error;
+    }
     const flow = {
-      id: `ghf_${randomUUID()}`,
+      id,
       state: "waiting_user",
       deviceCode: device.deviceCode,
       userCode: device.userCode,
@@ -314,7 +322,6 @@ export class GitHubDeviceFlowManager {
       error: null,
     };
     this.flows.set(flow.id, flow);
-    this.activeId = flow.id;
     this.schedule(flow, 0);
     return flow;
   }
@@ -333,6 +340,7 @@ export class GitHubDeviceFlowManager {
     }
     try {
       const result = await this.client.pollDeviceFlow(flow.deviceCode, flow.controller.signal);
+      if (!this.flows.has(flow.id) || flow.controller.signal.aborted || flow.state !== "waiting_user") return;
       if (result.state === "pending" || result.state === "slow_down") {
         if (result.state === "slow_down") flow.intervalSeconds += 5;
         this.schedule(flow, flow.intervalSeconds * 1000);
@@ -342,6 +350,7 @@ export class GitHubDeviceFlowManager {
         // Validate the token before persisting it. A token that cannot identify
         // the account must not make the UI claim that GitHub is connected.
         const account = await this.client.accountForToken(result.accessToken);
+        if (!this.flows.has(flow.id) || flow.controller.signal.aborted || flow.state !== "waiting_user") return;
         this.client.saveToken({ accessToken: result.accessToken, tokenType: result.tokenType, scope: result.scope, account });
         flow.account = account;
         this.finish(flow, "complete");
@@ -349,6 +358,7 @@ export class GitHubDeviceFlowManager {
       }
       this.finish(flow, "error", { code: result.code || "github_login_failed", message: result.message || "GitHub login did not complete." });
     } catch (error) {
+      if (!this.flows.has(flow.id) || flow.state !== "waiting_user") return;
       if (flow.controller.signal.aborted || error?.name === "AbortError") {
         this.finish(flow, "cancelled", { code: "github_login_cancelled", message: "GitHub login was cancelled." });
         return;

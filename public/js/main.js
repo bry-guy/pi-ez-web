@@ -1,6 +1,11 @@
 import "./shell.js";
 import "./thread.js";
-import "./panels.js";
+import "./dialogs.js";
+import "./session-picker.js";
+import "./settings.js";
+import "./files.js";
+import "./repo-picker.js";
+import "./app.js";
 import { checkActiveSync, connectSSE, openTranscript, refreshState, resumeConnection } from "./api.js";
 import { store } from "./store.js";
 import { openSavedSelectionEarly, restoreLastSelection, selectChat, selectSession } from "./shell.js";

@@ -1115,7 +1115,6 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   assert.match(thread.textContent, /message changed/);
 
-  store.set({ workspaceSettingsOpen: false });
   root.querySelector("pi-header [data-act='workspace-settings']")?.click();
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);

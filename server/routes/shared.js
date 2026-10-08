@@ -1,0 +1,191 @@
+import path from "node:path";
+import {
+  chatsDir, githubConfig, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig, normalizeSyncConfig, normalizeThinkingLevel, repositorySource, reposRoot, resolvePath, saveBindings, saveConfig, sessionSlug, slug, syncConfig, syncSettingsState, worktreeRoot,
+} from "../config.js";
+import { chatsState, projectState, sessionWorkspace, sessionsUsingWorkspace, sessionsUsingWorkspaceAsync } from "../domain.js";
+import { closeSession, findProjectByWorkspace, findProjectByWorkspaceAsync, returnSessionToMain } from "../lifecycle.js";
+import * as ws from "../workspaces.js";
+import { AuthFlowManager } from "../auth-flows.js";
+import { assertRepositoryIdentity, withRepositoryAdmission as runRepositoryAdmission } from "../repository-admission.js";
+
+
+export const err = (c, status, code, extra = {}) => c.json({ error: code, ...extra }, status);
+export const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
+export const withRepositoryAdmission = async (c, repoPath, task, reporter = null) => {
+  try { return await runRepositoryAdmission(repoPath, task); }
+  catch (error) {
+    if (!error?.repositoryAdmission) throw error;
+    const operation = reporter?.finish({ status: "error", httpStatus: 409, message: error.message || error.code });
+    return err(c, 409, error.code, { ...(error.detail ? { detail: error.detail } : {}), ...(operation ? { operation } : {}) });
+  }
+};
+export const formatDuration = durationMs => durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+export const SYNC_ERROR_STATUS = Object.freeze({
+  sync_not_configured: 409, sync_not_enrolled: 409, sync_not_persistent: 409,
+  sync_ui_required: 409, sync_repair_cancelled: 409, sync_server_mismatch: 409,
+  sync_duplicate: 409, sync_identity_mismatch: 409, sync_workspace_mismatch: 409, sync_session_not_found: 409,
+  workspace_mismatch: 409, workspace_required: 409,
+  sync_workspace_setup_required: 409, sync_materialization_failed: 409,
+  sync_stale_etag: 409, sync_snapshot_stale: 409, sync_busy: 409, sync_conflict: 409, conflict: 409, duplicate_enrollment: 409,
+  session_streaming: 409, session_compacting: 409, session_binding_conflict: 409,
+  active_lease: 423, lease_invalid: 423, lease_required: 423, sync_lease_uncertain: 423,
+  request_too_large: 413,
+  sync_client_unavailable: 503, sync_unavailable: 503, network_error: 503, timeout: 503, not_found: 503,
+  invalid_response: 502, sync_enrollment_failed: 502,
+});
+
+// Collisions count like humans do: foo, foo-2, foo-3.
+// The `.N` namespace is reserved for fork children (see forkWorkspace).
+export function repositorySourceState(cfg, github) {
+  const status = github.status();
+  return {
+    default: repositorySource(cfg),
+    sources: [
+      { id: "local", enabled: true },
+      {
+        id: "github",
+        enabled: true,
+        configured: status.configured,
+        authenticated: status.authenticated,
+        credentialSource: status.credentialSource,
+        account: status.account,
+        owner: status.owner,
+      },
+      { id: "git-url", enabled: true },
+    ],
+  };
+}
+
+export function settingsState(cfg, github) {
+  const githubCfg = githubConfig(cfg);
+  return {
+    sync: syncSettingsState(cfg),
+    reposRoot: {
+      value: reposRoot(cfg),
+      source: process.env.PI_WEB_REPOS_ROOT ? "PI_WEB_REPOS_ROOT" : cfg.reposRoot ? "config" : "default",
+      editable: !process.env.PI_WEB_REPOS_ROOT,
+    },
+    defaultRepositorySource: {
+      value: repositorySource(cfg),
+      source: process.env.PI_WEB_REPOSITORY_SOURCE ? "PI_WEB_REPOSITORY_SOURCE" : "config",
+      editable: !process.env.PI_WEB_REPOSITORY_SOURCE,
+    },
+    githubOwner: {
+      value: githubCfg.owner,
+      source: process.env.PI_WEB_GITHUB_OWNER ? "PI_WEB_GITHUB_OWNER" : "config",
+      editable: !process.env.PI_WEB_GITHUB_OWNER,
+    },
+  };
+}
+
+export async function suggestedWorktreeBranch(repoPath, sessionId, sup) {
+  const records = await sup.transcript(sessionId);
+  const firstMessage = records.find(record => record.role === "user")?.text || "";
+  const base = sessionSlug(firstMessage);
+  const branches = await ws.listBranchesAsync(repoPath);
+  if (!branches.includes(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!branches.includes(candidate)) return candidate;
+  }
+}
+
+export async function hasSynchronizedSibling(sessions, currentId, sync) {
+  for (const session of sessions || []) {
+    if (session.id === currentId) continue;
+    if ((await sync.status(session.id)).synchronized) return true;
+  }
+  return false;
+}
+
+export function projectContext(project, requestedId) {
+  const contexts = ws.listContexts(project.repoPath);
+  if (requestedId) return contexts.find(context => context.id === String(requestedId)) || null;
+  return contexts.find(context => path.resolve(context.path) === path.resolve(project.repoPath)) || contexts[0] || null;
+}
+
+export async function projectContextAsync(project, requestedId) {
+  const contexts = await ws.listContextsAsync(project.repoPath);
+  if (requestedId) return contexts.find(context => context.id === String(requestedId)) || null;
+  return contexts.find(context => path.resolve(context.path) === path.resolve(project.repoPath)) || contexts[0] || null;
+}
+
+export function requestedContext(project, c) {
+  if (c.req.query("contextId")) return projectContext(project, c.req.query("contextId"));
+  const branch = c.req.query("branch");
+  if (branch) return ws.listContexts(project.repoPath).find(context => context.branch === branch) || null;
+  return projectContext(project, null);
+}
+
+export function bindSessionToContext(sessionId, project, context) {
+  const bindings = loadBindings();
+  bindings[sessionId] = { projectId: project.id, workspacePath: context.path };
+  saveBindings(bindings);
+}
+
+export function bindRehomedSession(sessionId, project, source, target) {
+  const bindings = loadBindings();
+  const boundPath = bindings[sessionId]?.workspacePath;
+  if (boundPath && ![source, target].some(dir => path.resolve(dir) === path.resolve(boundPath))) {
+    throw Object.assign(new Error("repository_changed"), { code: "repository_changed" });
+  }
+  bindings[sessionId] = { projectId: project.id, workspacePath: target };
+  saveBindings(bindings);
+}
+
+export function boundProject(sessionId) {
+  const projectId = loadBindings()[sessionId]?.projectId;
+  return projectId ? loadConfig().projects.find(project => project.id === projectId) || null : null;
+}
+
+export function branchContext(project, branch) {
+  const contexts = ws.listContexts(project.repoPath).filter(context => context.branch === branch);
+  return contexts.find(context => context.kind === "checkout") || contexts[0] || null;
+}
+
+export async function branchContextAsync(project, branch) {
+  const contexts = (await ws.listContextsAsync(project.repoPath)).filter(context => context.branch === branch);
+  return contexts.find(context => context.kind === "checkout") || contexts[0] || null;
+}
+
+export function primaryBranch(project) {
+  return ws.defaultBranch(project.repoPath);
+}
+
+export async function ensureBranchContext(project, branch, baseBranch, { syncMain = true, report = null } = {}) {
+  const mainBranch = await ws.defaultBranchAsync(project.repoPath);
+  branch = await ws.validateBranchNameAsync(branch || mainBranch);
+  baseBranch = await ws.validateBranchNameAsync(baseBranch || mainBranch);
+  if (branch === mainBranch) {
+    report?.({ type: "phase", phase: "prepare-main", message: `Preparing ${mainBranch} checkout.` });
+    await ws.prepareMainAsync(project.repoPath, { fetch: false, primaryBranch: mainBranch, report });
+    return (await branchContextAsync(project, branch)) || ws.contextStatusAsync({ repoPath: project.repoPath, workspacePath: project.repoPath, primaryBranch: mainBranch });
+  }
+  const existing = await branchContextAsync(project, branch);
+  if (existing) return existing;
+  const branches = await ws.listBranchesAsync(project.repoPath);
+  if (!branches.includes(branch) && baseBranch === mainBranch && syncMain) {
+    report?.({ type: "phase", phase: "fetch-main", message: `Updating ${mainBranch} before creating ${branch}.` });
+    await ws.prepareMainAsync(project.repoPath, { fetch: true, primaryBranch: mainBranch, report });
+  }
+  if (!(await ws.listBranchesAsync(project.repoPath)).includes(baseBranch)) throw Object.assign(new Error("no_such_base_branch"), { code: "no_such_base_branch" });
+  const cfg = loadConfig();
+  const workspacePath = await ws.ensureWorkspaceAsync({
+    repoPath: project.repoPath,
+    worktreeRoot: worktreeRoot(cfg),
+    projectId: project.id,
+    branch,
+    fromRef: baseBranch,
+    primaryBranch: mainBranch,
+    report,
+  });
+  const context = await branchContextAsync(project, branch);
+  return context || ws.contextStatusAsync({ repoPath: project.repoPath, workspacePath, primaryBranch: mainBranch });
+}
+
+export async function sessionBelongsToProject(id, project, sup) {
+  const cwd = await sessionWorkspace(id, sup);
+  if (!cwd) return false;
+  const found = await findProjectByWorkspaceAsync(cwd);
+  return found?.project?.id === project.id;
+}
