@@ -373,7 +373,8 @@ export async function checkActiveSync() {
 
   const targetId = pendingSessionSwitches.get(id);
   if (targetId !== undefined && !canCatchUpSession(id, { allowDraft: targetId === id })) {
-    showCatchUpNotice(id);
+    // A same-session catch-up only waits for streaming or visibility; there is nothing for the user to do.
+    if (targetId !== id) showCatchUpNotice(id);
     return;
   }
   if (targetId === undefined && !canCheckActiveSync(id)) return;
