@@ -48,12 +48,13 @@ export class PiSyncWebAdapter {
 
   async beforePrompt(sessionId) {
     if (!this.config().serverUrl || !this.supervisor?.command) return { switched: false };
-    const before = this.supervisor.live?.get?.(sessionId)?.session?.sessionFile;
+    // pi-sync refreshes in place, so a catch-up replaces the live session object without changing its file.
+    const before = this.supervisor.live?.get?.(sessionId)?.session;
     try { await this.supervisor.command(sessionId, "/sync reconcile"); }
     catch { return { switched: false }; }
     const after = this.supervisor.live?.get?.(sessionId);
     return {
-      switched: !!after && after.session?.sessionFile !== before,
+      switched: !!after && after.session !== before,
       sessionId: after?.session?.sessionId || sessionId,
     };
   }

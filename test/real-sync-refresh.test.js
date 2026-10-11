@@ -59,6 +59,17 @@ async function scenario() {
           }] : [],
         });
       }
+      const sessionMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)$/);
+      if (sessionMatch && decodeURIComponent(sessionMatch[1]) === remote?.sessionId && request.method === "GET") {
+        return send(response, 200, { formatVersion: 1, session: remote, etag });
+      }
+      if (sessionMatch && decodeURIComponent(sessionMatch[1]) === remote?.sessionId && request.method === "PUT") {
+        if (!lease || request.headers["x-pi-sync-lease"] !== lease.token) return send(response, 423, { error: { code: "lease_invalid", message: "lease is invalid" } });
+        if (request.headers["if-match"] !== etag) return send(response, 412, { error: { code: "stale_etag", message: "stale" } });
+        remote = await readBody(request);
+        etag = `u${++leaseNumber}`;
+        return send(response, 200, { formatVersion: 1, session: remote, etag });
+      }
       const match = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/lease$/);
       if (match && decodeURIComponent(match[1]) === remote?.sessionId && request.method === "POST") {
         if (lease) return send(response, 423, { error: { code: "active_lease", message: "lease is active" } });
@@ -238,89 +249,60 @@ async function scenario() {
       if (originalPrompt) Object.defineProperty(liveSession, "prompt", originalPrompt); else delete liveSession.prompt;
     }
     await new Promise(resolve => setImmediate(resolve));
+    const sessionDir = path.dirname(initialFile);
+    const filesFor = () => fs.readdirSync(sessionDir).filter(file => file.endsWith(".jsonl"));
+    const filesBefore = filesFor().length;
     const first = await check();
     assert.equal(first.outcome, "refreshed");
     assert.equal(first.sessionId, id);
     const firstBinding = await persistedBinding();
-    assert.notEqual(firstBinding.materializedFile, initialFile);
+    assert.equal(firstBinding.materializedFile, initialFile, "a catch-up rewrites the same session file");
     const firstTranscript = await transcript(api);
-    assert.notEqual(firstTranscript.snapshotToken, tabOne.snapshotToken);
+    assert.equal(firstTranscript.snapshotToken, tabOne.snapshotToken, "open tabs stay valid across a catch-up");
     assert.ok(firstTranscript.records.some(record => record.text === "remote history one"));
-
-    const staleMessage = await request(api, `/sessions/${id}/message`, {
-      text: "must not be sent",
-      snapshotToken: tabOne.snapshotToken,
-    });
-    assert.equal(staleMessage.status, 409);
-    assert.equal(staleMessage.body.error, "sync_snapshot_stale");
-
-    const marker = path.join(root, "stale-bang-ran");
-    const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
-    const staleBang = await request(api, `/sessions/${id}/bang`, {
-      cmd: `touch ${shellQuote(marker)}`,
-      snapshotToken: tabTwo.snapshotToken,
-    });
-    assert.equal(staleBang.status, 409);
-    assert.equal(staleBang.body.error, "sync_snapshot_stale");
-    assert.equal(fs.existsSync(marker), false);
+    assert.equal(filesFor().length, filesBefore, "no duplicate session files");
 
     const commands = await request(api, `/sessions/${id}/commands`);
     assert.equal(commands.status, 200);
     assert.ok(commands.body.commands.some(command => command.name === "skill:synchronized-workspace" && command.source === "skill"));
-    const stalePrompt = await request(api, `/sessions/${id}/command`, {
-      text: "/skill:synchronized-workspace",
-      snapshotToken: tabOne.snapshotToken,
-    });
-    assert.equal(stalePrompt.status, 409);
-    assert.equal(stalePrompt.body.error, "sync_snapshot_stale");
 
     remote = appendMessage(remote, "remote-two", "remote history two");
     etag = "e3";
     const second = await check();
     assert.equal(second.outcome, "refreshed");
-    assert.equal(second.sessionId, id);
-    const secondBinding = await persistedBinding();
-    assert.notEqual(secondBinding.materializedFile, firstBinding.materializedFile);
     const secondTranscript = await transcript(api);
-    assert.notEqual(secondTranscript.snapshotToken, firstTranscript.snapshotToken);
-    assert.ok(secondTranscript.records.some(record => record.text === "remote history one"));
     assert.ok(secondTranscript.records.some(record => record.text === "remote history two"));
+    assert.equal((await check()).outcome, "unchanged");
 
-    const unchanged = await check();
-    assert.equal(unchanged.outcome, "unchanged");
-    assert.equal((await persistedBinding()).materializedFile, secondBinding.materializedFile);
-    assert.equal((await transcript(api)).snapshotToken, secondTranscript.snapshotToken);
-
+    // A browser bang while another device moves on is carried onto the newer copy, then uploaded.
     const bangOnly = await request(api, `/sessions/${id}/bang`, {
-      cmd: "printf 'bang-only divergence'", snapshotToken: secondTranscript.snapshotToken,
+      cmd: "printf 'bang-only divergence'", snapshotToken: tabTwo.snapshotToken,
     });
     assert.equal(bangOnly.status, 200);
-    const bangOnlyBytes = fs.readFileSync(secondBinding.materializedFile, "utf8");
-    assert.ok(bangOnlyBytes.includes("pi-web:bang"));
     remote = appendMessage(remote, "remote-three", "remote history three");
     etag = "e4";
-    assert.equal((await check()).outcome, "conflict", "a bang alone prevents automatic replacement");
-    assert.equal((await persistedBinding()).materializedFile, secondBinding.materializedFile);
-    assert.equal(fs.readFileSync(secondBinding.materializedFile, "utf8"), bangOnlyBytes);
+    assert.equal((await check()).outcome, "refreshed");
+    const carriedBytes = fs.readFileSync(initialFile, "utf8");
+    assert.ok(carriedBytes.includes("pi-web:bang") && carriedBytes.includes("remote history three"));
+    assert.equal((await check()).outcome, "unchanged");
+    assert.ok(remote.entries.some(entry => entry.customType === "pi-web:bang"), "the carried bang was uploaded");
 
-    const manual = await request(api, `/sessions/${id}/sync/refresh`, {});
-    assert.equal(manual.status, 200, JSON.stringify(manual.body));
+    // Unsynchronized conversation turns are kept as a separate session, never merged or lost.
     const baselineBinding = await persistedBinding();
     const baselineTranscript = await transcript(api);
-    assert.notEqual(baselineTranscript.snapshotToken, secondTranscript.snapshotToken);
     const localEntry = appendMessage(remote, "local-only", "local unsynchronized history").entries.at(-1);
     fs.appendFileSync(baselineBinding.materializedFile, `${JSON.stringify(localEntry)}\n`);
-    const localBytes = fs.readFileSync(baselineBinding.materializedFile, "utf8");
-    const fingerprint = baselineBinding.lastFingerprint;
     remote = appendMessage(remote, "remote-four", "remote history four");
     etag = "e5";
     const conflict = await check();
     assert.equal(conflict.outcome, "conflict");
-    assert.equal(fs.readFileSync(baselineBinding.materializedFile, "utf8"), localBytes);
+    const canonicalBytes = fs.readFileSync(initialFile, "utf8");
+    assert.ok(canonicalBytes.includes("remote history four") && !canonicalBytes.includes("local unsynchronized history"));
+    const copies = filesFor().filter(file => fs.readFileSync(path.join(sessionDir, file), "utf8").includes("local unsynchronized history"));
+    assert.equal(copies.length, 1, "the local turn survives in its own session");
     const afterConflict = await persistedBinding();
-    assert.equal(afterConflict.materializedFile, baselineBinding.materializedFile);
-    assert.equal(afterConflict.lastEtag, "e4");
-    assert.equal(afterConflict.lastFingerprint, fingerprint);
+    assert.equal(afterConflict.materializedFile, initialFile);
+    assert.equal(afterConflict.lastEtag, "e5");
 
     const decoy = appendMessage(remote, "decoy-entry", "unbound decoy history");
     const decoyFile = path.join(path.dirname(afterConflict.materializedFile), `9999999999999_${id}.jsonl`);
@@ -333,7 +315,7 @@ async function scenario() {
     assert.equal(await restartedSupervisor.sessionFile(id), afterConflict.materializedFile);
     const restarted = await transcript(restartedApi);
     assert.equal(restarted.snapshotToken, baselineTranscript.snapshotToken);
-    assert.ok(restarted.records.some(record => record.text === "local unsynchronized history"));
+    assert.ok(restarted.records.some(record => record.text === "remote history four"));
     assert.equal(restarted.records.some(record => record.text === "unbound decoy history"), false);
     await restartedSupervisor.commands(id);
 
@@ -369,9 +351,6 @@ async function scenario() {
         const control = await request(restartedApi, `/sessions/${id}/message`, { text: mode, mode, snapshotToken: restarted.snapshotToken });
         assert.equal(control.status, 200, JSON.stringify(control.body));
       }
-      const staleControl = await request(restartedApi, `/sessions/${id}/message`, { text: "stale", mode: "steer", snapshotToken: tabOne.snapshotToken });
-      assert.equal(staleControl.status, 409);
-      assert.equal(staleControl.body.error, "sync_snapshot_stale");
       let signalValidation;
       const validationStarted = new Promise(resolve => { signalValidation = resolve; });
       let finishValidation;
@@ -400,7 +379,8 @@ async function scenario() {
     assert.equal((await bangRequest).status, 200);
     const bangEntries = fs.readFileSync(afterConflict.materializedFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert.ok(bangEntries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"));
-    assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "conflict");
+    assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "unchanged");
+    assert.ok(remote.entries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"), "an idle bang uploads on the next check");
   } finally {
     for (const current of [supervisor, restartedSupervisor]) {
       if (!current) continue;
