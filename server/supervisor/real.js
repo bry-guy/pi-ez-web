@@ -851,6 +851,8 @@ export class RealSupervisor {
   }
 
   async withSyncOperation(id, task, kind = "exclusive") {
+    // Background sync checks finish in about a second; wait them out instead of bouncing the user's request.
+    for (let waited = 0; this.syncOperations.has(id) && waited < 15_000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
     if (this.syncOperations.has(id) || (this.pendingPrompts.has(id) && !this.isStreaming(id))) throw Object.assign(new Error("The conversation is busy."), { code: "sync_busy" });
     const operation = { kind };
     this.syncOperations.set(id, operation);

@@ -202,13 +202,9 @@ export class PiSyncWebAdapter {
         method,
         finish,
         options: Array.isArray(payload.options) ? payload.options.filter(option => typeof option === "string") : null,
+        event: { requestId, method, ...payload, timeout },
       });
-      this.hub?.emit(sessionId, "extension_ui_request", {
-        requestId,
-        method,
-        ...payload,
-        timeout,
-      });
+      this.hub?.emit(sessionId, "extension_ui_request", { requestId, method, ...payload, timeout });
     });
   }
 
@@ -241,6 +237,13 @@ export class PiSyncWebAdapter {
     if (!pending) throw adapterError("This extension interaction is no longer waiting for a response.", "stale_extension_ui_request");
     pending.finish(cancelValue(pending.method));
     return { ok: true, cancelled: true };
+  }
+
+  /** Re-sends dialogs still waiting for this session, e.g. after the browser reloads mid-dialog. */
+  replayPending(sessionId) {
+    for (const pending of this.pending.values()) {
+      if (pending.sessionId === sessionId) this.hub?.emit(sessionId, "extension_ui_request", pending.event);
+    }
   }
 
   cancelSession(sessionId) {

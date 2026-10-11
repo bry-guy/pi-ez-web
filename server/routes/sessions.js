@@ -114,6 +114,8 @@ export function register(api, deps) {
       const actualFile = await sup.sessionFile?.(id);
       const after = await syncAdapter?.snapshotToken(id, actualFile) || null;
       if (file !== actualFile || before !== after) return err(c, 409, "sync_snapshot_stale");
+      // Emitted after `seq`, so the reloading client applies it once the transcript loads.
+      syncAdapter?.replayPending?.(id);
       return c.json({
         sessionId: id, seq, streaming: sup.isStreaming(id), compacting: sup.isCompacting(id), snapshotToken: after, records,
       });

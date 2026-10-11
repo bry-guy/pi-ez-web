@@ -353,3 +353,19 @@ test("browser extension UI cancellation resolves the Pi-compatible fallback", as
   assert.deepEqual(adapter.cancel("session-2", event.requestId), { ok: true, cancelled: true });
   assert.equal(await selected, undefined);
 });
+
+test("pending extension dialogs are re-sent when the browser reloads the transcript", async () => {
+  const hub = new EventHub();
+  const events = frames(hub);
+  const adapter = new PiSyncWebAdapter({ hub });
+  const selected = adapter.uiContext("session-r").select("Choose", ["one"]);
+  const first = await waitFor(events, event => event.type === "extension_ui_request");
+  events.length = 0;
+  adapter.replayPending("session-r");
+  adapter.replayPending("other-session");
+  const replayed = await waitFor(events, event => event.type === "extension_ui_request");
+  assert.equal(replayed.requestId, first.requestId);
+  assert.deepEqual(replayed.options, ["one"]);
+  adapter.respond("session-r", first.requestId, { value: "one" });
+  assert.equal(await selected, "one");
+});
