@@ -215,7 +215,12 @@ export const store = {
   pinDraftSnapshot(id = this.activeKey()) {
     if (!id) return undefined;
     const draft = this.ensureDraft(id);
-    if (!Object.hasOwn(draft, "snapshotToken")) draft.snapshotToken = this.state.transcripts[id]?.snapshotToken;
+    // Typing can start before the transcript (and its token) loads; pin only a known token.
+    if (draft.snapshotToken == null) {
+      const token = this.state.transcripts[id]?.snapshotToken;
+      if (token == null) delete draft.snapshotToken;
+      else draft.snapshotToken = token;
+    }
     return draft.snapshotToken;
   },
   setDraft(value, id = this.activeKey()) {

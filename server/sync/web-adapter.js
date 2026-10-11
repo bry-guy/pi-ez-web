@@ -72,7 +72,8 @@ export class PiSyncWebAdapter {
 
   async assertSnapshot(sessionId, expected, sessionFile = undefined) {
     const current = await this.snapshotToken(sessionId, sessionFile);
-    if (current && current !== expected) throw adapterError("The synchronized conversation changed. Review it before sending again.", "sync_snapshot_stale");
+    // A tab that never saw a token (transcript still loading) has no stale expectation; pi-sync catches up before sending.
+    if (current && expected != null && current !== expected) throw adapterError("The synchronized conversation changed. Review it before sending again.", "sync_snapshot_stale");
   }
 
   async autoCheck(sessionId) {

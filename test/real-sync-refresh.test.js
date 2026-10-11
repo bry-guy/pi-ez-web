@@ -274,6 +274,35 @@ async function scenario() {
     assert.ok(secondTranscript.records.some(record => record.text === "remote history two"));
     assert.equal((await check()).outcome, "unchanged");
 
+    // Sending from a tab that has not seen the newest remote turn catches up first, then sends.
+    remote = appendMessage(remote, "remote-before-send", "remote history before send");
+    etag = "e3b";
+    {
+      const live = supervisor.live.get(id).session;
+      const sent = [];
+      const restore = ["model", "prompt"].map(key => [key, Object.getOwnPropertyDescriptor(live, key)]);
+      Object.defineProperty(live, "model", { configurable: true, value: { provider: "test", id: "model", api: "test" } });
+      live.prompt = async text => { sent.push(text); };
+      const patchReplacement = () => {
+        const current = supervisor.live.get(id).session;
+        if (current === live) return;
+        Object.defineProperty(current, "model", { configurable: true, value: { provider: "test", id: "model", api: "test" } });
+        current.prompt = async text => { sent.push(text); };
+      };
+      const originalAttach = supervisor._attachById.bind(supervisor);
+      supervisor._attachById = async (...args) => { const st = await originalAttach(...args); patchReplacement(); return st; };
+      try {
+        const behind = await request(api, `/sessions/${id}/message`, { text: "sent from a behind tab", snapshotToken: tabOne.snapshotToken });
+        assert.equal(behind.status, 200, JSON.stringify(behind.body));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.deepEqual(sent, ["sent from a behind tab"]);
+        assert.ok((await transcript(api)).records.some(record => record.text === "remote history before send"));
+      } finally {
+        supervisor._attachById = originalAttach;
+        for (const [key, descriptor] of restore) if (descriptor) Object.defineProperty(live, key, descriptor); else delete live[key];
+      }
+    }
+
     // A browser bang while another device moves on is carried onto the newer copy, then uploaded.
     const bangOnly = await request(api, `/sessions/${id}/bang`, {
       cmd: "printf 'bang-only divergence'", snapshotToken: tabTwo.snapshotToken,

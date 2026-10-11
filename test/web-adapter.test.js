@@ -86,7 +86,7 @@ test("sync status exposes canonical details without exposing the lease token", a
   assert.equal(await adapter.stickyName("local-session"), "Canonical conversation");
 });
 
-test("snapshot tokens survive ordinary appends but reject missing and replaced snapshots", async () => {
+test("snapshot tokens survive ordinary appends, reject replaced snapshots, and accept a tab that never saw one", async () => {
   let materializedFile = "/tmp/first.jsonl";
   let etag = "e1";
   const adapter = new PiSyncWebAdapter({ configProvider: () => ({ sync: { serverUrl: "https://sync.example" } }) });
@@ -98,7 +98,7 @@ test("snapshot tokens survive ordinary appends but reject missing and replaced s
   materializedFile = "/tmp/replacement.jsonl";
   assert.notEqual(await adapter.snapshotToken("same-id"), first);
   await assert.rejects(adapter.assertSnapshot("same-id", first), error => error.code === "sync_snapshot_stale");
-  await assert.rejects(adapter.assertSnapshot("same-id", undefined), error => error.code === "sync_snapshot_stale");
+  await adapter.assertSnapshot("same-id", undefined);
   const latest = await adapter.snapshotToken("same-id");
   await assert.rejects(adapter.assertSnapshot("same-id", latest, "/tmp/first.jsonl"), error => error.code === "sync_snapshot_stale");
 });
