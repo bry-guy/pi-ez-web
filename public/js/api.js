@@ -421,7 +421,8 @@ export async function checkActiveSync() {
   }
 }
 
-store.subscribe(what => { if (what === "draft") void checkActiveSync(); });
+// Re-check when a draft is cleared (e.g. after a pending switch); not on every keystroke.
+store.subscribe(what => { if (what === "draft" && !store.hasDraft(store.activeKey())) void checkActiveSync(); });
 
 export function resumeConnection() {
   if (globalThis.navigator?.onLine === false) {
