@@ -1052,6 +1052,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".delivery-status"), null);
   assert.ok(root.querySelector(".user-message-content"));
   assert.equal(store.state.transcripts.s1.records.some(record => record.pending), false);
+  store.state.transcripts.s1.records.push({ id: "pending-2", pendingId: "client-2", role: "user", text: "refused elsewhere", pending: true });
+  applyEvent({ v: 1, seq: 108.5, sessionId: "s1", type: "prompt_handled", clientMessageId: "client-2" });
+  assert.equal(store.state.transcripts.s1.records.some(record => record.pendingId === "client-2"), false, "a handled prompt leaves no bubble");
   store.state.transcripts.s1.records.push({ id: "failed-1", role: "user", text: "failed", deliveryError: "provider unavailable" });
   store.notify("transcript");
   assert.equal(root.querySelector(".delivery-status")?.textContent, "ERROR: Unable to send.");

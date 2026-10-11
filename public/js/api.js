@@ -538,6 +538,11 @@ function applyTranscriptEvent(evt, t, replay) {
       if (!replay) store.touchSession(evt.sessionId);
       break;
     }
+    case "prompt_handled": {
+      const pendingIndex = recs.findIndex(item => item.pendingId === evt.clientMessageId);
+      if (pendingIndex >= 0) recs.splice(pendingIndex, 1);
+      break;
+    }
     case "turn_start":
       t.streaming = true;
       break;

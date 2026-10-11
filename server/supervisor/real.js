@@ -696,7 +696,15 @@ export class RealSupervisor {
         throw error;
       }
     }
-    this._startPrompt(id, () => st.session.prompt(text, { images }), err => {
+    this._startPrompt(id, async () => {
+      await st.session.prompt(text, { images });
+      // An input handler (e.g. pi-sync refusing while another device runs) can consume the prompt
+      // without a user entry; drop its pending bubble so it neither lingers nor claims the next entry.
+      if (clientMessageId && st.pendingMessages.some(item => item.clientMessageId === clientMessageId)) {
+        st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
+        this.hub.emit(id, "prompt_handled", { clientMessageId });
+      }
+    }, err => {
       if (clientMessageId) st.pendingMessages = st.pendingMessages.filter(item => item.clientMessageId !== clientMessageId);
       this._endTurnWithError(id, st, err);
     });
