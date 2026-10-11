@@ -443,13 +443,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   let checks = checkCount();
   store.state.drafts.s1 = { text: "pending", attachments: [] };
   await checkActiveSync();
-  assert.equal(checkCount(), checks, "draft text suppresses automatic checks");
-  store.state.drafts.s1 = { text: "", attachments: [{ data: "image" }] };
-  await checkActiveSync();
-  assert.equal(checkCount(), checks, "attachments suppress automatic checks");
-  store.state.drafts.s1 = { text: "", attachments: [], pendingAttachments: 1 };
-  await checkActiveSync();
-  assert.equal(checkCount(), checks, "attachment reads suppress automatic checks");
+  assert.equal(checkCount(), ++checks, "in-place catch-up keeps running while a draft is open");
+  assert.equal(store.state.drafts.s1.text, "pending", "the draft survives the check");
   delete store.state.drafts.s1;
   store.transcript("s1").streaming = true;
   await checkActiveSync();
@@ -1181,7 +1176,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.sessionId, "s1");
   assert.equal(textarea.value, "same-id draft");
   assert.equal(store.draftSnapshotToken("s1"), "same-old");
-  assert.match(root.querySelector(".command-notice")?.textContent || "", /replacement is ready/);
+  assert.doesNotMatch(root.querySelector(".command-notice")?.textContent || "", /replacement is ready/, "a same-ID catch-up never waits on the draft");
   await openTranscript("s1");
   assert.equal(store.transcript("s1").snapshotToken, "same-new");
   assert.equal(store.draftSnapshotToken("s1"), "same-old", "same-ID transcript reloads preserve the draft token");

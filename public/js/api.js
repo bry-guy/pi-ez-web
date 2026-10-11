@@ -320,12 +320,14 @@ function viewingSession(id) {
   return !!id && store.state.view === "chat" && store.activeKey() === id;
 }
 
-function canCatchUpSession(id) {
+// pi-sync catches up in place (same session, same file), so a draft survives it and only
+// switching to a different session must wait for the draft to be finished or cleared.
+function canCatchUpSession(id, { allowDraft = false } = {}) {
   const transcript = store.transcript(id);
   return viewingSession(id)
     && globalThis.document?.visibilityState === "visible"
     && globalThis.navigator?.onLine !== false && !store.state.offline
-    && !transcript.streaming && !transcript.compacting && !store.hasDraft(id);
+    && !transcript.streaming && !transcript.compacting && (allowDraft || !store.hasDraft(id));
 }
 
 function showCatchUpNotice(id) {
@@ -340,15 +342,16 @@ function clearCatchUpNotice(id) {
 }
 
 async function openSwitchedSession(sourceId, targetId) {
-  if (!canCatchUpSession(sourceId)) return false;
+  const allowDraft = targetId === sourceId;
+  if (!canCatchUpSession(sourceId, { allowDraft })) return false;
   const { selectSessionById } = await import("./shell.js");
-  if (!canCatchUpSession(sourceId)) return false;
+  if (!canCatchUpSession(sourceId, { allowDraft })) return false;
   for (let attempt = 0; attempt < 2; attempt++) {
     await refreshState();
-    if (!canCatchUpSession(sourceId)) return false;
+    if (!canCatchUpSession(sourceId, { allowDraft })) return false;
     if (targetId === sourceId) {
       await openTranscript(sourceId, { scrollToLatest: false });
-      return canCatchUpSession(sourceId);
+      return canCatchUpSession(sourceId, { allowDraft });
     }
     if (selectSessionById(targetId)) return true;
   }
@@ -356,7 +359,7 @@ async function openSwitchedSession(sourceId, targetId) {
 }
 
 function canCheckActiveSync(id) {
-  return !!findSessionInState(store.state, id)?.synchronized && canCatchUpSession(id);
+  return !!findSessionInState(store.state, id)?.synchronized && canCatchUpSession(id, { allowDraft: true });
 }
 
 export async function checkActiveSync() {
@@ -369,7 +372,7 @@ export async function checkActiveSync() {
   }
 
   const targetId = pendingSessionSwitches.get(id);
-  if (targetId !== undefined && !canCatchUpSession(id)) {
+  if (targetId !== undefined && !canCatchUpSession(id, { allowDraft: targetId === id })) {
     showCatchUpNotice(id);
     return;
   }
@@ -390,7 +393,7 @@ export async function checkActiveSync() {
     }
     try {
       const result = await api.checkSyncSession(id);
-      if (!canCatchUpSession(id)) return;
+      if (!canCatchUpSession(id, { allowDraft: true })) return;
       if (result.outcome === "refreshed" && result.sessionId && result.sessionId !== id) {
         pendingSessionSwitches.set(id, result.sessionId);
         const opened = await openSwitchedSession(id, result.sessionId);
