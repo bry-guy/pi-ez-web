@@ -376,7 +376,11 @@ export class RealSupervisor {
       ? SessionManager.open(file, undefined, resolvedCwd)
       : SessionManager.create(resolvedCwd);
     const runtime = await this._modelRuntime();
-    const model = await this._resolveModel(modelRef, runtime);
+    // A conversation synchronized from another device may name a model this host lacks; open it with the default.
+    const model = await this._resolveModel(modelRef, runtime).catch(error => {
+      if (error?.code === "model_unavailable") return undefined;
+      throw error;
+    });
     const { session } = await this._withSessionCreateLock(() => this._createConfiguredSession({
       cwd: resolvedCwd,
       sessionManager,
