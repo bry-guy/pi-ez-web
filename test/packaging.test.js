@@ -23,8 +23,8 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   }
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
-  assert.match(dockerfile, /ARG PI_SYNC_BASE_COMMIT=3790608db47a6bbf61f91fec93fe75c2412e4049/);
-  assert.equal(piSyncCommit, "3790608db47a6bbf61f91fec93fe75c2412e4049");
+  assert.match(dockerfile, /ARG PI_SYNC_BASE_COMMIT=99cc59f5b31e9ac8c55e9e79839c4a51f15a4eed/);
+  assert.equal(piSyncCommit, "99cc59f5b31e9ac8c55e9e79839c4a51f15a4eed");
   assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
   assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
   const piSyncBuildRun = dockerfile
