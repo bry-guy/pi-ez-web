@@ -3,12 +3,12 @@
 node = "22"
 
 [tasks.bootstrap]
-description = "Install app and vendored pi-sync dependencies"
+description = "Install app dependencies and pinned pi-sync (PI_SYNC_SOURCE=<checkout> links a local one)"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 npm ci
-npm ci --prefix vendor/pi-sync
+scripts/install-pi-sync.sh
 '''
 
 [tasks.dev]

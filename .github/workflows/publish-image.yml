@@ -29,12 +29,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            vendor/pi-sync/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - run: npm ci
-      - run: npm ci --include=dev --ignore-scripts --prefix vendor/pi-sync
       - run: npm test
 
   publish:

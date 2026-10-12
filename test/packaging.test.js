@@ -11,7 +11,7 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   const pkg = readJson("package.json");
   const lock = readJson("package-lock.json");
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
-  const piSyncCommit = fs.readFileSync(path.join(root, "vendor/pi-sync/UPSTREAM_COMMIT"), "utf8").trim();
+  const piSyncCommit = fs.readFileSync(path.join(root, "PI_SYNC_COMMIT"), "utf8").trim();
   const runtimeDependencies = ["@earendil-works/pi-coding-agent", "dompurify", "highlight.js", "marked"];
 
   for (const dependency of runtimeDependencies) {
@@ -23,18 +23,12 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   }
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /ARG PI_WEB_BUILD_ID/);
-  assert.match(dockerfile, /ARG PI_SYNC_BASE_COMMIT=d4ab3c9f518d1064d3ea743dc113c0ab09f52762/);
-  assert.equal(piSyncCommit, "d4ab3c9f518d1064d3ea743dc113c0ab09f52762");
-  assert.match(dockerfile, /COPY vendor\/pi-sync \/tmp\/pi-sync/);
-  assert.match(dockerfile, /node_modules\/@bry-guy\/pi-sync/);
-  const piSyncBuildRun = dockerfile
-    .replace(/\\\r?\n/g, " ")
-    .split(/\r?\n/)
-    .find(line => line.startsWith("RUN set -eux;"));
-  assert.ok(piSyncBuildRun);
-  const buildAt = piSyncBuildRun.indexOf("npm run build --prefix /tmp/pi-sync");
-  const cleanAt = piSyncBuildRun.indexOf("npm cache clean --force");
-  assert.ok(buildAt >= 0 && cleanAt > buildAt);
+  assert.match(piSyncCommit, /^[0-9a-f]{40}$/, "pi-sync is pinned to one full commit");
+  assert.doesNotMatch(dockerfile, /PI_SYNC_BASE_COMMIT|vendor\//);
+  assert.match(dockerfile, /COPY PI_SYNC_COMMIT/);
+  assert.match(dockerfile, /RUN \.\/scripts\/install-pi-sync\.sh/);
+  assert.equal(pkg.scripts.pretest, "scripts/install-pi-sync.sh");
+  assert.equal(fs.existsSync(path.join(root, "vendor")), false, "pi-sync is installed from its own repository, not copied");
   assert.doesNotMatch(dockerfile, /git clone/);
   // mise and yadm are credential-free prestart tools; secret and cluster tools stay out.
   assert.match(dockerfile, /install -m 0755 "\$tmp\/mise" \/usr\/local\/bin\/mise/);
@@ -57,7 +51,7 @@ test("production image installs the Pi SDK and browser Markdown libraries as run
   assert.doesNotMatch(dockerfile, /npm install --no-save/);
 });
 
-test("local packaging supports lockfile-based vendor installs and browser checks", () => {
+test("local packaging installs pinned pi-sync and supports browser checks", () => {
   const pkg = readJson("package.json");
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
   const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
@@ -66,13 +60,13 @@ test("local packaging supports lockfile-based vendor installs and browser checks
 
   assert.equal(pkg.main, undefined);
   assert.equal(pkg.scripts.browser, "playwright open");
-  assert.ok(fs.existsSync(path.join(root, "vendor/pi-sync/package-lock.json")));
-  assert.match(dockerfile, /npm ci --include=dev --ignore-scripts --no-audit --no-fund --prefix \/tmp\/pi-sync/);
+  assert.match(fs.readFileSync(path.join(root, "scripts/install-pi-sync.sh"), "utf8"), /codeload\.github\.com\/bry-guy\/pi-sync/);
+  assert.match(dockerfile, /rm -rf \.cache/);
   assert.match(gitignore, /^node_modules$/m);
-  assert.match(gitignore, /^vendor\/pi-sync\/dist\/$/m);
+  assert.match(gitignore, /^\.cache\/$/m);
   assert.match(gitignore, /^\.pi\/validation\/$/m);
   assert.doesNotMatch(gitignore, /^\.pi\/?$/m);
-  assert.match(dockerignore, /^vendor\/pi-sync\/dist\/$/m);
+  assert.match(dockerignore, /^\.cache\/$/m);
   assert.ok(readme.includes("PORT=3141 npm run dev"));
   assert.ok(readme.includes('npm run browser -- --device="iPhone 13" http://localhost:3141'));
 });
@@ -131,8 +125,8 @@ test("image publication workflow publishes immutable GHCR images", () => {
   assert.ok(testsJob);
   assert.match(testsJob, /    permissions:\n      contents: read\n    steps:/);
   assert.match(testsJob, /uses: actions\/checkout@v4[\s\S]*?ref: \$\{\{ github\.sha \}\}/);
-  assert.match(testsJob, /uses: actions\/setup-node@v4[\s\S]*?node-version: 22[\s\S]*?cache: npm[\s\S]*?cache-dependency-path: \|[\s\S]*?package-lock\.json[\s\S]*?vendor\/pi-sync\/package-lock\.json/);
-  assert.match(testsJob, /run: npm ci[\s\S]*?run: npm ci --include=dev --ignore-scripts --prefix vendor\/pi-sync[\s\S]*?run: npm test/);
+  assert.match(testsJob, /uses: actions\/setup-node@v4[\s\S]*?node-version: 22[\s\S]*?cache: npm[\s\S]*?cache-dependency-path: package-lock\.json/);
+  assert.match(testsJob, /run: npm ci[\s\S]*?run: npm test/);
   assert.match(workflow, /^  publish:\n    needs: tests$/m);
   assert.match(workflow, /permissions:\n  contents: read\n  packages: write\n/);
   assert.doesNotMatch(workflow, /contents: write|id-token: write/);

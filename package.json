@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Self-hostable web UI for Pi coding-agent sessions",
   "scripts": {
-    "pretest": "npm run build --prefix vendor/pi-sync",
+    "pretest": "scripts/install-pi-sync.sh",
     "test": "node --test --test-concurrency=2 test/*.test.js",
     "test:dom": "node --test test/dom.test.js",
     "start": "node server/index.js",

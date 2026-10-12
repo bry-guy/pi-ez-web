@@ -1,7 +1,6 @@
 FROM node:22-bookworm-slim
 
 ARG PI_WEB_BUILD_ID=development
-ARG PI_SYNC_BASE_COMMIT=d4ab3c9f518d1064d3ea743dc113c0ab09f52762
 
 ENV NODE_ENV=production \
     PORT=3141 \
@@ -51,24 +50,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
-# pi-sync is a private sibling repository and ships its reusable client from
-# a nested package. The app repository carries a source snapshot based on
-# PI_SYNC_BASE_COMMIT. This checkout includes the web-host integration patch,
-# so the marker verifies its upstream base rather than claiming an unmodified
-# upstream package.
-COPY vendor/pi-sync /tmp/pi-sync
-RUN set -eux; \
-    test "$(cat /tmp/pi-sync/UPSTREAM_COMMIT)" = "$PI_SYNC_BASE_COMMIT"; \
-    npm ci --include=dev --ignore-scripts --no-audit --no-fund --prefix /tmp/pi-sync; \
-    npm run build --prefix /tmp/pi-sync; \
-    mkdir -p node_modules/@bry-guy/pi-sync; \
-    cp /tmp/pi-sync/package.json node_modules/@bry-guy/pi-sync/; \
-    cp -a /tmp/pi-sync/dist node_modules/@bry-guy/pi-sync/; \
-    cp -a /tmp/pi-sync/skills node_modules/@bry-guy/pi-sync/; \
-    cp -a /tmp/pi-sync/extensions node_modules/@bry-guy/pi-sync/; \
-    cp /tmp/pi-sync/README.md node_modules/@bry-guy/pi-sync/; \
-    rm -rf /tmp/pi-sync; \
-    npm cache clean --force
+# pi-sync is installed from the public bry-guy/pi-sync repository at the
+# commit pinned in PI_SYNC_COMMIT.
+COPY PI_SYNC_COMMIT ./
+COPY scripts/install-pi-sync.sh ./scripts/
+RUN ./scripts/install-pi-sync.sh \
+    && rm -rf .cache \
+    && npm cache clean --force
 
 COPY server ./server
 

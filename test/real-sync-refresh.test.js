@@ -109,7 +109,7 @@ async function scenario() {
   fs.writeFileSync(unrelatedExtension, 'export default pi => pi.registerCommand("test-unrelated", { description: "kept", handler: async () => {} });\n');
   fs.writeFileSync(path.join(webHome, "config.json"), JSON.stringify({
     sync: { serverUrl, allConversations: false },
-    pi: { profile: null, profileSource: "disabled", packages: [], extensions: [path.join(repo, "vendor/pi-sync/extensions/sync.ts"), unrelatedExtension] },
+    pi: { profile: null, profileSource: "disabled", packages: [], extensions: [path.join(repo, "node_modules/@bry-guy/pi-sync/extensions/sync.ts"), unrelatedExtension] },
   }));
 
   try {
@@ -119,7 +119,7 @@ async function scenario() {
       import(pathToFileURL(path.join(repo, "server/sync/web-adapter.js"))),
       import(pathToFileURL(path.join(repo, "server/routes.js"))),
     ]);
-    const syncModule = await import(pathToFileURL(path.join(repo, "vendor/pi-sync/dist/src/index.js")));
+    const syncModule = await import(pathToFileURL(path.join(repo, "node_modules/@bry-guy/pi-sync/dist/src/index.js")));
     supervisor = new RealSupervisor(hub);
     adapter = new PiSyncWebAdapter({ hub, supervisor });
     const api = buildApi(supervisor, { syncAdapter: adapter });
@@ -436,7 +436,7 @@ test("real JSON-mode sync auto-check refreshes and preserves bound snapshots", (
         TEST_REPO: repo,
         PI_WEB_HOME: path.join(root, "web"),
         PI_CODING_AGENT_DIR: path.join(root, "pi"),
-        PI_WEB_SYNC_CLIENT_MODULE: path.join(repo, "vendor/pi-sync"),
+        PI_WEB_SYNC_CLIENT_MODULE: path.join(repo, "node_modules/@bry-guy/pi-sync"),
         PI_WEB_REPOS_ROOT: path.join(root, "repos"),
         OPENAI_API_KEY: "",
         ANTHROPIC_API_KEY: "",

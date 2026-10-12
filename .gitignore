@@ -1,5 +1,5 @@
 node_modules
-vendor/pi-sync/dist/
+.cache/
 .pi/validation/
 .DS_Store
 .env

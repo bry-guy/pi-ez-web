@@ -115,7 +115,7 @@ version 5 and includes capability markers for workspace and branch features.
 
 ## Verification
 
-Run `mise run bootstrap` once to install the app and vendored pi-sync dependencies. The app test script rebuilds the vendored extension before the real JSON-mode host test; generated `vendor/pi-sync/dist/` is not tracked.
+Run `mise run bootstrap` once to install the app and pi-sync. pi-sync is installed by `scripts/install-pi-sync.sh` from the public `bry-guy/pi-sync` repository at the commit in `PI_SYNC_COMMIT` (cached under `.cache/`); `npm test` reruns it first. To work on both repositories together, set `PI_SYNC_SOURCE=/path/to/pi-sync` and the script links that checkout instead. Bump `PI_SYNC_COMMIT` to take a new pi-sync release.
 
 ```sh
 npm test               # no credentials: git, mock HTTP+SSE, real sync host, SDK, and DOM gates
