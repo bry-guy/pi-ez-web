@@ -146,13 +146,18 @@ class PiThread extends HTMLElement {
     if (!id || !scroller || this.restoring) return;
     const recs = this.querySelectorAll("[data-rec]");
     if (!recs.length) return;
-    let value = { bottom: true };
-    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight >= 160) {
-      const top = scroller.getBoundingClientRect().top;
-      const el = [...recs].find(node => node.getBoundingClientRect().bottom > top) || recs[recs.length - 1];
-      value = { rec: el.dataset.rec, offset: Math.round(el.getBoundingClientRect().top - top) };
-    }
+    const value = this.scrollAnchor();
     try { globalThis.sessionStorage?.setItem(scrollKey(id), JSON.stringify(value)); } catch { /* storage is optional */ }
+  }
+
+  /** Where the reader is: at the bottom, or which record sits at the top of the view. */
+  scrollAnchor() {
+    const scroller = this.scroller;
+    const recs = this.querySelectorAll("[data-rec]");
+    if (!scroller || !recs.length || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160) return { bottom: true };
+    const top = scroller.getBoundingClientRect().top;
+    const el = [...recs].find(node => node.getBoundingClientRect().bottom > top) || recs[recs.length - 1];
+    return { rec: el.dataset.rec, offset: Math.round(el.getBoundingClientRect().top - top) };
   }
 
   restoreScroll(saved) {
@@ -213,11 +218,15 @@ class PiThread extends HTMLElement {
   render() {
     const activeKey = store.activeKey();
     const t = activeKey ? (store.state.transcripts[activeKey] || store.transcript(activeKey)) : null;
+    let anchor = null;
     if (activeKey !== this.renderedKey || t !== this.renderedTranscript) {
+      // A background reload of the open transcript keeps the reader where they are.
+      const background = activeKey === this.renderedKey && t?.scrollToLatest === false;
+      if (background) anchor = this.scrollAnchor();
+      else this.historyLimit = HISTORY_PAGE_SIZE;
       this.renderedKey = activeKey;
       this.renderedTranscript = t;
-      this.historyLimit = HISTORY_PAGE_SIZE;
-      this.scrollOnNextRender = t?.scrollToLatest !== false;
+      this.scrollOnNextRender = !background;
     }
     if (!activeKey) { setHTML(this, EMPTY_STATE); return; }
     const visibleRecords = this.visibleRecords(t.records);
@@ -229,7 +238,7 @@ class PiThread extends HTMLElement {
     const thinking = t.streaming && !liveAssistant;
     const activity = this.renderActivity(t.records);
     const notice = this.renderCommandNotice();
-    const restore = this.scrollOnNextRender && visibleRecords.length ? savedScroll(activeKey) : null;
+    const restore = this.scrollOnNextRender && visibleRecords.length ? savedScroll(activeKey) : anchor;
     if (restore?.rec) {
       const index = visibleRecords.findIndex(record => record.id === restore.rec);
       if (index >= 0) this.historyLimit = Math.max(this.historyLimit || HISTORY_PAGE_SIZE, visibleRecords.length - index + 1);
@@ -248,6 +257,11 @@ class PiThread extends HTMLElement {
       ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
       : "";
     setHTML(this, earlier + records + indicator + activity + notice);
+    if (anchor) {
+      if (!(anchor.rec && this.restoreScroll(anchor))) this.autoscroll(!!anchor.bottom);
+      delete t.scrollToLatest;
+      return;
+    }
     if (restore?.rec && this.restoreScroll(restore)) {
       delete t.scrollToLatest;
       this.scrollOnNextRender = false;
