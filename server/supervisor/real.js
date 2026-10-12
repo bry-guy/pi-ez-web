@@ -654,6 +654,12 @@ export class RealSupervisor {
     return { ...info, title: envelope.title || null, parentSessionId: envelope.parentSessionId || null };
   }
 
+  /** The SDK's session directory for a working directory; creating the manager writes nothing until a message. */
+  async sessionDirFor(cwd) {
+    const { SessionManager } = await SDK();
+    return SessionManager.create(cwd).getSessionDir();
+  }
+
   async createSession({ cwd, name }) {
     const { SessionManager } = await SDK();
     const manager = SessionManager.create(cwd);

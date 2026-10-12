@@ -410,6 +410,17 @@ async function scenario() {
     assert.ok(bangEntries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"));
     assert.equal((await request(restartedApi, `/sessions/${id}/sync/check`, {})).body.outcome, "unchanged");
     assert.ok(remote.entries.some(entry => entry.customType === "pi-web:bang" && entry.data?.cmd === "printf 'persisted bang'"), "an idle bang uploads on the next check");
+
+    // A conversation from another device opens straight into a session directory, with no empty live session first.
+    const hostBindings = await restartedAdapter.bindingStore();
+    await hostBindings.remove(id);
+    const otherDir = fs.mkdtempSync(path.join(root, "other-device-sessions-"));
+    const opened = await restartedAdapter.openRemote(id, { cwd, sessionDir: otherDir });
+    assert.equal(opened.id, id);
+    assert.ok(fs.readFileSync(opened.file, "utf8").includes("seed-message"));
+    assert.equal((await hostBindings.get(id)).materializedFile, opened.file);
+    assert.deepEqual(await restartedAdapter.openRemote(id, { cwd, sessionDir: otherDir }), opened, "opening again reuses the file");
+    assert.equal(fs.readdirSync(otherDir).filter(name => name.endsWith(".jsonl")).length, 1);
   } finally {
     for (const current of [supervisor, restartedSupervisor]) {
       if (!current) continue;

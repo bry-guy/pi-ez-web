@@ -266,6 +266,53 @@ export class PiSyncWebAdapter {
     return this.store;
   }
 
+  /** Shared conversations for this repository that are not on this host yet, newest first. */
+  async remoteForRepository(cwd) {
+    const config = this.config();
+    if (!config.serverUrl) return [];
+    const module = await loadPiSyncModule();
+    const repository = await module.deriveRepositoryIdentity(cwd);
+    if (!repository) return [];
+    const store = await this.bindingStore();
+    const local = new Set((await store.all()).map(binding => binding.canonicalSessionId));
+    return (await this.list(true))
+      .filter(item => module.repositoryIdentity(item.workspace) === repository && !local.has(item.sessionId))
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .map(item => ({
+        sessionId: item.sessionId,
+        title: this.meaningfulTitle(item.title, item.sessionId) || null,
+        branch: item.workspace?.branch || null,
+        updatedAt: item.updatedAt || item.createdAt,
+        leaseHolder: item.leaseHolder || null,
+      }));
+  }
+
+  /** Writes a shared conversation to this host's session directory and binds it, without a live session. */
+  async openRemote(sessionId, { cwd, sessionDir }) {
+    const config = this.config();
+    if (!config.serverUrl) throw adapterError("Synchronization is not configured.", "sync_client_unavailable", 503);
+    const module = await loadPiSyncModule();
+    const store = await this.bindingStore();
+    const existing = await store.get(sessionId);
+    if (existing) return { id: existing.nativeSessionId, file: existing.materializedFile };
+    const client = await createSyncClient(config.serverUrl);
+    const snapshot = await client.get(sessionId);
+    const file = `${sessionDir}/${Date.now()}_${sessionId}.jsonl`;
+    await module.materializeSessionFile(file, snapshot.session, { cwd });
+    await store.set({
+      nativeSessionId: sessionId,
+      serverUrl: config.serverUrl,
+      canonicalSessionId: sessionId,
+      lastEtag: snapshot.etag,
+      materializedFile: file,
+      state: "ready",
+      ...(snapshot.session.workspace ? { workspace: snapshot.session.workspace } : {}),
+      ...(snapshot.session.title ? { title: snapshot.session.title } : {}),
+    });
+    this.listCache = null;
+    return { id: sessionId, file };
+  }
+
   meaningfulTitle(title, ...placeholders) {
     if (typeof title !== "string") return "";
     const value = title.trim();

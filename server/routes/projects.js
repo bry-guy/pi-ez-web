@@ -1,5 +1,5 @@
 export function register(api, deps) {
-  const { path, loadConfig, newId, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup } = deps;
+  const { path, loadConfig, newId, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup, syncAdapter } = deps;
 
 
   api.get("/repos", c => {
@@ -91,12 +91,20 @@ export function register(api, deps) {
     }, reporter);
   });
 
+  api.get("/projects/:id/synced-sessions", async c => {
+    const project = loadConfig().projects.find(p => p.id === c.req.param("id"));
+    if (!project) return err(c, 404, "no_such_project");
+    if (!syncAdapter) return c.json({ sessions: [] });
+    try { return c.json({ sessions: await syncAdapter.remoteForRepository(project.repoPath) }); }
+    catch { return c.json({ sessions: [], unavailable: true }); }
+  });
+
   api.post("/projects/:id/sessions", async c => {
     const initialProject = loadConfig().projects.find(p => p.id === c.req.param("id"));
     if (!initialProject) return err(c, 404, "no_such_project");
     const body = (await c.req.json().catch(() => ({}))) || {};
     const name = typeof body.name === "string" ? body.name.trim() || null : null;
-    const mode = body.mode === "fork" ? "fork" : "new";
+    const mode = body.mode === "fork" ? "fork" : body.mode === "synced" ? "synced" : "new";
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: body.sourceSessionId || null, kind: mode === "fork" ? "fork" : "create-session", title: mode === "fork" ? "Fork session" : "Create session" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/projects/${c.req.param("id")}/sessions` });
     return withRepositoryAdmission(c, initialProject.repoPath, async identity => {
@@ -133,6 +141,15 @@ export function register(api, deps) {
         hub.emit(sessionId, "session_forked", { session: { id: sessionId, contextId: context.id, branch: context.branch }, parentSessionId: sourceSessionId });
         const operation = reporter.finish({ httpStatus: 200, message: `Forked session ${sessionId} on ${context.branch}.` });
         return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, forkedFrom: sourceSessionId, setup: null, setupNeeded, operation });
+      }
+      if (mode === "synced") {
+        if (!syncAdapter || typeof body.syncSessionId !== "string" || !body.syncSessionId) return err(c, 400, "bad_sync_session");
+        reporter.log({ type: "phase", phase: "open-synced", message: `Opening synchronized conversation ${body.syncSessionId}.` });
+        const { id: sessionId } = await syncAdapter.openRemote(body.syncSessionId, { cwd: context.path, sessionDir: await sup.sessionDirFor(context.path) });
+        bindSessionToContext(sessionId, project, context);
+        hub.emit(sessionId, "session_created", { session: { id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch } });
+        const operation = reporter.finish({ httpStatus: 200, message: `Opened synchronized conversation on ${context.branch}.` });
+        return c.json({ id: sessionId, projectId: project.id, contextId: context.id, branch: context.branch, workspacePath: context.path, setup: null, setupNeeded, operation });
       }
       reporter.log({ type: "phase", phase: "create-session", message: `Creating the Pi session in ${context.path}.` });
       const { id: sessionId } = await sup.createSession({ cwd: context.path, name });
