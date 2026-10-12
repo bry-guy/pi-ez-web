@@ -463,7 +463,7 @@ export function connectSSE() {
     // EventSource reconnects by itself, while the health poller handles a
     // rollout that replaces this process and eventually reloads on a new build.
     const id = store.activeKey();
-    if (globalThis.navigator?.onLine !== false && id) void openTranscript(id);
+    if (globalThis.navigator?.onLine !== false && id) void openTranscript(id, { scrollToLatest: false });
     startRecovery();
   };
 }

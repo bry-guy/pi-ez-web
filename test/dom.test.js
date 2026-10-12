@@ -1113,6 +1113,12 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("transcript");
   assert.match(thread.textContent, /message changed/);
 
+
+  scroller.scrollTop = 240;
+  store.state.transcripts.s1 = { records: [...longRecords], streaming: false, seq: 321, scrollToLatest: false };
+  store.notify("transcript");
+  assert.equal(scroller.scrollTop, 240, "background transcript reload keeps the user's scroll position");
+
   root.querySelector("pi-header [data-act='workspace-settings']")?.click();
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);

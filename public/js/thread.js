@@ -217,7 +217,7 @@ class PiThread extends HTMLElement {
       this.renderedKey = activeKey;
       this.renderedTranscript = t;
       this.historyLimit = HISTORY_PAGE_SIZE;
-      this.scrollOnNextRender = true;
+      this.scrollOnNextRender = t?.scrollToLatest !== false;
     }
     if (!activeKey) { setHTML(this, EMPTY_STATE); return; }
     const visibleRecords = this.visibleRecords(t.records);
