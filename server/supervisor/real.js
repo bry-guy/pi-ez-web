@@ -377,8 +377,9 @@ export class RealSupervisor {
       : SessionManager.create(resolvedCwd);
     const runtime = await this._modelRuntime();
     // A conversation synchronized from another device may name a model this host lacks; open it with the default.
+    let unavailableModel = null;
     const model = await this._resolveModel(modelRef, runtime).catch(error => {
-      if (error?.code === "model_unavailable") return undefined;
+      if (error?.code === "model_unavailable") { unavailableModel = modelRef; return undefined; }
       throw error;
     });
     const { session } = await this._withSessionCreateLock(() => this._createConfiguredSession({
@@ -390,6 +391,13 @@ export class RealSupervisor {
     }));
     this.paths.set(session.sessionId, session.sessionFile);
     this._registerLiveSession(session, resolvedCwd);
+    // Once per conversation: in-place sync catch-ups reattach often.
+    if (unavailableModel && !(this.modelFallbackNoticed ||= new Set()).has(session.sessionId)) {
+      this.modelFallbackNoticed.add(session.sessionId);
+      const wanted = String(unavailableModel);
+      const using = session.model ? `${session.model.provider}/${session.model.id}` : "the default model";
+      this.hub?.emit(session.sessionId, "extension_ui_notify", { message: `${wanted} is not available here; using ${using}.`, level: "info" });
+    }
     const pendingHead = this.pendingSyncHeads.get(session.sessionId);
     if (pendingHead) {
       this.pendingSyncHeads.delete(session.sessionId);
