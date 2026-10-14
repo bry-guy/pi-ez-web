@@ -25,6 +25,10 @@ exec npm run dev
 description = "Start the real server against Pi"
 run = "npm start"
 
+[tasks.gateway]
+description = "Start the Kubernetes workspace gateway (in-cluster only)"
+run = "npm run gateway"
+
 [tasks.kill]
 description = "Stop processes listening on the app port"
 run = '''

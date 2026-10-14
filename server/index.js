@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { seedRepository } from "./seed.js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
@@ -140,6 +141,7 @@ export function startServer(port, options = {}) {
   // application-owned transfer stashes.
   const { app, sup } = createApp({ ...options, uiOnly });
   const server = serve({ fetch: app.fetch, port: port ?? Number(process.env.PORT || cfg?.port || 3141) });
+  if (!uiOnly && process.env.PI_WEB_SEED_REPOSITORY) seedRepository(app, process.env.PI_WEB_SEED_REPOSITORY);
   return { server, app, sup };
 }
 

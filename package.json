@@ -7,6 +7,7 @@
     "test": "node --test --test-concurrency=2 test/*.test.js",
     "test:dom": "node --test test/dom.test.js",
     "start": "node server/index.js",
+    "gateway": "node server/gateway/index.js",
     "dev": "PI_WEB_MODE=mock node server/index.js",
     "browser": "playwright open",
     "verify:real": "node scripts/verify-real.js"

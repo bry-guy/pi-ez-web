@@ -15,23 +15,15 @@ The first dogfooding target is an explicitly trusted, single-user operator deplo
 - For the site-specific dogfood deployment, explicitly grant GitHub write access, Git identity, 1Password/fnox access, operator kubeconfigs, SSH/network access, and the tools needed by the `pi-ez-web` and `infra` repositories.
 - Keep credentials out of images, source control, URLs, command arguments, API responses, and build logs. Treat the operator pod and its agent shell as part of the credential trust boundary.
 
-## Phase 2 — Dev Container project environments
+## Phase 2 — per-project workspaces
 
-Adopt the standard `.devcontainer/devcontainer.json` plus Containerfile contract for requirements that Mise alone cannot express, including OS packages, native libraries, browser dependencies, and specialized build environments.
+Run one pi-ez-web server per project in its own Kubernetes pod behind a thin gateway, with per-project storage, secrets, optional ServiceAccount, and an opt-in Kata sandbox for Docker Compose. See [project workspaces](plans/project-workspaces.md). This supersedes the earlier Dev Container and runtime-pod phases: the Pi SDK stays in-process with the project's environment, and grants stay operator-owned.
 
-- Detect and report Dev Container declarations.
-- Build a cached project runtime keyed by the declaration, base runtime, and relevant lockfiles.
-- Run repository tools in that project runtime rather than rebuilding the shared pi-ez-web process.
-- Keep build-time credentials stripped; grant runtime capabilities only after the image is built.
+## Phase 3 — workspace polish
 
-## Phase 3 — isolated execution and policy grants
-
-Separate the web control plane from execution by running projects or sessions in dedicated runtime pods/containers.
-
-- Map repository capability requests to administrator-controlled grants for secrets, network destinations, service accounts, kubeconfigs, and persistent storage.
-- Add project-specific secret and NetworkPolicy boundaries, resource limits, and auditable execution identity.
-- Support approval gates for destructive infrastructure actions.
-- Preserve the Phase 1 project-hook contract and Phase 2 Dev Container declarations so repositories do not need another environment format.
+- Port proxying to dev servers, idle scale-to-zero, resource limits, and per-workspace NetworkPolicy.
+- Run pi-ez-web inside arbitrary project images (for example a project's Dev Container image) by injecting it with an init container.
+- Approval gates for destructive infrastructure actions.
 
 ## Non-goals
 

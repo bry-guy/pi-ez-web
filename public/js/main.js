@@ -14,7 +14,7 @@ let updateReloadRequested = false;
 
 async function loadUiConfig() {
   try {
-    const response = await fetch("/ui-config.json", { cache: "no-store" });
+    const response = await fetch("ui-config.json", { cache: "no-store" });
     if (!response.ok) return;
     const config = await response.json();
     if (config && typeof config === "object" && !Array.isArray(config)) store.set({ uiConfig: config });
@@ -26,7 +26,7 @@ async function loadUiConfig() {
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    const registration = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
     const announceUpdate = worker => {
       if (navigator.serviceWorker.controller && worker) store.set({ updateAvailable: true });
     };

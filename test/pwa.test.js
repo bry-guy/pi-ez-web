@@ -8,11 +8,12 @@ const read = file => readFile(new URL(file, root), "utf8");
 test("PWA manifest describes an installable standalone app", async () => {
   const manifest = JSON.parse(await read("manifest.webmanifest"));
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.start_url, "/");
-  assert.equal(manifest.scope, "/");
+  // Relative so the app installs correctly under a gateway prefix too.
+  assert.equal(manifest.start_url, "./");
+  assert.equal(manifest.scope, "./");
   assert.ok(manifest.icons.some(icon => icon.sizes === "192x192"));
   assert.ok(manifest.icons.some(icon => icon.sizes === "512x512" && icon.purpose === "maskable"));
-  for (const icon of manifest.icons) await access(new URL(icon.src.slice(1), root));
+  for (const icon of manifest.icons) await access(new URL(icon.src, root));
   await access(new URL("icons/apple-touch-icon.png", root));
 });
 
@@ -28,7 +29,7 @@ test("service worker caches only the app shell and bypasses API traffic", async 
   const worker = await read("sw.js");
   assert.match(worker, /addEventListener\("install"/);
   assert.match(worker, /addEventListener\("fetch"/);
-  assert.match(worker, /pathname\.startsWith\("\/api\/"\)/);
+  assert.match(worker, /startsWith\(new URL\("api\/", self\.registration\.scope\)\.href\)/);
   assert.match(worker, /request\.mode === "navigate"/);
   assert.doesNotMatch(worker, /cache\.put\(request, response\.clone\(\)\).*api/);
 });
@@ -43,7 +44,7 @@ test("service worker precaches the complete local frontend module graph", async 
     const file = pending.pop();
     if (seen.has(file.href)) continue;
     seen.add(file.href);
-    assert.ok(cached.has(`/${file.pathname.slice(root.pathname.length)}`), `${file.href} is missing from the shell cache`);
+    assert.ok(cached.has(`./${file.pathname.slice(root.pathname.length)}`), `${file.href} is missing from the shell cache`);
     const source = await readFile(file, "utf8");
     for (const match of source.matchAll(/^\s*import\s+(?:[^;]*?\s+from\s+)?["']([^"']+)["']/gm)) {
       if (match[1].startsWith(".")) pending.push(new URL(match[1], file));

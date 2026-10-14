@@ -2,6 +2,11 @@ import { appendOperationEvent, completeOperation, completeOperationSnapshot } fr
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const JH = { "content-type": "application/json" };
+// The app may be served under a gateway prefix (e.g. /w/<name>/); root-absolute
+// API paths are resolved against the document base so "/" stays unchanged.
+export const BASE = new URL(".", document.baseURI).pathname;
+const withBase = url => typeof url === "string" && url.startsWith("/") ? BASE + url.slice(1) : url;
+const fetch = (url, init) => globalThis.fetch(withBase(url), init);
 const syncRefreshes = new Map();
 
 function requestSyncRefresh(id, operationId = null) {
@@ -442,7 +447,7 @@ export function resumeConnection() {
 
 export function connectSSE() {
   if (es) es.close();
-  es = new EventSource(`/api/events?build=${encodeURIComponent(store.state.buildId || "")}`);
+  es = new EventSource(`${BASE}api/events?build=${encodeURIComponent(store.state.buildId || "")}`);
   es.onopen = () => {
     if (recoveryTimer || recoveryInFlight) {
       if (recoveryTimer) clearTimeout(recoveryTimer);
