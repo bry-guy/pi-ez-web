@@ -55,6 +55,16 @@ export function createWorkspaced({ provider, token, auth = "token", fetchImpl = 
     return c.json({ ok: true });
   });
 
+  // Body is web's Pi auth.json verbatim; workers link their auth.json to it.
+  app.put("/v1/model-auth", async c => {
+    const content = await c.req.text();
+    let parsed;
+    try { parsed = JSON.parse(content); } catch { parsed = null; }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return c.json({ error: "invalid_model_auth" }, 400);
+    await provider.setModelAuth(content);
+    return c.json({ ok: true });
+  });
+
   app.all("/v1/workspaces/:name/api/*", async c => {
     const name = c.req.param("name");
     if (!validName(name)) return c.json({ error: "invalid_name" }, 400);

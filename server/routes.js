@@ -76,7 +76,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   const authFlows = new AuthFlowManager(sup);
   const github = new GitHubClient();
   const githubFlows = new GitHubDeviceFlowManager(github);
-  const remote = remoteWorkspacesFromEnv(process.env, { hub, github });
+  const remote = remoteWorkspacesFromEnv(process.env, { hub, github, sup });
   const deps = {
     remote, sup, sync, syncAdapter, hub, github, githubFlows, authFlows,
     mutate, withAdmission, beginStreamingMutation, finishStreamingMutation, guardedWorkspaceSessions,

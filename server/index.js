@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { Hono } from "hono";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,18 @@ import { PiSyncWebAdapter } from "./sync/web-adapter.js";
 import { publicError } from "./pi-configuration.js";
 import { writeLog } from "./logging.js";
 import { BUILD_ID } from "./version.js";
+
+// Workers borrow web's model logins via a read-only file; Pi reads auth.json through the link.
+export function linkModelAuth(env = process.env) {
+  const target = env.PI_WEB_MODEL_AUTH_FILE;
+  const dir = env.PI_CODING_AGENT_DIR;
+  if (!target || !dir) return;
+  const link = path.join(dir, "auth.json");
+  try { if (readlinkSync(link) === target) return; } catch { /* missing or a regular file */ }
+  mkdirSync(dir, { recursive: true });
+  rmSync(link, { force: true });
+  symlinkSync(target, link);
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ONLY_CONFIG = Object.freeze({
@@ -112,6 +125,7 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
   });
   if (!uiOnly) {
     ensureHome();
+    linkModelAuth();
     sup = createSupervisor(hub);
     const realMode = (process.env.PI_WEB_MODE || "real") !== "mock";
     const adapter = !syncCoordinator && realMode

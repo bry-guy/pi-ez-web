@@ -4,6 +4,8 @@ export const REPO_ANNOTATION = "pi-ez.dev/repository";
 export const WORKSPACE_PORT = 3141;
 export const GITHUB_SECRET = "pi-ez-github-auth";
 const GITHUB_DIR = "/run/secrets/pi-ez-github";
+export const MODEL_SECRET = "pi-ez-model-auth";
+const MODEL_DIR = "/run/secrets/pi-ez-model";
 const DATA = "/data";
 const HOME = `${DATA}/pi-ez-operator-home`;
 const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -47,6 +49,7 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
     ["HOME", HOME], ["XDG_CONFIG_HOME", `${HOME}/.config`], ["XDG_DATA_HOME", `${HOME}/.local/share`], ["XDG_CACHE_HOME", `${HOME}/.cache`],
     ["PI_WEB_HOME", `${DATA}/pi-ez-web`], ["PI_CODING_AGENT_DIR", `${DATA}/pi-ez-agent`], ["PI_WEB_REPOS_ROOT", `${DATA}/repos`],
     ["PI_WEB_GITHUB_AUTH_FILE", `${GITHUB_DIR}/github-auth.json`],
+    ["PI_WEB_MODEL_AUTH_FILE", `${MODEL_DIR}/auth.json`],
     ...(runtimeClassName ? [["DOCKER_HOST", "tcp://127.0.0.1:2375"]] : []),
   ].map(([n, value]) => ({ name: n, value }));
   const envFrom = [
@@ -57,7 +60,7 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
     name: "workspace", image, env, ...(envFrom.length ? { envFrom } : {}),
     ports: [{ name: "http", containerPort: WORKSPACE_PORT }],
     readinessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 10 },
-    volumeMounts: [{ name: "data", mountPath: DATA }, { name: "github", mountPath: GITHUB_DIR, readOnly: true }],
+    volumeMounts: [{ name: "data", mountPath: DATA }, { name: "github", mountPath: GITHUB_DIR, readOnly: true }, { name: "model", mountPath: MODEL_DIR, readOnly: true }],
   }];
   if (runtimeClassName) {
     // Privileged is confined to the sandbox VM; never emit it without a runtime class.
@@ -96,6 +99,7 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
             { name: "data", persistentVolumeClaim: { claimName: `ws-${name}` } },
             // Optional so workspaces start before the first gateway login; kubelet refreshes it after.
             { name: "github", secret: { secretName: GITHUB_SECRET, optional: true, defaultMode: 0o440 } },
+            { name: "model", secret: { secretName: MODEL_SECRET, optional: true, defaultMode: 0o440 } },
           ],
         },
       },

@@ -1,4 +1,4 @@
-import { deploymentManifest, GITHUB_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
+import { deploymentManifest, GITHUB_SECRET, MODEL_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
 
 // Workspaces as ws-<name> PVC + Service + Deployment. The cluster's labels and
 // annotations are the record of what exists; workspaced keeps no database.
@@ -23,6 +23,20 @@ export function kubernetesProvider({ kube, config = kubernetesConfig() }) {
   const apps = `/apis/apps/v1/namespaces/${ns}/deployments`;
   const core = kind => `/api/v1/namespaces/${ns}/${kind}`;
   const selector = encodeURIComponent(`app.kubernetes.io/managed-by=${MANAGED_BY}`);
+
+  // Workers mount these Secrets read-only; kubelet refreshes them after updates.
+  async function putSecretFile(name, key, content) {
+    const path = `${core("secrets")}/${name}`;
+    if (content === null) {
+      const res = await kube.request("DELETE", path);
+      if (res.status >= 300 && res.status !== 404) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+      return;
+    }
+    const secret = { apiVersion: "v1", kind: "Secret", metadata: { name }, type: "Opaque", stringData: { [key]: content } };
+    let res = await kube.request("PUT", path, secret);
+    if (res.status === 404) res = await kube.request("POST", core("secrets"), secret);
+    if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+  }
 
   async function create(path, manifest) {
     const res = await kube.request("POST", path, manifest);
@@ -62,19 +76,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig() }) {
       }
     },
     upstream: name => `http://ws-${name}.${ns}.svc.cluster.local:${WORKSPACE_PORT}`,
-    // Workers mount this Secret read-only; kubelet refreshes it after updates.
-    async setGitHubAuth(auth) {
-      const path = `${core("secrets")}/${GITHUB_SECRET}`;
-      if (!auth) {
-        const res = await kube.request("DELETE", path);
-        if (res.status >= 300 && res.status !== 404) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
-        return;
-      }
-      const secret = { apiVersion: "v1", kind: "Secret", metadata: { name: GITHUB_SECRET }, type: "Opaque",
-        stringData: { "github-auth.json": JSON.stringify(auth) } };
-      let res = await kube.request("PUT", path, secret);
-      if (res.status === 404) res = await kube.request("POST", core("secrets"), secret);
-      if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
-    },
+    setGitHubAuth: auth => putSecretFile(GITHUB_SECRET, "github-auth.json", auth ? JSON.stringify(auth) : null),
+    setModelAuth: content => putSecretFile(MODEL_SECRET, "auth.json", content),
   };
 }

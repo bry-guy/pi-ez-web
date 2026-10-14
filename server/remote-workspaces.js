@@ -3,15 +3,26 @@
 // /api/state, and re-emits their events on its own SSE hub. Without
 // PI_WEB_WORKSPACED_URL none of this is active and projects stay in-process.
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+// Workers read web's model logins from a read-only copy. Pi refreshes OAuth
+// itself only inside 5 minutes of expiry (and would fail on the read-only
+// file), so web refreshes at 30 minutes and republishes well before that.
+const MODEL_AUTH_MIN_VALIDITY_MS = 30 * 60_000;
+const MODEL_AUTH_SYNC_MS = 5 * 60_000;
+
 const DROP_HEADERS = ["connection", "keep-alive", "transfer-encoding", "upgrade", "host", "content-length", "content-encoding"];
 
 export function remoteWorkspacesFromEnv(env, deps) {
   const url = env.PI_WEB_WORKSPACED_URL;
   if (!url) return null;
-  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, ...deps });
+  const modelAuthPath = path.join(env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"), "auth.json");
+  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, modelAuthPath, ...deps });
 }
 
-export function createRemoteWorkspaces({ url, token, hub, github, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000 }) {
+export function createRemoteWorkspaces({ url, token, hub, github, sup = null, modelAuthPath = null, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000, modelAuthSyncMs = MODEL_AUTH_SYNC_MS }) {
   const owners = { project: new Map(), session: new Map() };
   const streams = new Map();
   const auth = token ? { authorization: `Bearer ${token}` } : {};
@@ -132,11 +143,31 @@ export function createRemoteWorkspaces({ url, token, hub, github, fetchImpl = gl
     if (!res.ok) throw Object.assign(new Error("could not share GitHub login"), { code: "workspaced_unavailable" });
   }
 
+  let publishedModelAuth = null;
+  async function pushModelAuth() {
+    const runtime = await sup?._modelRuntime?.().catch(() => null);
+    if (runtime) {
+      for (const { providerId, type } of await runtime.listCredentials()) {
+        if (type === "oauth") await runtime.getAuth(providerId, { minOAuthValidityMs: MODEL_AUTH_MIN_VALIDITY_MS }).catch(() => {});
+      }
+    }
+    let content;
+    try { content = modelAuthPath ? readFileSync(modelAuthPath, "utf8") : "{}"; } catch { content = "{}"; }
+    if (content === publishedModelAuth) return;
+    const res = await call("/model-auth", { method: "PUT", headers: { "content-type": "application/json" }, body: content });
+    if (!res.ok) throw Object.assign(new Error("could not share model logins"), { code: "workspaced_unavailable" });
+    publishedModelAuth = content;
+  }
+  const modelAuthTimer = modelAuthSyncMs ? setInterval(() => pushModelAuth().catch(() => {}), modelAuthSyncMs) : null;
+  modelAuthTimer?.unref?.();
+  if (modelAuthTimer) pushModelAuth().catch(() => {});
+
   // Adding a repository creates its workspace, then the worker connects it.
   async function createProject(c, body) {
     const repository = body.source === "github" ? body.fullName : body.url;
     if (typeof repository !== "string" || !repository.trim()) return c.json({ error: "invalid_repository" }, 400);
     await pushGitHubAuth();
+    await pushModelAuth();
     const res = await call("/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: repository.trim(), containers: !!body.containers }) });
     const created = await res.json().catch(() => ({}));
     if (!res.ok) return c.json({ error: created.error || "workspaced_unavailable" }, res.status);
@@ -149,8 +180,8 @@ export function createRemoteWorkspaces({ url, token, hub, github, fetchImpl = gl
   }
 
   return {
-    projects, owner, forward, createProject, pushGitHubAuth,
-    stop() { stopped = true; for (const c of streams.values()) c.abort(); },
+    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth,
+    stop() { stopped = true; clearInterval(modelAuthTimer); for (const c of streams.values()) c.abort(); },
   };
 }
 

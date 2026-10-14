@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -121,7 +121,7 @@ test("web routes owned ids to workers, merges state, and re-sequences events", a
   const hub = new EventHub();
   const frames = [];
   hub.addClient(f => frames.push(f));
-  const remote = createRemoteWorkspaces({ url: `http://127.0.0.1:${daemon.address().port}`, token: TOKEN, hub, retryMs: 50 });
+  const remote = createRemoteWorkspaces({ url: `http://127.0.0.1:${daemon.address().port}`, token: TOKEN, hub, retryMs: 50, modelAuthSyncMs: 0 });
   try {
     const api = new Hono();
     registerRemoteRoutes(api, remote);
@@ -140,4 +140,56 @@ test("web routes owned ids to workers, merges state, and re-sequences events", a
     worker.closeAllConnections();
     worker.close();
   }
+});
+
+test("model logins go to a read-only Secret that workers link auth.json to", async () => {
+  const spec = deploymentManifest({ name: "x", repository: "a/x", image: "img" }).spec.template.spec;
+  const vol = spec.volumes.find(v => v.name === "model");
+  assert.deepEqual([vol.secret.secretName, vol.secret.optional], ["pi-ez-model-auth", true]);
+  assert.ok(spec.containers[0].volumeMounts.find(m => m.name === "model").readOnly);
+  const env = Object.fromEntries(spec.containers[0].env.map(e => [e.name, e.value]));
+  assert.equal(env.PI_WEB_MODEL_AUTH_FILE, "/run/secrets/pi-ez-model/auth.json");
+
+  const kube = fakeKube({ "PUT /api/v1/namespaces/pi-ez-workspaces/secrets/pi-ez-model-auth": { status: 200, body: {} } });
+  const app = createWorkspaced({ provider: kubernetesProvider({ kube, config: kubernetesConfig({}) }), token: TOKEN });
+  const put = body => app.request("/v1/model-auth", { method: "PUT", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body });
+  assert.equal((await put("[]")).status, 400);
+  assert.equal((await put("nope")).status, 400);
+  assert.equal((await put('{"anthropic":{"type":"oauth"}}')).status, 200);
+  assert.ok(kube.calls.some(([m, p]) => m === "PUT" && p.endsWith("/pi-ez-model-auth")));
+});
+
+test("workers replace auth.json with a link to the shared model login", async () => {
+  const { linkModelAuth } = await import("../server/index.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "model-auth-"));
+  const target = path.join(dir, "shared.json");
+  writeFileSync(target, '{"a":1}');
+  writeFileSync(path.join(dir, "auth.json"), "{}");
+  const env = { PI_WEB_MODEL_AUTH_FILE: target, PI_CODING_AGENT_DIR: dir };
+  linkModelAuth(env);
+  linkModelAuth(env);
+  assert.equal(readlinkSync(path.join(dir, "auth.json")), target);
+  assert.equal(readFileSync(path.join(dir, "auth.json"), "utf8"), '{"a":1}');
+});
+
+test("web refreshes OAuth at 30 minutes and republishes model logins only on change", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "model-push-"));
+  const authPath = path.join(dir, "auth.json");
+  writeFileSync(authPath, '{"v":1}');
+  const refreshed = [];
+  const runtime = {
+    listCredentials: async () => [{ providerId: "anthropic", type: "oauth" }, { providerId: "k", type: "api_key" }],
+    getAuth: async (id, opts) => { refreshed.push([id, opts.minOAuthValidityMs]); },
+  };
+  const puts = [];
+  const fetchImpl = async (url, init) => { puts.push([url, init.body]); return new Response("{}", { status: 200 }); };
+  const remote = createRemoteWorkspaces({ url: "http://w", token: TOKEN, sup: { _modelRuntime: async () => runtime }, modelAuthPath: authPath, fetchImpl, modelAuthSyncMs: 0 });
+  await remote.pushModelAuth();
+  await remote.pushModelAuth();
+  writeFileSync(authPath, '{"v":2}');
+  await remote.pushModelAuth();
+  assert.deepEqual(refreshed[0], ["anthropic", 30 * 60_000]);
+  assert.ok(refreshed.every(([id]) => id === "anthropic"));
+  assert.deepEqual(puts.map(([u, b]) => [u, b]), [["http://w/v1/model-auth", '{"v":1}'], ["http://w/v1/model-auth", '{"v":2}']]);
+  remote.stop();
 });

@@ -26,6 +26,7 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
   mkdirSync(root, { recursive: true });
   const registry = path.join(root, "workspaces.json");
   const authFile = path.join(root, "github-auth.json");
+  const modelAuthFile = path.join(root, "model-auth.json");
   const procs = new Map();
   const read = () => { try { return JSON.parse(readFileSync(registry, "utf8")); } catch { return {}; } };
 
@@ -37,7 +38,7 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       stdio: "inherit",
       env: { ...process.env, PORT: String(port), PI_WEB_MODE: process.env.PI_WEB_MODE || "real",
         PI_WEB_HOME: path.join(dir, "pi-ez-web"), PI_CODING_AGENT_DIR: path.join(dir, "pi-ez-agent"),
-        PI_WEB_REPOS_ROOT: path.join(dir, "repos"), PI_WEB_GITHUB_AUTH_FILE: authFile,
+        PI_WEB_REPOS_ROOT: path.join(dir, "repos"), PI_WEB_GITHUB_AUTH_FILE: authFile, PI_WEB_MODEL_AUTH_FILE: modelAuthFile,
         WORKSPACED_TOKEN: "" },
     });
     child.port = port;
@@ -71,6 +72,10 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
     async setGitHubAuth(auth) {
       if (auth) writeAtomic(authFile, JSON.stringify(auth));
       else rmSync(authFile, { force: true });
+    },
+    async setModelAuth(content) {
+      if (content === null) rmSync(modelAuthFile, { force: true });
+      else writeAtomic(modelAuthFile, content);
     },
     stop() { for (const child of procs.values()) child.kill("SIGTERM"); },
   };
