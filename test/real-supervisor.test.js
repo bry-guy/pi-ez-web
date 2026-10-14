@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { loadBindings, loadClosed, saveBindings, saveClosed } from "../server/config.js";
 import { projectState } from "../server/domain.js";
-import { RealSupervisor, isPackageSetupFailure } from "../server/supervisor/real.js";
+import { RealSupervisor, effectiveModelInfo, isPackageSetupFailure } from "../server/supervisor/real.js";
 
 const script = `
   import { startServer } from './server/index.js';
@@ -24,6 +24,95 @@ const script = `
   console.log(JSON.stringify({providersStatus: providersResponse.status, providers, created, commandsStatus: commandsResponse.status, commands, messageStatus: message.status, message: await message.json(), transcript}));
   server.closeAllConnections?.(); server.close();
 `;
+
+test("effective model metadata never presents an unavailable recorded model as active", () => {
+  const available = new Set(["openai-codex/gpt-6-luna"]);
+  assert.deepEqual(
+    effectiveModelInfo("anthropic/claude-opus-5-5", null, available, "openai-codex/gpt-6-luna"),
+    {
+      model: "openai-codex/gpt-6-luna",
+      requestedModel: "anthropic/claude-opus-5-5",
+      modelFallback: true,
+    },
+  );
+  assert.deepEqual(
+    effectiveModelInfo("anthropic/claude-opus-5-5", null, available, null),
+    {
+      model: null,
+      requestedModel: "anthropic/claude-opus-5-5",
+      modelUnavailable: true,
+    },
+  );
+  assert.deepEqual(
+    effectiveModelInfo("anthropic/claude-opus-5-5", "openai-codex/gpt-6-sol", available, "openai-codex/gpt-6-luna"),
+    {
+      model: "openai-codex/gpt-6-sol",
+      requestedModel: "anthropic/claude-opus-5-5",
+      modelFallback: true,
+    },
+  );
+  assert.deepEqual(
+    effectiveModelInfo("openai-codex/gpt-6-luna", null, available, null),
+    { model: "openai-codex/gpt-6-luna" },
+  );
+});
+
+test("unavailable synchronized models attach with the explicit web default", async () => {
+  const fallback = { provider: "openai-codex", id: "gpt-6-luna", api: "openai-codex-responses" };
+  const runtime = {
+    getModel(provider, id) {
+      return provider === fallback.provider && id === fallback.id ? fallback : undefined;
+    },
+  };
+  const supervisor = new RealSupervisor({ emit() {} });
+  supervisor._modelRuntime = async () => runtime;
+  supervisor.defaultModel = async () => "openai-codex/gpt-6-luna";
+  supervisor._createConfiguredSession = async ({ model }) => {
+    assert.equal(model, fallback);
+    return { session: {
+      sessionId: "synced-session",
+      sessionFile: "/tmp/synced-session.jsonl",
+      sessionName: null,
+      sessionManager: { getBranch: () => [] },
+      model,
+      subscribe: () => () => {},
+    } };
+  };
+
+  const state = await supervisor._attach(null, "/tmp", "anthropic/claude-opus-5-5");
+  assert.equal(state.session.model, fallback);
+  assert.deepEqual(supervisor.info.get("synced-session"), {
+    id: "synced-session",
+    path: "/tmp/synced-session.jsonl",
+    cwd: "/tmp",
+    model: "openai-codex/gpt-6-luna",
+    requestedModel: "anthropic/claude-opus-5-5",
+    modelFallback: true,
+  });
+});
+
+test("ChatGPT OAuth continues to use device-code login", async () => {
+  let selected;
+  const runtime = {
+    async login(_provider, _type, interaction) {
+      selected = await interaction.prompt({
+        type: "select",
+        options: [
+          { id: "browser", label: "Browser" },
+          { id: "device_code", label: "Device code" },
+        ],
+      });
+    },
+    async refresh() {},
+    async getAvailable() { return []; },
+  };
+  const supervisor = new RealSupervisor({});
+  supervisor._modelRuntime = async () => runtime;
+  await supervisor.loginProvider("openai-codex", "oauth", {
+    prompt: async () => "browser",
+  });
+  assert.equal(selected, "device_code");
+});
 
 test("package command failures are eligible for package-free runtime fallback", () => {
   assert.equal(isPackageSetupFailure(new Error("/usr/local/bin/npm --include=dev install failed with code 1")), true);

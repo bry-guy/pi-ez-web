@@ -156,6 +156,9 @@ export async function projectState(project, sup, sync = null) {
       workspacePath: n.cwd || null,
       streaming: sup.isStreaming(n.id),
       model: n.model || null,
+      requestedModel: n.requestedModel || null,
+      modelFallback: !!n.modelFallback,
+      modelUnavailable: !!n.modelUnavailable,
       when: rel(n.modified),
       updatedAt,
       activityAt,
@@ -229,6 +232,9 @@ export async function chatsState(sup, sync = null) {
       activityAt: isoTime(s.modified),
       streaming: sup.isStreaming(s.id),
       model: s.model || null,
+      requestedModel: s.requestedModel || null,
+      modelFallback: !!s.modelFallback,
+      modelUnavailable: !!s.modelUnavailable,
     }));
 }
 

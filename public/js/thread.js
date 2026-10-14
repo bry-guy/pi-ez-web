@@ -532,9 +532,15 @@ class PiModelPicker extends HTMLElement {
   }
   async choose(id) {
     const previous = this.current();
+    const previousModelState = {
+      model: previous,
+      requestedModel: store.state.requestedModel,
+      modelFallback: store.state.modelFallback,
+      modelUnavailable: store.state.modelUnavailable,
+    };
     this.open = false;
     if (this.mode === "default") store.set({ defaultModel: id });
-    else store.set({ model: id });
+    else store.set({ model: id, requestedModel: null, modelFallback: false, modelUnavailable: false });
     try {
       if (this.mode === "default") {
         const result = await api.settings(id);
@@ -549,7 +555,7 @@ class PiModelPicker extends HTMLElement {
       }
     } catch (err) {
       if (this.mode === "default") store.set({ defaultModel: previous });
-      else store.set({ model: previous });
+      else store.set(previousModelState);
       store.setError(err.error === "model_unavailable"
         ? "That model is unavailable."
         : `Model change failed: ${err.message || err}`);
@@ -616,8 +622,13 @@ class PiModelPicker extends HTMLElement {
         <span class="model-option-meta">first available model</span>
         ${current === null ? `<span class="model-option-check">✓</span>` : ""}
       </button>` : "";
+    const sessionFallback = this.mode === "session" && store.state.modelFallback && store.state.requestedModel
+      ? `<div class="model-unavailable">${esc(store.state.requestedModel)} is unavailable.<br><span>Using ${esc(model?.label || current || "no model")}</span></div>`
+      : this.mode === "session" && store.state.modelUnavailable && store.state.requestedModel
+        ? `<div class="model-unavailable">Model unavailable:<br><span>${esc(store.state.requestedModel)}</span></div>`
+        : "";
     const unavailable = configuredUnavailable ? `
-      <div class="model-unavailable">Configured model unavailable:<br><span>${esc(current)}</span></div>` : "";
+      <div class="model-unavailable">Configured model unavailable:<br><span>${esc(current)}</span></div>` : sessionFallback;
     const empty = !options && !unavailable
       ? `<div class="model-empty">No models available.<br><span>Connect a provider in Settings.</span></div>` : "";
     const popoverId = this._popoverId ||= `model-popover-${Math.random().toString(36).slice(2, 9)}`;

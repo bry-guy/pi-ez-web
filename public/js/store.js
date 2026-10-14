@@ -90,6 +90,9 @@ export const store = {
     repoQuery: "",
     drafts: {},              // sessionId -> unsent composer text
     model: null,             // active session model reference
+    requestedModel: null,    // unavailable historical model when using a fallback
+    modelFallback: false,
+    modelUnavailable: false,
     defaultModel: null,      // configured setting; null means Automatic
     defaultThinkingLevel: "medium",
     effectiveDefaultModel: null,

@@ -165,6 +165,9 @@ function applyState(s) {
     reposRoot: s.reposRoot || null,
     reposRootSource: s.reposRootSource || "default",
     model: active?.model || s.effectiveDefaultModel || null,
+    requestedModel: active?.requestedModel || null,
+    modelFallback: !!active?.modelFallback,
+    modelUnavailable: !!active?.modelUnavailable,
   });
   for (const project of s.projects || []) seedStreaming(project.sessions);
   for (const chat of s.chats || []) {
@@ -675,7 +678,7 @@ function applyTranscriptEvent(evt, t, replay) {
         if (!wasSession) return;
         const p = s.projects.find(x => x.id === s.projectId);
         if (p?.sessions[0]) {
-          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, model: p.sessions[0].model || s.effectiveDefaultModel || null });
+          store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, model: p.sessions[0].model || s.effectiveDefaultModel || null, requestedModel: p.sessions[0].requestedModel || null, modelFallback: !!p.sessions[0].modelFallback, modelUnavailable: !!p.sessions[0].modelUnavailable });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
           store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, filesOpen: false });

@@ -64,6 +64,9 @@ export function selectSession(projectId, sessionId, { showOperation = false } = 
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
     fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null,
     model: node?.model || store.state.effectiveDefaultModel || null,
+    requestedModel: node?.requestedModel || null,
+    modelFallback: !!node?.modelFallback,
+    modelUnavailable: !!node?.modelUnavailable,
   });
   saveActiveSession({ kind: "session", projectId, id: sessionId });
   store.markRead(sessionId);
@@ -99,6 +102,9 @@ export function selectChat(chatId) {
     filesOpen: false, files: [], fileError: null, filePath: null, fileView: null,
     fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null,
     model: chat?.model || store.state.effectiveDefaultModel || null,
+    requestedModel: chat?.requestedModel || null,
+    modelFallback: !!chat?.modelFallback,
+    modelUnavailable: !!chat?.modelUnavailable,
   });
   saveActiveSession({ kind: "chat", id: chatId });
   store.markRead(chatId);

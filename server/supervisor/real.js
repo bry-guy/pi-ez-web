@@ -134,9 +134,13 @@ export class RealSupervisor {
   async listSessions(cwd) {
     const { SessionManager } = await SDK();
     const infos = this._selectSessionInfos(await SessionManager.list(cwd));
+    const modelState = await this.modelState().catch(() => ({ models: [], effectiveDefault: null }));
+    const availableModels = new Set((modelState.models || []).map(model => model.id));
     for (const info of infos) this.paths.set(info.id, info.path);
     return infos.map(info => {
-      const { cwd: openedCwd, model } = this._sessionSummary(SessionManager, info.path);
+      const { cwd: openedCwd, model: requestedModel } = this._sessionSummary(SessionManager, info.path);
+      const liveModel = modelRef(this.live.get(info.id)?.session.model);
+      const model = effectiveModelInfo(requestedModel, liveModel, availableModels, modelState.effectiveDefault);
       const recordedCwd = info.cwd || openedCwd || cwd;
       const item = {
         id: info.id,
@@ -146,7 +150,7 @@ export class RealSupervisor {
         created: info.created,
         modified: info.modified,
         firstMessage: info.firstMessage || "",
-        model,
+        ...model,
       };
       this.info.set(info.id, { ...item, path: info.path, parentSessionPath: info.parentSessionPath || null });
       return item;
@@ -366,7 +370,7 @@ export class RealSupervisor {
     }
   }
 
-  async _attach(id, cwd, modelRef) {
+  async _attach(id, cwd, requestedModel) {
     const cached = id && this.live.get(id);
     if (cached) return cached;
     const { SessionManager } = await SDK();
@@ -376,12 +380,17 @@ export class RealSupervisor {
       ? SessionManager.open(file, undefined, resolvedCwd)
       : SessionManager.create(resolvedCwd);
     const runtime = await this._modelRuntime();
-    // A conversation synchronized from another device may name a model this host lacks; open it with the default.
+    // A conversation synchronized from another device may name a model this host lacks; open it with the web default.
     let unavailableModel = null;
-    const model = await this._resolveModel(modelRef, runtime).catch(error => {
-      if (error?.code === "model_unavailable") { unavailableModel = modelRef; return undefined; }
+    let selectedModel = requestedModel || await this.defaultModel();
+    let model = await this._resolveModel(selectedModel, runtime).catch(error => {
+      if (error?.code === "model_unavailable") { unavailableModel = requestedModel; return undefined; }
       throw error;
     });
+    if (unavailableModel) {
+      selectedModel = await this.defaultModel();
+      model = await this._resolveModel(selectedModel, runtime);
+    }
     const { session } = await this._withSessionCreateLock(() => this._createConfiguredSession({
       cwd: resolvedCwd,
       sessionManager,
@@ -389,13 +398,19 @@ export class RealSupervisor {
       model,
       syncSessionId: id,
     }));
+    const actualModel = modelRef(session.model);
+    const fallback = unavailableModel && actualModel !== unavailableModel;
     this.paths.set(session.sessionId, session.sessionFile);
-    this._registerLiveSession(session, resolvedCwd);
+    this._registerLiveSession(session, resolvedCwd, {
+      model: actualModel,
+      ...(fallback ? { requestedModel: unavailableModel, modelFallback: true } : {}),
+      ...(!actualModel && unavailableModel ? { requestedModel: unavailableModel, modelUnavailable: true } : {}),
+    });
     // Once per conversation: in-place sync catch-ups reattach often.
     if (unavailableModel && !(this.modelFallbackNoticed ||= new Set()).has(session.sessionId)) {
       this.modelFallbackNoticed.add(session.sessionId);
       const wanted = String(unavailableModel);
-      const using = session.model ? `${session.model.provider}/${session.model.id}` : "the default model";
+      const using = actualModel || "no model";
       this.hub?.emit(session.sessionId, "extension_ui_notify", { message: `${wanted} is not available here; using ${using}.`, level: "info" });
     }
     const pendingHead = this.pendingSyncHeads.get(session.sessionId);
@@ -1490,6 +1505,15 @@ export class RealSupervisor {
     });
     persistManager(manager, "bang_persistence_unavailable");
   }
+}
+
+export function effectiveModelInfo(requestedModel, liveModel, availableModels, defaultModel) {
+  const requestedAvailable = requestedModel && availableModels.has(requestedModel);
+  const model = liveModel || (requestedAvailable ? requestedModel : defaultModel) || null;
+  if (!requestedModel || requestedAvailable || requestedModel === model) return { model };
+  return model
+    ? { model, requestedModel, modelFallback: true }
+    : { model: null, requestedModel, modelUnavailable: true };
 }
 
 function isUsableModel(model) {

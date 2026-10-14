@@ -819,6 +819,20 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   assert.equal(store.state.view, "chat", "Escape closes Settings");
 
+  store.set({
+    model: "mock/fast",
+    requestedModel: "anthropic/claude-opus-5-5",
+    modelFallback: true,
+    modelUnavailable: false,
+  });
+  const fallbackPicker = root.querySelector("pi-model-picker[data-mode='session']");
+  fallbackPicker.open = true;
+  fallbackPicker.render();
+  assert.match(fallbackPicker.querySelector("[data-model-toggle]").textContent, /Mock Fast/);
+  assert.match(fallbackPicker.querySelector(".model-unavailable").textContent, /claude-opus-5-5 is unavailable/);
+  assert.match(fallbackPicker.querySelector(".model-unavailable").textContent, /Using Mock Fast/);
+  fallbackPicker.close();
+
   root.querySelector(".model-chip").click();
   assert.ok(root.querySelector(".model-popover"));
   root.querySelector(".model-option[data-model='mock/smart']").click();
