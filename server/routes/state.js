@@ -1,5 +1,5 @@
 export function register(api, deps) {
-  const { loadBindings, loadConfig, reposRoot, chatsState, projectState, ws, API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID, readLogs, logFileName, safe, repositorySourceState, settingsState, sync, github, sup } = deps;
+  const { remote, loadBindings, loadConfig, reposRoot, chatsState, projectState, ws, API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID, readLogs, logFileName, safe, repositorySourceState, settingsState, sync, github, sup } = deps;
 
 
   // ---------- state ----------
@@ -58,7 +58,7 @@ export function register(api, deps) {
       sync: sync.state(),
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
-      projects,
+      projects: remote ? [...projects, ...await remote.projects()] : projects,
       chats: await chatsState(sup, sync),
     });
   });

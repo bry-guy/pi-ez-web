@@ -1,4 +1,4 @@
-export const MANAGED_BY = "pi-ez-gateway";
+export const MANAGED_BY = "pi-ez-workspaced";
 export const NAME_LABEL = "pi-ez.dev/workspace";
 export const REPO_ANNOTATION = "pi-ez.dev/repository";
 export const WORKSPACE_PORT = 3141;
@@ -46,7 +46,6 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
     ["PORT", String(WORKSPACE_PORT)], ["PI_WEB_MODE", "real"],
     ["HOME", HOME], ["XDG_CONFIG_HOME", `${HOME}/.config`], ["XDG_DATA_HOME", `${HOME}/.local/share`], ["XDG_CACHE_HOME", `${HOME}/.cache`],
     ["PI_WEB_HOME", `${DATA}/pi-ez-web`], ["PI_CODING_AGENT_DIR", `${DATA}/pi-ez-agent`], ["PI_WEB_REPOS_ROOT", `${DATA}/repos`],
-    ["PI_WEB_SEED_REPOSITORY", repository],
     ["PI_WEB_GITHUB_AUTH_FILE", `${GITHUB_DIR}/github-auth.json`],
     ...(runtimeClassName ? [["DOCKER_HOST", "tcp://127.0.0.1:2375"]] : []),
   ].map(([n, value]) => ({ name: n, value }));

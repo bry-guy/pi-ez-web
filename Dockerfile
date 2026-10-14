@@ -59,6 +59,7 @@ RUN ./scripts/install-pi-sync.sh \
     && npm cache clean --force
 
 COPY server ./server
+COPY workspaced ./workspaced
 
 COPY public ./public
 

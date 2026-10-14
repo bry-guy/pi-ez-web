@@ -45,6 +45,7 @@ import { register as registerHooks } from "./routes/hooks.js";
 import { register as registerLifecycle } from "./routes/lifecycle.js";
 import { register as registerBranches } from "./routes/branches.js";
 import { register as registerSettings } from "./routes/settings.js";
+import { registerRemoteRoutes, remoteWorkspacesFromEnv } from "./remote-workspaces.js";
 
 export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {}) {
   const api = new Hono();
@@ -75,8 +76,9 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
   const authFlows = new AuthFlowManager(sup);
   const github = new GitHubClient();
   const githubFlows = new GitHubDeviceFlowManager(github);
+  const remote = remoteWorkspacesFromEnv(process.env, { hub, github });
   const deps = {
-    sup, sync, syncAdapter, hub, github, githubFlows, authFlows,
+    remote, sup, sync, syncAdapter, hub, github, githubFlows, authFlows,
     mutate, withAdmission, beginStreamingMutation, finishStreamingMutation, guardedWorkspaceSessions,
     streamSSE, fs, execFile, path, ws, API_CAPABILITIES, API_CONTRACT_VERSION, BUILD_ID,
     chatsDir, loadBindings, loadConfig, newId, normalizeHookSets, normalizeHooks, normalizePiConfig,
@@ -92,6 +94,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     bindSessionToContext, bindRehomedSession, boundProject, branchContext, branchContextAsync,
     primaryBranch, ensureBranchContext, sessionBelongsToProject,
   };
+  if (remote) registerRemoteRoutes(api, remote);
   registerState(api, deps);
   registerGithub(api, deps);
   registerProviders(api, deps);
