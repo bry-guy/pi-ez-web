@@ -1271,5 +1271,34 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(checkCount() > chatChecksBefore, "standalone synchronized chats check on selection");
   assert.equal(store.state.chatId, "sync-chat");
 
+  selectSession("p1", "s1");
+  await new Promise(resolve => setTimeout(resolve, 30));
+  Object.assign(state.chats[0], {
+    model: "mock/smart",
+    requestedModel: "anthropic/claude-opus-5-5",
+    modelFallback: true,
+    modelUnavailable: false,
+  });
+  dom.window.__addSyncTargetOnStateRefresh = false;
+  state.projects[0].sessions = [];
+  await refreshState();
+  assert.equal(store.state.sessionId, "s1");
+  assert.equal(state.chats[0].id, "sync-chat");
+  applyEvent({ v: 1, seq: 200, sessionId: "s1", type: "session_closed" });
+  assert.equal(store.transcript("s1").seq, 200);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(store.state.chatId, "sync-chat", "closing the last project session falls back to a chat");
+  assert.deepEqual({
+    model: store.state.model,
+    requestedModel: store.state.requestedModel,
+    modelFallback: store.state.modelFallback,
+    modelUnavailable: store.state.modelUnavailable,
+  }, {
+    model: "mock/smart",
+    requestedModel: "anthropic/claude-opus-5-5",
+    modelFallback: true,
+    modelUnavailable: false,
+  }, "fallback navigation replaces all active model metadata");
+
   dom.window.close();
 });

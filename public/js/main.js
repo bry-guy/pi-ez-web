@@ -74,7 +74,7 @@ if (!s.fatalError && store.activeKey() && store.activeKey() !== earlyId) {
   // Saved conversation still exists; restoreLastSelection() applied its full selection.
 } else if (!s.fatalError && earlyId && store.activeKey() === earlyId) {
   // Saved conversation was closed or moved: drop the stale early selection, then fall back.
-  store.set({ chatId: null, sessionId: null, projectId: null });
+  store.set({ chatId: null, sessionId: null, projectId: null, model: s.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
   if (s.chats[0]) selectChat(s.chats[0].id);
 } else if (!s.fatalError && !restoreLastSelection() && s.chats[0]) selectChat(s.chats[0].id);
 else if (!s.fatalError && !store.activeKey()) {

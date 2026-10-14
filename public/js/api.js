@@ -672,7 +672,7 @@ function applyTranscriptEvent(evt, t, replay) {
         const s = store.state;
         if (s.chatId !== selection[0] || s.sessionId !== selection[1] || s.projectId !== selection[2]) return;
         if (wasChat) {
-          store.set({ ...fileReset, chatId: null, filesOpen: false });
+          store.set({ ...fileReset, chatId: null, filesOpen: false, model: s.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
           return;
         }
         if (!wasSession) return;
@@ -681,10 +681,11 @@ function applyTranscriptEvent(evt, t, replay) {
           store.set({ ...fileReset, view: "chat", projectId: p.id, sessionId: p.sessions[0].id, chatId: null, model: p.sessions[0].model || s.effectiveDefaultModel || null, requestedModel: p.sessions[0].requestedModel || null, modelFallback: !!p.sessions[0].modelFallback, modelUnavailable: !!p.sessions[0].modelUnavailable });
           openTranscript(p.sessions[0].id);
         } else if (s.chats[0]) {
-          store.set({ ...fileReset, view: "chat", chatId: s.chats[0].id, sessionId: null, projectId: null, filesOpen: false });
-          openTranscript(s.chats[0].id);
+          const chat = s.chats[0];
+          store.set({ ...fileReset, view: "chat", chatId: chat.id, sessionId: null, projectId: null, filesOpen: false, model: chat.model || s.effectiveDefaultModel || null, requestedModel: chat.requestedModel || null, modelFallback: !!chat.modelFallback, modelUnavailable: !!chat.modelUnavailable });
+          openTranscript(chat.id);
         } else {
-          store.set({ ...fileReset, sessionId: null, chatId: null, filesOpen: false });
+          store.set({ ...fileReset, sessionId: null, chatId: null, filesOpen: false, model: s.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
         }
       }).catch(err => store.setError(`Could not refresh state: ${err.message || err}`));
       break;

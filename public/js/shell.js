@@ -118,7 +118,7 @@ export function openSavedSelectionEarly() {
   const saved = savedActiveSession();
   if (!saved?.id || !["chat", "session"].includes(saved.kind)) return null;
   const isChat = saved.kind === "chat";
-  store.set({ view: "chat", chatId: isChat ? saved.id : null, sessionId: isChat ? null : saved.id, projectId: isChat ? null : saved.projectId || null });
+  store.set({ view: "chat", chatId: isChat ? saved.id : null, sessionId: isChat ? null : saved.id, projectId: isChat ? null : saved.projectId || null, model: null, requestedModel: null, modelFallback: false, modelUnavailable: false });
   openTranscript(saved.id);
   return saved.id;
 }
@@ -262,7 +262,7 @@ class PiSidebar extends HTMLElement {
       if (!p) return;
       const first = p.sessions[0];
       if (first) selectSession(p.id, first.id, { showOperation: true });
-      else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false });
+      else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false, model: store.state.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
     } else if (act === "session-row") {
       selectSession(t.dataset.pid, t.dataset.id, { showOperation: true });
     } else if (act === "chat-row") selectChat(t.dataset.id);
