@@ -76,3 +76,24 @@ test("proxy strips the prefix, sets X-Forwarded-Prefix, and streams SSE", async 
     upstream.close();
   }
 });
+
+test("workspaces mount the shared GitHub login read-only and optionally", () => {
+  const spec = deploymentManifest({ name: "x", repository: "a/x", image: "img" }).spec.template.spec;
+  const vol = spec.volumes.find(v => v.name === "github");
+  assert.equal(vol.secret.secretName, "pi-ez-github-auth");
+  assert.equal(vol.secret.optional, true);
+  assert.ok(spec.containers[0].volumeMounts.find(m => m.name === "github").readOnly);
+  assert.ok(spec.containers[0].env.some(e => e.name === "PI_WEB_GITHUB_AUTH_FILE"));
+});
+
+test("gateway GitHub status reads the shared Secret and logout deletes it", async () => {
+  const path = "/api/v1/namespaces/pi-ez-workspaces/secrets/pi-ez-github-auth";
+  const data = Buffer.from(JSON.stringify({ accessToken: "t", account: { login: "me" } })).toString("base64");
+  const kube = fakeKube({ [`GET ${path}`]: { status: 200, body: { data: { "github-auth.json": data } } }, [`DELETE ${path}`]: { status: 200, body: {} } });
+  const gw = createGateway({ kube, config: gatewayConfig({ PI_WEB_GITHUB_CLIENT_ID: "cid" }) });
+  const status = await (await gw.request("/api/gateway/github")).json();
+  assert.deepEqual(status, { configured: true, authenticated: true, account: { login: "me" } });
+  assert.equal(JSON.stringify(status).includes('"t"'), false);
+  await gw.request("/api/gateway/github/logout", { method: "POST" });
+  assert.ok(kube.calls.some(([m, p]) => m === "DELETE" && p === path));
+});

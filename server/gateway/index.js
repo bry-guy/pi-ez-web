@@ -2,7 +2,8 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { inClusterKube } from "./kube.js";
-import { deploymentManifest, pvcManifest, serviceManifest, slugFromRepository, validName, MANAGED_BY, NAME_LABEL, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
+import { GitHubClient, GitHubDeviceFlowManager } from "../github.js";
+import { deploymentManifest, GITHUB_SECRET, pvcManifest, serviceManifest, slugFromRepository, validName, MANAGED_BY, NAME_LABEL, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
 
 // Hop-by-hop and length/encoding headers; fetch() re-frames bodies itself.
 const DROP_HEADERS = ["connection", "keep-alive", "transfer-encoding", "upgrade", "host", "content-length", "content-encoding"];
@@ -16,12 +17,46 @@ export function gatewayConfig(env = process.env) {
     storageClassName: env.WORKSPACE_STORAGE_CLASS || null,
     envConfigMap: env.WORKSPACE_ENV_CONFIGMAP || null,
     imagePullSecret: env.WORKSPACE_IMAGE_PULL_SECRET || null,
+    githubClientId: env.PI_WEB_GITHUB_CLIENT_ID || null,
     upstream: name => `http://ws-${name}.${env.GATEWAY_NAMESPACE || "pi-ez-workspaces"}.svc.cluster.local:${WORKSPACE_PORT}`,
   };
 }
 
+// One GitHub login for every workspace: the device flow runs here and the
+// token is stored in a Secret that workspaces mount read-only.
+export function githubSecretStore(kube, ns) {
+  const path = `/api/v1/namespaces/${ns}/secrets/${GITHUB_SECRET}`;
+  return {
+    async save(auth) {
+      const secret = { apiVersion: "v1", kind: "Secret", metadata: { name: GITHUB_SECRET }, type: "Opaque",
+        stringData: { "github-auth.json": JSON.stringify({ version: 1, ...auth }) } };
+      let res = await kube.request("PUT", path, secret);
+      if (res.status === 404) res = await kube.request("POST", `/api/v1/namespaces/${ns}/secrets`, secret);
+      if (res.status >= 300) throw new Error(`kubernetes ${res.status}`);
+    },
+    async load() {
+      const res = await kube.request("GET", path);
+      if (res.status !== 200) return null;
+      try { return JSON.parse(Buffer.from(res.body.data["github-auth.json"], "base64").toString("utf8")); } catch { return null; }
+    },
+    async remove() {
+      const res = await kube.request("DELETE", path);
+      if (res.status >= 300 && res.status !== 404) throw new Error(`kubernetes ${res.status}`);
+    },
+  };
+}
+
+class SecretGitHubClient extends GitHubClient {
+  constructor(store, clientId) { super({ configOverride: { clientId, owner: null } }); this.store = store; this.pending = null; }
+  // The flow manager calls saveToken synchronously; the Secret write is awaited by status/login polling.
+  saveToken(auth) { this.pending = this.store.save(auth).catch(e => { console.error("pi-ez-gateway github save failed", e.message); throw e; }); }
+}
+
 export function createGateway({ kube, config = gatewayConfig(), fetchImpl = globalThis.fetch } = {}) {
   const ns = config.namespace;
+  const store = githubSecretStore(kube, ns);
+  const github = new SecretGitHubClient(store, config.githubClientId);
+  const flows = new GitHubDeviceFlowManager(github);
   const apps = `/apis/apps/v1/namespaces/${ns}/deployments`;
   const core = kind => `/api/v1/namespaces/${ns}/${kind}`;
   const selector = encodeURIComponent(`app.kubernetes.io/managed-by=${MANAGED_BY}`);
@@ -34,6 +69,21 @@ export function createGateway({ kube, config = gatewayConfig(), fetchImpl = glob
   }
 
   app.get("/healthz", c => c.json({ ok: true }));
+
+  app.get("/api/gateway/github", async c => {
+    await github.pending?.catch(() => {});
+    const auth = await store.load();
+    return c.json({ configured: !!config.githubClientId, authenticated: !!auth?.accessToken, account: auth?.account || null });
+  });
+  app.post("/api/gateway/github/device-login", async c => {
+    try { return c.json({ flow: flows.view(await flows.start()) }, 202); }
+    catch (e) { return c.json({ error: e.code || "github_login_failed" }, e.code === "github_flow_active" || e.code === "github_not_configured" ? 409 : 502); }
+  });
+  app.get("/api/gateway/github/device-login/:id", c => {
+    try { return c.json({ flow: flows.view(flows.get(c.req.param("id"))) }); }
+    catch { return c.json({ error: "no_such_github_flow" }, 404); }
+  });
+  app.post("/api/gateway/github/logout", async c => { await store.remove(); return c.json({ ok: true }); });
 
   app.get("/api/gateway/workspaces", async c => {
     const res = await kube.request("GET", `${apps}?labelSelector=${selector}`);
@@ -116,14 +166,17 @@ export function createGateway({ kube, config = gatewayConfig(), fetchImpl = glob
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pi-ez workspaces</title><style>body{font:16px system-ui;max-width:40rem;margin:2rem auto;padding:0 1rem}li{margin:.4rem 0}input[type=text]{width:100%;padding:.4rem}</style></head>
-<body><h1>Workspaces</h1><ul id="list" aria-live="polite"><li>Loading…</li></ul>
+<body><h1>Workspaces</h1><p id="gh" role="status">GitHub: checking…</p><ul id="list" aria-live="polite"><li>Loading…</li></ul>
 <h2>Add repository</h2><form id="add"><label for="repo">Repository (owner/name or Git URL)</label><br><input id="repo" type="text" required>
 <p><label><input id="kata" type="checkbox"> Needs containers (Docker/Compose in a Kata sandbox)</label></p><button>Create workspace</button> <span id="status" role="status"></span></form>
 <script>
 const list=document.getElementById("list"),status=document.getElementById("status");
 async function load(){const r=await fetch("api/gateway/workspaces");const d=await r.json();list.replaceChildren(...(d.workspaces||[]).map(w=>{const li=document.createElement("li"),a=document.createElement("a");a.href="w/"+w.name+"/";a.textContent=w.name;li.append(a," — "+(w.repository||"")+(w.ready?"":" (starting…)"));return li;}));if(!list.children.length)list.innerHTML="<li>No workspaces yet.</li>";}
 document.getElementById("add").onsubmit=async e=>{e.preventDefault();status.textContent="Creating…";const r=await fetch("api/gateway/workspaces",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({repository:document.getElementById("repo").value,...(document.getElementById("kata").checked?{runtimeClassName:"kata"}:{})})});const d=await r.json();status.textContent=r.ok?"Created "+d.name:"Error: "+d.error;load();};
-load();setInterval(load,10000);
+const gh=document.getElementById("gh");
+async function ghStatus(){const d=await (await fetch("api/gateway/github")).json();if(d.authenticated){gh.textContent="GitHub: signed in"+(d.account?.login?" as "+d.account.login:"")+" (shared with all workspaces) ";const b=document.createElement("button");b.textContent="Sign out";b.onclick=async()=>{await fetch("api/gateway/github/logout",{method:"POST"});ghStatus();};gh.append(b);}else{gh.textContent=d.configured?"GitHub: not signed in ":"GitHub: PI_WEB_GITHUB_CLIENT_ID not set";if(d.configured){const b=document.createElement("button");b.textContent="Sign in";b.onclick=ghLogin;gh.append(b);}}}
+async function ghLogin(){const r=await fetch("api/gateway/github/device-login",{method:"POST"});const d=await r.json();if(!r.ok){gh.textContent="GitHub: "+d.error;return;}const f=d.flow;gh.textContent="Enter code "+f.userCode+" at ";const a=document.createElement("a");a.href=f.verificationUri;a.target="_blank";a.rel="noopener";a.textContent=f.verificationUri;gh.append(a);const t=setInterval(async()=>{const x=(await (await fetch("api/gateway/github/device-login/"+f.id)).json()).flow;if(!x||x.state!=="waiting_user"){clearInterval(t);if(x?.state!=="complete")gh.textContent="GitHub: "+(x?.error?.message||"login failed");else ghStatus();}},(f.intervalSeconds||5)*1000);}
+ghStatus();load();setInterval(load,10000);
 </script></body></html>`;
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

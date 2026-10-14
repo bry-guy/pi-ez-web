@@ -26,9 +26,10 @@ browser → gateway (/, /api/gateway/*, /w/<name>/* proxy)
 | Layer | Examples | Owner |
 | --- | --- | --- |
 | Personal | dotfiles, Pi extensions, Git identity | Operator: `WORKSPACE_ENV_CONFIGMAP` (e.g. `PI_WEB_PRESTART_COMMAND`) applied to every workspace |
-| Project tools | `mise.toml`, `script/bootstrap`, `./gradlew` | Repository, run by the configured `setup` hook |
+| Project tools | `mise.toml`, `script/bootstrap`, `./gradlew` | Repository, run by the `setup` hook (deployment default: `mise trust --yes && mise install`; workspace-only tools in `mise.pi-ez.toml` via `MISE_ENV=pi-ez`) |
 | Workspace | image, storage, containers opt-in | Gateway config and the create request |
 | Grants | 1Password service account, cluster access | Operator/infra: `secretName`, optional `ws-<name>` ServiceAccount |
+| GitHub | one login for all workspaces | Gateway device flow, stored in Secret `pi-ez-github-auth`, mounted read-only into every workspace (`PI_WEB_GITHUB_AUTH_FILE`) |
 
 pi-ez-web never creates RBAC or Secrets. A `ws-<name>` ServiceAccount, if an operator created one, is used automatically; otherwise the pod gets no Kubernetes token.
 
@@ -47,15 +48,12 @@ Projects that need Docker opt into a sandbox runtime class (Kata Containers). Th
 
 Environment: `GATEWAY_NAMESPACE` (default `pi-ez-workspaces`), `WORKSPACE_IMAGE`, `WORKSPACE_STORAGE` (`20Gi`), `WORKSPACE_STORAGE_CLASS`, `WORKSPACE_ENV_CONFIGMAP`, `WORKSPACE_IMAGE_PULL_SECRET`, `PORT` (`3150`).
 
-Gateway ServiceAccount needs, in its namespace only: `deployments` (apps) and `services`, `persistentvolumeclaims` — get/list/watch/create/delete; `serviceaccounts` — get. No Secrets or RBAC access.
+Gateway ServiceAccount needs, in its namespace only: `deployments` (apps) and `services`, `persistentvolumeclaims` — get/list/watch/create/delete; `serviceaccounts` — get; `secrets` — create, plus get/update/delete on `pi-ez-github-auth` only. No other Secret or RBAC access. Resource caps are the namespace's LimitRange/ResourceQuota, owned by the deployment.
 
 The UI resolves API paths against `document.baseURI`, so it works at `/` and under `/w/<name>/`.
 
 ## Not yet done
 
 - Authentication remains the network boundary (tailnet/Caddy), as today.
-- GitHub device login is per workspace (stored on its PVC).
-- Port proxying to dev servers inside a workspace (e.g. `/w/<name>/port/8080`).
-- Injecting pi-ez-web into arbitrary project images (init-container copy); today every workspace uses the pi-ez-web image.
-- Idle scale-to-zero, resource limits, NetworkPolicy per workspace.
-- Tracking `kubernetes-sigs/agent-sandbox` as a possible replacement for gateway-managed Deployments.
+- Opening a workspace's dev server (e.g. Castaway web on `:8080`) from the browser; today use `kubectl port-forward` or `curl` from the workspace.
+- Per-workspace NetworkPolicy.

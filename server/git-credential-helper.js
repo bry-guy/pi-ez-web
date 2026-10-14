@@ -8,7 +8,7 @@ function validToken(value) {
 }
 
 function storedToken() {
-  const authPath = path.join(process.env.PI_WEB_HOME || path.join(process.env.HOME || ".", ".pi-web-ui"), "github-auth.json");
+  const authPath = process.env.PI_WEB_GITHUB_AUTH_FILE || path.join(process.env.PI_WEB_HOME || path.join(process.env.HOME || ".", ".pi-web-ui"), "github-auth.json");
   try {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
     return validToken(auth?.accessToken);

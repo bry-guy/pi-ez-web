@@ -24,7 +24,8 @@ function safeJson(response) {
 }
 
 function authPath() {
-  return path.join(appHome(), "github-auth.json");
+  // A gateway-shared login is mounted read-only from a Secret.
+  return process.env.PI_WEB_GITHUB_AUTH_FILE || path.join(appHome(), "github-auth.json");
 }
 
 function readStoredAuth() {
@@ -113,7 +114,7 @@ export class GitHubClient {
   }
 
   logout() {
-    if (process.env.PI_WEB_GITHUB_TOKEN) throw coded("credential_managed_by_environment");
+    if (process.env.PI_WEB_GITHUB_TOKEN || (!this.authFile && process.env.PI_WEB_GITHUB_AUTH_FILE)) throw coded("credential_managed_by_environment");
     try { fs.rmSync(this.authFilePath(), { force: true }); } catch (error) {
       throw Object.assign(new Error("github_logout_failed"), { code: "github_logout_failed", cause: error });
     }
