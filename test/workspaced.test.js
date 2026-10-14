@@ -193,3 +193,16 @@ test("web refreshes OAuth at 30 minutes and republishes model logins only on cha
   assert.deepEqual(puts.map(([u, b]) => [u, b]), [["http://w/v1/model-auth", '{"v":1}'], ["http://w/v1/model-auth", '{"v":2}']]);
   remote.stop();
 });
+
+test("kubernetes remove waits until the pod and purged PVC are gone", async () => {
+  let polls = 0;
+  const kube = { request: async (method, p) => {
+    if (method === "DELETE") return { status: 200, body: {} };
+    if (p.includes("/pods?")) return { status: 200, body: { items: ++polls < 3 ? [{}] : [] } };
+    return { status: polls < 3 ? 200 : 404, body: {} };
+  } };
+  await kubernetesProvider({ kube, config: kubernetesConfig({}), removePollMs: 1 }).remove("x", { purge: true });
+  assert.equal(polls, 3);
+  const stuck = { request: async (m, p) => m === "DELETE" ? { status: 200 } : { status: 200, body: { items: p.includes("/pods?") ? [{}] : [] } } };
+  await assert.rejects(kubernetesProvider({ kube: stuck, config: kubernetesConfig({}), removeTimeoutMs: 5, removePollMs: 1 }).remove("x"), { code: "workspace_remove_timeout" });
+});

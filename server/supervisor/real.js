@@ -3,6 +3,7 @@
 // are derived from those entries (or their known parent while an entry is
 // streaming), so a snapshot and its replay address the same records.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { loadBindings, loadConfig, prepareSessionVisibilityReplacement } from "../config.js";
 import { commandInfo, parseSlashCommand } from "../commands.js";
@@ -234,7 +235,7 @@ export class RealSupervisor {
     return model;
   }
 
-  async _createConfiguredSession({ cwd, sessionManager, modelRuntime, model, syncSessionId = null, sessionStartEvent = undefined }) {
+  async _createConfiguredSession({ cwd, sessionManager, modelRuntime, model, syncSessionId: _syncSessionId = null, sessionStartEvent = undefined }) {
     const SDKModule = await SDK();
     const runtime = modelRuntime || await this._modelRuntime();
     try {
@@ -751,10 +752,17 @@ export class RealSupervisor {
   async exportSession(id, format = "html") {
     const st = await this._attachById(id);
     const normalized = format === "jsonl" ? "jsonl" : "html";
-    const file = normalized === "jsonl"
-      ? st.session.exportToJsonl()
-      : await st.session.exportToHtml();
-    const body = fs.readFileSync(file);
+    // Pi defaults to the process cwd, which is read-only /app in the image.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ez-export-"));
+    let file, body;
+    try {
+      file = normalized === "jsonl"
+        ? st.session.exportToJsonl(path.join(dir, `${id}.jsonl`))
+        : await st.session.exportToHtml(path.join(dir, `${id}.html`));
+      body = fs.readFileSync(file);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     return {
       body,
       filename: path.basename(file),
@@ -1299,10 +1307,17 @@ export class RealSupervisor {
     const configuredDefault = loadConfig().defaultModel || null;
     const models = await this.listModels();
     const configuredAvailable = configuredDefault && models.some(m => m.id === configuredDefault);
+    // Without a web default, honor the Pi profile's (dotfiles') default before the first listed model.
+    let profileDefault = null;
+    if (!configuredDefault) {
+      const settings = (await this.piConfiguration.resolve().catch(() => null))?.settings || {};
+      const id = settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : null;
+      if (id && models.some(m => m.id === id)) profileDefault = id;
+    }
     return {
       models,
       configuredDefault,
-      effectiveDefault: configuredDefault ? (configuredAvailable ? configuredDefault : null) : (models[0]?.id || null),
+      effectiveDefault: configuredDefault ? (configuredAvailable ? configuredDefault : null) : (profileDefault || models[0]?.id || null),
       status: configuredDefault ? (configuredAvailable ? "available" : "unavailable") : "automatic",
       error: this.modelError,
     };
@@ -1674,7 +1689,7 @@ function flattenHunks(hunks) {
   ]);
 }
 
-export function summarizeArgs(toolName, args) {
+export function summarizeArgs(_toolName, args) {
   if (!args || typeof args !== "object") return "";
   const v = args.path || args.file_path || args.pattern || args.command || args.cmd || Object.values(args)[0];
   return typeof v === "string" ? v : JSON.stringify(v ?? "");

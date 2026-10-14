@@ -18,7 +18,7 @@ function httpError(message, status, code) {
   return Object.assign(new Error(message), { status, code });
 }
 
-export function kubernetesProvider({ kube, config = kubernetesConfig() }) {
+export function kubernetesProvider({ kube, config = kubernetesConfig(), removeTimeoutMs = 90_000, removePollMs = 2_000 }) {
   const ns = config.namespace;
   const apps = `/apis/apps/v1/namespaces/${ns}/deployments`;
   const core = kind => `/api/v1/namespaces/${ns}/${kind}`;
@@ -73,6 +73,16 @@ export function kubernetesProvider({ kube, config = kubernetesConfig() }) {
       for (const path of paths) {
         const res = await kube.request("DELETE", path);
         if (res.status >= 300 && res.status !== 404) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+      }
+      // Return only once the pod (and purged PVC) are gone, so a re-add starts clean.
+      const pods = `${core("pods")}?labelSelector=${encodeURIComponent(`${NAME_LABEL}=${name}`)}`;
+      const deadline = Date.now() + removeTimeoutMs;
+      for (;;) {
+        const podRes = await kube.request("GET", pods);
+        const pvcGone = !purge || (await kube.request("GET", `${core("persistentvolumeclaims")}/ws-${name}`)).status === 404;
+        if (pvcGone && !(podRes.body?.items || []).length) return;
+        if (Date.now() > deadline) throw httpError("workspace is still terminating", 504, "workspace_remove_timeout");
+        await new Promise(r => setTimeout(r, removePollMs));
       }
     },
     upstream: name => `http://ws-${name}.${ns}.svc.cluster.local:${WORKSPACE_PORT}`,
