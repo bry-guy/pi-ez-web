@@ -1,6 +1,6 @@
 # Project workspaces on Kubernetes
 
-Status: Phase A implemented (gateway, prefix-safe UI, seed repository); infra rollout pending.
+Status: superseded by [workspaced.md](workspaced.md); the gateway as front door is replaced by web + workspaced + worker.
 
 ## Problem
 
