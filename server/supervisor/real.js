@@ -1359,14 +1359,14 @@ export class RealSupervisor {
 
   async loginProvider(providerId, authType, interaction) {
     const runtime = await this._modelRuntime();
-    const loginInteraction = providerId === "openai-codex" && authType === "oauth"
+    const headlessMethod = { "openai-codex": "device_code", anthropic: "copy_code" }[providerId];
+    const loginInteraction = headlessMethod && authType === "oauth"
       ? {
         ...interaction,
         // The web app may be remote from the browser. Prefer the SDK's
-        // device-code path so users do not have to make localhost:1455
-        // reachable through a proxy.
+        // headless path so users do not need a localhost callback server.
         prompt: prompt => {
-          const device = prompt?.type === "select" && prompt.options?.find(option => option.id === "device_code");
+          const device = prompt?.type === "select" && prompt.options?.find(option => option.id === headlessMethod);
           return device ? Promise.resolve(device.id) : interaction.prompt(prompt);
         },
       }

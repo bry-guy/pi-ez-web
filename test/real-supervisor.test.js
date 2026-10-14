@@ -114,6 +114,32 @@ test("ChatGPT OAuth continues to use device-code login", async () => {
   assert.equal(selected, "device_code");
 });
 
+test("Anthropic OAuth uses headless copy-code login", async () => {
+  let selected;
+  const runtime = {
+    async login(provider, type, interaction) {
+      assert.equal(provider, "anthropic");
+      assert.equal(type, "oauth");
+      selected = await interaction.prompt({
+        type: "select",
+        options: [
+          { id: "browser", label: "Browser" },
+          { id: "copy_code", label: "Copy code" },
+        ],
+      });
+      assert.equal(await interaction.prompt({ type: "manual_code" }), "pasted-code");
+    },
+    async refresh() {},
+    async getAvailable() { return []; },
+  };
+  const supervisor = new RealSupervisor({});
+  supervisor._modelRuntime = async () => runtime;
+  await supervisor.loginProvider("anthropic", "oauth", {
+    prompt: async prompt => prompt.type === "manual_code" ? "pasted-code" : "browser",
+  });
+  assert.equal(selected, "copy_code");
+});
+
 test("package command failures are eligible for package-free runtime fallback", () => {
   assert.equal(isPackageSetupFailure(new Error("/usr/local/bin/npm --include=dev install failed with code 1")), true);
   assert.equal(isPackageSetupFailure(new Error("git clone failed with signal SIGTERM")), true);
