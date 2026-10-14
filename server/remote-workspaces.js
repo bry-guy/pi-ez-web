@@ -8,14 +8,13 @@ const DROP_HEADERS = ["connection", "keep-alive", "transfer-encoding", "upgrade"
 export function remoteWorkspacesFromEnv(env, deps) {
   const url = env.PI_WEB_WORKSPACED_URL;
   if (!url) return null;
-  if (!env.WORKSPACED_TOKEN) throw new Error("WORKSPACED_TOKEN is required with PI_WEB_WORKSPACED_URL");
-  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN, ...deps });
+  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, ...deps });
 }
 
 export function createRemoteWorkspaces({ url, token, hub, github, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000 }) {
   const owners = { project: new Map(), session: new Map() };
   const streams = new Map();
-  const auth = { authorization: `Bearer ${token}` };
+  const auth = token ? { authorization: `Bearer ${token}` } : {};
   let stopped = false;
 
   const call = (path, init = {}) => fetchImpl(`${url}/v1${path}`, { ...init, headers: { ...auth, ...(init.headers || {}) } });
@@ -68,7 +67,8 @@ export function createRemoteWorkspaces({ url, token, hub, github, fetchImpl = gl
     const rest = c.req.path.replace(/^.*?\/api(?=\/)/, "");
     const headers = new Headers(c.req.raw.headers);
     for (const h of DROP_HEADERS) headers.delete(h);
-    headers.set("authorization", auth.authorization);
+    headers.delete("authorization");
+    if (auth.authorization) headers.set("authorization", auth.authorization);
     const hasBody = !["GET", "HEAD"].includes(c.req.method);
     let res;
     try {

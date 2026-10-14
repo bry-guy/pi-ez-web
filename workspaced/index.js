@@ -16,13 +16,14 @@ function tokenMatches(header, token) {
 
 // workspaced: creates/removes per-project workspaces, holds grants, and routes
 // web's session traffic to each workspace's worker. Only web calls it.
-export function createWorkspaced({ provider, token, fetchImpl = globalThis.fetch }) {
-  if (!token) throw new Error("WORKSPACED_TOKEN is required");
+// auth "network" means a NetworkPolicy admits only web; otherwise a bearer token.
+export function createWorkspaced({ provider, token, auth = "token", fetchImpl = globalThis.fetch }) {
+  if (auth !== "network" && !token) throw new Error("WORKSPACED_TOKEN is required unless WORKSPACED_AUTH=network");
   const app = new Hono();
 
   app.get("/healthz", c => c.json({ ok: true }));
   app.use("/v1/*", async (c, next) => {
-    if (!tokenMatches(c.req.header("authorization"), token)) return c.json({ error: "unauthorized" }, 401);
+    if (auth !== "network" && !tokenMatches(c.req.header("authorization"), token)) return c.json({ error: "unauthorized" }, 401);
     await next();
   });
 
@@ -95,6 +96,6 @@ async function providerFromEnv(env = process.env) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3150);
   const provider = await providerFromEnv();
-  serve({ fetch: createWorkspaced({ provider, token: process.env.WORKSPACED_TOKEN }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
+  serve({ fetch: createWorkspaced({ provider, token: process.env.WORKSPACED_TOKEN, auth: process.env.WORKSPACED_AUTH }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
   console.log(`workspaced (${process.env.WORKSPACED_PROVIDER || "local"}) → :${port}`);
 }

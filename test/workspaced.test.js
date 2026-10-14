@@ -60,6 +60,9 @@ test("workspaced requires its token", async () => {
   assert.equal((await app.request("/v1/workspaces", { headers: { authorization: "Bearer nope-nope-no" } })).status, 401);
   assert.equal((await app.request("/v1/workspaces", { headers: auth })).status, 200);
   assert.equal((await app.request("/healthz")).status, 200);
+  assert.throws(() => createWorkspaced({ provider: {} }), /WORKSPACED_TOKEN/);
+  const network = createWorkspaced({ provider: { list: async () => [] }, auth: "network" });
+  assert.equal((await network.request("/v1/workspaces")).status, 200);
 });
 
 test("kubernetes create is idempotent, applies the SA convention, and refuses name collisions", async () => {
