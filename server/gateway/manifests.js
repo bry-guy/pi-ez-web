@@ -64,9 +64,19 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
     // Privileged is confined to the sandbox VM; never emit it without a runtime class.
     containers.push({
       name: "docker", image: dindImage,
+      // Kata shares the PVC over virtio-fs, which overlayfs can't use as an upper dir, so
+      // Docker's data lives in a sparse ext4 image on the PVC, loop-mounted inside the VM.
+      // shortcut: apk fetches e2fsprogs on each start; bake a dind image if that bites.
+      command: ["sh", "-ec", [
+        "apk add -q e2fsprogs",
+        "img=/docker-data/docker.img",
+        "[ -f $img ] || { truncate -s 20G $img; mkfs.ext4 -q -E lazy_itable_init=1,lazy_journal_init=1,nodiscard $img; }",
+        "mount -o loop $img /var/lib/docker",
+        "exec dockerd-entrypoint.sh",
+      ].join("\n")],
       env: [{ name: "DOCKER_TLS_CERTDIR", value: "" }],
       securityContext: { privileged: true, runAsUser: 0 },
-      volumeMounts: [{ name: "data", mountPath: "/var/lib/docker", subPath: "docker" }],
+      volumeMounts: [{ name: "data", mountPath: "/docker-data", subPath: "docker" }],
     });
   }
   return {
