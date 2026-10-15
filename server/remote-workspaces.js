@@ -124,6 +124,20 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     return owners[kind].get(id) || null;
   }
 
+  // Worker seq → web seq for recent re-emitted events, per workspace. The
+  // browser compares a transcript snapshot's seq with live event seqs, so a
+  // snapshot from a worker must carry web's numbering or live events are
+  // dropped until reload.
+  const seqMaps = new Map();
+  function webSeq(name, workerSeq) {
+    const pairs = seqMaps.get(name) || [];
+    if (!pairs.length || !Number.isFinite(workerSeq)) return hub.currentSeq();
+    // shortcut: a snapshot newer than every event seen yet maps to now, so an event still in flight may apply twice; rare (ms window).
+    let out = pairs[0][1] - 1;
+    for (const [w, web] of pairs) { if (w > workerSeq) break; out = web; }
+    return pairs.at(-1)[0] < workerSeq ? hub.currentSeq() : out;
+  }
+
   async function forward(c, name) {
     const raw = c.req.url;
     const search = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
@@ -141,6 +155,12 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     }
     const out = new Headers(res.headers);
     for (const h of DROP_HEADERS) out.delete(h);
+    if (res.ok && c.req.method === "GET" && /^\/sessions\/[^/]+\/transcript$/.test(rest)) {
+      const snap = await res.json();
+      snap.seq = webSeq(name, Number(snap.seq));
+      out.delete("content-length");
+      return new Response(JSON.stringify(snap), { status: res.status, headers: out });
+    }
     return new Response(res.body, { status: res.status, headers: out });
   }
 
@@ -157,6 +177,9 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
           // Sleeping: stop until projects() sees it running again.
           if (res.status === 503) { if (streams.get(name) === controller) streams.delete(name); return; }
           if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
+          // A new connection may be a restarted worker numbering from zero.
+          const pairs = [];
+          seqMaps.set(name, pairs);
           const decoder = new TextDecoder();
           let buffer = "";
           for await (const chunk of res.body) {
@@ -168,9 +191,11 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
               const data = frame.split("\n").filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("\n");
               if (!data) continue;
               try {
-                const { v: _v, seq: _seq, sessionId, type, ...rest } = JSON.parse(data);
+                const { v: _v, seq, sessionId, type, ...rest } = JSON.parse(data);
                 if (sessionId) owners.session.set(sessionId, name);
                 hub.emit(sessionId, type, rest);
+                pairs.push([Number(seq), hub.currentSeq()]);
+                if (pairs.length > 5000) pairs.splice(0, 1000);
               } catch { /* malformed frame */ }
             }
           }

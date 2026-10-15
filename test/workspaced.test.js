@@ -353,6 +353,36 @@ test("web keeps sleeping projects in the sidebar from a persisted snapshot", asy
   }
 });
 
+test("web renumbers worker transcript snapshots so live events still apply", async () => {
+  const worker = await listen((req, res) => {
+    if (req.url === "/api/state") return res.end(JSON.stringify({ projects: [{ id: "p1", name: "app", sessions: [{ id: "s1" }] }] }));
+    if (req.url === "/api/sessions/s1/transcript") return res.end(JSON.stringify({ sessionId: "s1", seq: 901, records: [] }));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const seq of [900, 901]) res.write(`data: ${JSON.stringify({ v: 1, seq, sessionId: "s1", type: "turn_start" })}\n\n`);
+    return undefined;
+  });
+  const provider = { list: async () => [{ name: "app", ready: true, state: "running", pinned: false }], upstream: () => `http://127.0.0.1:${worker.address().port}` };
+  const daemon = serve({ fetch: createWorkspaced({ provider, token: TOKEN }).fetch, port: 0, hostname: "127.0.0.1" });
+  await new Promise(r => daemon.once("listening", r));
+  const hub = new EventHub();
+  for (let i = 0; i < 3; i++) hub.emit("other", "noop");
+  const remote = createRemoteWorkspaces({ url: `http://127.0.0.1:${daemon.address().port}`, token: TOKEN, hub, retryMs: 50, modelAuthSyncMs: 0 });
+  try {
+    await remote.projects();
+    for (let i = 0; i < 200 && hub.currentSeq() < 5; i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(hub.currentSeq(), 5);
+    const api = new Hono();
+    registerRemoteRoutes(api, remote);
+    const snap = await (await api.request("/sessions/s1/transcript")).json();
+    assert.equal(snap.seq, 5, "worker seq 901 maps to web seq of that event, not 901");
+  } finally {
+    remote.stop();
+    daemon.close();
+    worker.closeAllConnections();
+    worker.close();
+  }
+});
+
 test("grants: repo-locked grants refuse other repositories, also on wake", async () => {
   const grants = parseGrants(JSON.stringify({
     default: { anyProject: true },
