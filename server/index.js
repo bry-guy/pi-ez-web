@@ -55,7 +55,7 @@ export function runPrestartCommand() {
   const command = process.env.PI_WEB_PRESTART_COMMAND;
   if (typeof command !== "string" || !command.trim()) return;
   const timeout = prestartTimeout();
-  console.log("pi-ez-web: running prestart command");
+  console.log(`pi-ez-web: running prestart command (+${Math.round(performance.now())}ms)`);
   try {
     execFileSync("/bin/sh", ["-c", command], {
       stdio: ["ignore", "inherit", "inherit"],
@@ -72,7 +72,7 @@ export function runPrestartCommand() {
           : "failed";
     throw prestartFailure(`Prestart command ${detail}.`);
   }
-  console.log("pi-ez-web: prestart command completed");
+  console.log(`pi-ez-web: prestart command completed (+${Math.round(performance.now())}ms)`);
 }
 
 function uiOnlyEnabled() {
@@ -168,7 +168,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   const announce = () => {
     const addr = server.address();
-    if (addr) console.log(`pi-web-ui (${process.env.PI_WEB_MODE || "real"} mode) → http://localhost:${addr.port}`);
+    if (addr) console.log(`pi-web-ui (${process.env.PI_WEB_MODE || "real"} mode) → http://localhost:${addr.port} (+${Math.round(performance.now())}ms)`);
   };
   if (server.listening) announce();
   else server.on("listening", announce);

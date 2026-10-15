@@ -1,4 +1,11 @@
-import { deploymentManifest, GITHUB_SECRET, MODEL_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
+import { deploymentManifest, GITHUB_SECRET, MODEL_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, PIN_ANNOTATION, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
+
+const MERGE_PATCH = "application/merge-patch+json";
+
+export function deploymentState(d) {
+  if ((d.spec?.replicas ?? 1) === 0) return "sleeping";
+  return (d.status?.readyReplicas || 0) > 0 ? "running" : "starting";
+}
 
 // Workspaces as ws-<name> PVC + Service + Deployment. The cluster's labels and
 // annotations are the record of what exists; workspaced keeps no database.
@@ -52,8 +59,21 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), removeTi
         name: d.metadata.labels?.[NAME_LABEL],
         repository: d.metadata.annotations?.[REPO_ANNOTATION] || null,
         ready: (d.status?.readyReplicas || 0) > 0,
+        state: deploymentState(d),
+        pinned: d.metadata.annotations?.[PIN_ANNOTATION] === "true",
         containers: !!d.spec?.template?.spec?.runtimeClassName,
       }));
+    },
+    async scale(name, replicas) {
+      const res = await kube.request("PATCH", `${apps}/ws-${name}`, { spec: { replicas } }, MERGE_PATCH);
+      if (res.status === 404) throw httpError("no such workspace", 404, "no_such_workspace");
+      if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+    },
+    async setPinned(name, pinned) {
+      // The annotation is the record; workspaced keeps no database.
+      const res = await kube.request("PATCH", `${apps}/ws-${name}`, { metadata: { annotations: { [PIN_ANNOTATION]: pinned ? "true" : null } } }, MERGE_PATCH);
+      if (res.status === 404) throw httpError("no such workspace", 404, "no_such_workspace");
+      if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
     },
     async create({ name, repository, runtimeClassName = null, secretName = null }) {
       const existing = await kube.request("GET", `${apps}/ws-${name}`);

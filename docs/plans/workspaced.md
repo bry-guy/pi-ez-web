@@ -55,5 +55,39 @@ One image, three entrypoints.
   per-project GitHub App tokens later.
 
 ## Settled
-- Personal config: web and workers use the same `DOTFILES_REVISION` from the
-  shared ConfigMap.
+- Personal config: web and workers fetch the latest dotfiles on every start.
+
+## Worker lifecycle (implemented)
+- Workers sleep (Deployment `replicas: 0`, PVC kept) after
+  `WORKSPACED_IDLE_MINUTES` (default 20, `0` off) without user traffic.
+- Busy = a proxied request in flight (hooks, setup, bang) or the worker's
+  `/api/health` `busy` (agent turn, compaction, queued prompt). Processes
+  the agent left running don't count; they die on sleep.
+- Any user call through workspaced wakes the worker (waits up to 45s, then
+  `503 workspace_starting`). Web's own `/state`, `/events`, `/health`
+  never wake one.
+- Keep-awake pin = `pi-ez.dev/keep-awake` annotation; sidebar toggle.
+- Web caches each worker's last projects in `remote-projects.json` so
+  sleeping projects stay listed.
+- Readiness probe 1s; startup logs carry ms since process start; workspaced
+  logs wake→ready time.
+
+## Cleanup backlog (old implementation)
+- Existing workers don't get manifest changes (1s probe, no service links):
+  nothing reconciles. Patch them by hand or add reconcile.
+- Worker env: ship the prestart script as a file, not an env value.
+- Cluster: delete leftover `pi-ez-gateway` ServiceAccount, Service, Role,
+  RoleBinding, Deployment (Argo prune is off).
+- Code/docs: remove gateway remnants and superseded
+  `project-workspaces.md`.
+- Web: remove in-process projects (web = chats, sidebar, logins, routing).
+  Decide whether step 3 (local provider) still gates this.
+- Migrate srvivor, infra, pi-sync to workers; then delete the in-process
+  copies and old `/data/repos` checkouts on the pi-web PVC.
+
+## Open: worker sandbox (blocks egress limits)
+Kata as configured costs ~2Gi/250m per worker (`podFixed` overhead) —
+unaffordable. Candidates: Kata tuned small (guest memory 256–512Mi,
+Cloud Hypervisor/Firecracker); smolvm (libkrun, elastic memory);
+Gondolin (earendil-works; QEMU/libkrun microVM with built-in egress and
+secret policy). Measure real per-worker overhead before choosing.

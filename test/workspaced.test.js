@@ -8,7 +8,8 @@ import { EventEmitter } from "node:events";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createWorkspaced } from "../workspaced/index.js";
-import { kubernetesConfig, kubernetesProvider } from "../workspaced/kubernetes.js";
+import { deploymentState, kubernetesConfig, kubernetesProvider } from "../workspaced/kubernetes.js";
+import { createLifecycle } from "../workspaced/lifecycle.js";
 import { localProvider } from "../workspaced/local.js";
 import { deploymentManifest, slugFromRepository } from "../workspaced/manifests.js";
 import { createRemoteWorkspaces, registerRemoteRoutes } from "../server/remote-workspaces.js";
@@ -93,7 +94,7 @@ test("local provider persists workspaces, spawns workers, and writes auth 0600",
   await provider.create({ name: "srvivor", repository: "bry-guy/srvivor" });
   assert.equal(spawned[0].PI_WEB_REPOS_ROOT, path.join(root, "srvivor", "repos"));
   assert.match(provider.upstream("srvivor"), /^http:\/\/127\.0\.0\.1:\d+$/);
-  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", ready: true, containers: false }]);
+  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", ready: true, state: "running", pinned: false, containers: false }]);
   await provider.setGitHubAuth({ accessToken: "t" });
   assert.equal(statSync(path.join(root, "github-auth.json")).mode & 0o777, 0o600);
   await assert.rejects(provider.create({ name: "srvivor", repository: "x/srvivor" }), { code: "workspace_name_taken" });
@@ -101,6 +102,12 @@ test("local provider persists workspaces, spawns workers, and writes auth 0600",
   await again.init();
   assert.equal(spawned.length, 2, "init restarts registered workers");
   assert.deepEqual(JSON.parse(readFileSync(path.join(root, "workspaces.json"), "utf8")), { srvivor: { repository: "bry-guy/srvivor" } });
+  await again.scale("srvivor", 0);
+  await again.setPinned("srvivor", true);
+  assert.deepEqual((await again.list()).map(w => [w.state, w.pinned]), [["sleeping", true]]);
+  const third = localProvider({ root, spawnImpl });
+  await third.init();
+  assert.equal(spawned.length, 2, "sleeping workers stay asleep across restarts");
 });
 
 function listen(handler) {
@@ -205,4 +212,115 @@ test("kubernetes remove waits until the pod and purged PVC are gone", async () =
   assert.equal(polls, 3);
   const stuck = { request: async (m, p) => m === "DELETE" ? { status: 200 } : { status: 200, body: { items: p.includes("/pods?") ? [{}] : [] } } };
   await assert.rejects(kubernetesProvider({ kube: stuck, config: kubernetesConfig({}), removeTimeoutMs: 5, removePollMs: 1 }).remove("x"), { code: "workspace_remove_timeout" });
+});
+
+function fakeLifecycleProvider(workerPort) {
+  const ws = { name: "app", repository: "o/app", state: "sleeping", pinned: false };
+  const calls = [];
+  return {
+    ws, calls,
+    list: async () => [{ ...ws }],
+    upstream: () => `http://127.0.0.1:${workerPort}`,
+    scale: async (_name, n) => { calls.push(["scale", n]); ws.state = n ? "running" : "sleeping"; },
+    setPinned: async (_name, pinned) => { calls.push(["pin", pinned]); ws.pinned = pinned; },
+  };
+}
+
+test("passive calls never wake a sleeping worker; user calls wake it", async () => {
+  const worker = await listen((req, res) => res.end(JSON.stringify({ ok: true, path: req.url, busy: false })));
+  const provider = fakeLifecycleProvider(worker.address().port);
+  const lifecycle = createLifecycle({ provider, idleMs: 0, pollMs: 5, cacheMs: 0, log: () => {} });
+  const app = createWorkspaced({ provider, token: TOKEN, lifecycle });
+  try {
+    for (const p of ["/api/events", "/api/state", "/api/health"]) {
+      const res = await app.request(`/v1/workspaces/app${p}`, { headers: auth });
+      assert.equal(res.status, 503, p);
+      assert.equal((await res.json()).error, "workspace_sleeping");
+    }
+    assert.deepEqual(provider.calls, [], "no scale from passive calls");
+    const res = await app.request("/v1/workspaces/app/api/sessions/s1/message", { method: "POST", headers: auth, body: "{}" });
+    assert.equal(res.status, 200);
+    assert.deepEqual(provider.calls, [["scale", 1]]);
+  } finally { worker.close(); }
+});
+
+test("a worker that does not come up in time answers 503 workspace_starting", async () => {
+  const provider = fakeLifecycleProvider(1);
+  provider.upstream = () => "http://127.0.0.1:1";
+  const lifecycle = createLifecycle({ provider, idleMs: 0, pollMs: 5, wakeTimeoutMs: 30, cacheMs: 0, log: () => {} });
+  const res = await createWorkspaced({ provider, token: TOKEN, lifecycle }).request("/v1/workspaces/app/api/files", { headers: auth });
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get("retry-after"), "5");
+  assert.equal((await res.json()).error, "workspace_starting");
+});
+
+test("sweeper sleeps idle workers, but not pinned, busy, or recently used ones", async () => {
+  let busy = false;
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true, busy })));
+  const provider = fakeLifecycleProvider(worker.address().port);
+  provider.ws.state = "running";
+  let clock = 0;
+  const lifecycle = createLifecycle({ provider, idleMs: 1000, sweepMs: 0, cacheMs: 0, now: () => clock, log: () => {} });
+  try {
+    await lifecycle.sweep();
+    clock = 500; await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [], "recently seen");
+    clock = 2000; provider.ws.pinned = true; await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [], "pinned");
+    provider.ws.pinned = false; busy = true; await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [], "agent turn running");
+    clock = 4000; lifecycle.begin("app"); await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [], "request in flight");
+    lifecycle.end("app"); busy = false; clock = 6000; await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [["scale", 0]]);
+  } finally { worker.close(); }
+});
+
+test("kubernetes scale and pin are merge patches on the Deployment", async () => {
+  const seen = [];
+  const kube = { request: async (method, p, body, type) => { seen.push([method, p, body, type]); return { status: 200, body: {} }; } };
+  const provider = kubernetesProvider({ kube, config: kubernetesConfig({}) });
+  await provider.scale("app", 0);
+  await provider.setPinned("app", true);
+  assert.deepEqual(seen.map(s => [s[0], s[1].split("/").pop(), s[3]]), [["PATCH", "ws-app", "application/merge-patch+json"], ["PATCH", "ws-app", "application/merge-patch+json"]]);
+  assert.deepEqual(seen[0][2], { spec: { replicas: 0 } });
+  assert.deepEqual(seen[1][2], { metadata: { annotations: { "pi-ez.dev/keep-awake": "true" } } });
+  assert.equal(deploymentState({ spec: { replicas: 0 } }), "sleeping");
+  assert.equal(deploymentState({ spec: { replicas: 1 }, status: {} }), "starting");
+  assert.equal(deploymentState({ spec: { replicas: 1 }, status: { readyReplicas: 1 } }), "running");
+  const d = deploymentManifest({ name: "app", repository: "o/app", image: "img" });
+  assert.equal(d.spec.template.spec.enableServiceLinks, false);
+  assert.equal(d.spec.template.spec.containers[0].readinessProbe.periodSeconds, 1);
+});
+
+test("web keeps sleeping projects in the sidebar from a persisted snapshot", async () => {
+  let state = "running";
+  const worker = await listen((req, res) => {
+    if (req.url === "/api/state") return res.end(JSON.stringify({ projects: [{ id: "p1", name: "app", sessions: [{ id: "s1" }] }] }));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    return undefined;
+  });
+  const provider = { list: async () => [{ name: "app", ready: state === "running", state, pinned: false }], upstream: () => `http://127.0.0.1:${worker.address().port}` };
+  const daemon = serve({ fetch: createWorkspaced({ provider, token: TOKEN }).fetch, port: 0, hostname: "127.0.0.1" });
+  await new Promise(r => daemon.once("listening", r));
+  const cachePath = path.join(mkdtempSync(path.join(tmpdir(), "pz-cache-")), "remote-projects.json");
+  const url = `http://127.0.0.1:${daemon.address().port}`;
+  const make = () => createRemoteWorkspaces({ url, token: TOKEN, hub: new EventHub(), cachePath, retryMs: 50, modelAuthSyncMs: 0 });
+  const first = make();
+  try {
+    assert.deepEqual((await first.projects()).map(p => [p.id, p.workspaceState]), [["p1", "running"]]);
+    first.stop();
+    assert.equal(statSync(cachePath).mode & 0o777, 0o600);
+    state = "sleeping";
+    const restarted = make();
+    try {
+      assert.deepEqual((await restarted.projects()).map(p => [p.id, p.workspaceState, p.sessions.length]), [["p1", "sleeping", 1]]);
+      assert.equal(await restarted.owner("session", "s1"), "app", "ownership survives a web restart");
+    } finally { restarted.stop(); }
+  } finally {
+    first.stop();
+    daemon.close();
+    worker.closeAllConnections();
+    worker.close();
+  }
 });

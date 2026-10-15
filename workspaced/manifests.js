@@ -1,6 +1,7 @@
 export const MANAGED_BY = "pi-ez-workspaced";
 export const NAME_LABEL = "pi-ez.dev/workspace";
 export const REPO_ANNOTATION = "pi-ez.dev/repository";
+export const PIN_ANNOTATION = "pi-ez.dev/keep-awake";
 export const WORKSPACE_PORT = 3141;
 export const GITHUB_SECRET = "pi-ez-github-auth";
 const GITHUB_DIR = "/run/secrets/pi-ez-github";
@@ -59,7 +60,7 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
   const containers = [{
     name: "workspace", image, env, ...(envFrom.length ? { envFrom } : {}),
     ports: [{ name: "http", containerPort: WORKSPACE_PORT }],
-    readinessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 10 },
+    readinessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 1 },
     volumeMounts: [{ name: "data", mountPath: DATA }, { name: "github", mountPath: GITHUB_DIR, readOnly: true }, { name: "model", mountPath: MODEL_DIR, readOnly: true }],
   }];
   if (runtimeClassName) {
@@ -90,6 +91,8 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
       template: {
         metadata: { labels: { "app.kubernetes.io/managed-by": MANAGED_BY, [NAME_LABEL]: name } },
         spec: {
+          // Workers have no business discovering each other via injected *_SERVICE_HOST env.
+          enableServiceLinks: false,
           ...(serviceAccountName ? { serviceAccountName, automountServiceAccountToken: true } : { automountServiceAccountToken: false }),
           ...(runtimeClassName ? { runtimeClassName } : {}),
           ...(imagePullSecret ? { imagePullSecrets: [{ name: imagePullSecret }] } : {}),

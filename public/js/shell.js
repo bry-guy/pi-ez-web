@@ -257,6 +257,11 @@ class PiSidebar extends HTMLElement {
       if (!id) return;
       store.state.openTree[id] = !store.state.openTree[id];
       store.notify("state");
+    } else if (act === "toggle-pin") {
+      e.stopPropagation();
+      api.pinWorkspace(t.dataset.ws, t.dataset.pinned !== "1")
+        .then(() => refreshState())
+        .catch(err => store.setError(`Keep-awake failed: ${err.error || err.message || err}`));
     } else if (act === "project-row") {
       const p = store.state.projects.find(x => x.id === t.dataset.id);
       if (!p) return;
@@ -269,6 +274,14 @@ class PiSidebar extends HTMLElement {
   }
 
   count(nodes) { return nodes.reduce((n, x) => n + 1 + this.count(x.children), 0); }
+
+  // Project workers sleep when idle and wake on use; pinning keeps one awake
+  // (e.g. a dev server you want left running).
+  workspaceToggle(p) {
+    const label = p.workspacePinned ? "pinned" : p.workspaceState === "sleeping" ? "asleep" : p.workspaceState === "starting" ? "starting" : "awake";
+    const title = p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake.";
+    return `<button class="row-ws ${label}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}. ${title}`)}">${label}</button>`;
+  }
 
   sessionRows(p, nodes, depth, q, out, forceAll = false) {
     for (const n of nodes) {
@@ -353,7 +366,7 @@ class PiSidebar extends HTMLElement {
         <div class="row mono ${active && !open ? "active" : ""}" role="button" tabindex="0" aria-expanded="${open}" data-act="project-row" data-id="${esc(p.id)}">
           <span class="caret" data-act="toggle-tree" data-tree-id="${esc(p.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(p.name)}">${open ? "▾" : "▸"}</span>
           <span class="lbl">${esc(p.name)}</span>
-          <span class="count">${this.count(p.sessions)}</span>
+          ${p.workspace ? this.workspaceToggle(p) : ""}<span class="count">${this.count(p.sessions)}</span>
           <button class="row-add cta-plus" data-act="new-project-session" data-id="${esc(p.id)}" title="New session in ${esc(p.name)}" aria-label="New session in ${esc(p.name)}">+</button>
         </div></div>`);
       if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, !!q && nameMatch);

@@ -9,7 +9,7 @@ export function inClusterKube({ host = process.env.KUBERNETES_SERVICE_HOST, port
   if (!host) throw new Error("KUBERNETES_SERVICE_HOST is not set; the gateway must run in-cluster");
   const ca = readFileSync(`${SA_DIR}/ca.crt`);
   return {
-    request(method, path, body) {
+    request(method, path, body, contentType = "application/json") {
       // Projected tokens rotate; re-read per request.
       const token = readFileSync(`${SA_DIR}/token`, "utf8").trim();
       const payload = body === undefined ? null : JSON.stringify(body);
@@ -19,7 +19,7 @@ export function inClusterKube({ host = process.env.KUBERNETES_SERVICE_HOST, port
           headers: {
             authorization: `Bearer ${token}`,
             accept: "application/json",
-            ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
+            ...(payload ? { "content-type": contentType, "content-length": Buffer.byteLength(payload) } : {}),
           },
           timeout: 15_000,
         }, res => {

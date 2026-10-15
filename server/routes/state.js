@@ -9,6 +9,7 @@ export function register(api, deps) {
     buildId: BUILD_ID,
     capabilities: API_CAPABILITIES,
     sync: sync.state(),
+    busy: !!sup.busy?.(),
   }));
 
   api.get("/logs", c => c.json({

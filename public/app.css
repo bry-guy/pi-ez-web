@@ -233,6 +233,8 @@ aside.rail {
 .row.unread:not(.streaming) .live-dot { opacity: 1; animation: none; background: var(--orange); }
 .row .count, .row .when { font-family: var(--mono); font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .row .when { font-size: 10.5px; }
+.row-ws { border: 0; background: transparent; font-family: var(--mono); font-size: 10.5px; color: var(--faint); padding: 1px 4px; cursor: pointer; flex: 0 0 auto; }
+.row-ws.pinned { color: var(--accent, inherit); }
 .row-add { border: 0; background: transparent; padding: 1px 4px; line-height: 1; cursor: pointer; flex: 0 0 auto; }
 .row-add:hover, .row-add:focus-visible { background: var(--accent-soft); }
 .rail-foot { padding: 10px 12px; display: flex; align-items: center; gap: 9px; }

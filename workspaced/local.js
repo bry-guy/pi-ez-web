@@ -46,9 +46,26 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
   }
 
   return {
-    async init() { for (const [name, w] of Object.entries(read())) await start(name, w); },
+    async init() { for (const [name, w] of Object.entries(read())) if (!w.sleeping) await start(name, w); },
     async list() {
-      return Object.entries(read()).map(([name, w]) => ({ name, repository: w.repository, ready: procs.get(name)?.exitCode === null, containers: false }));
+      return Object.entries(read()).map(([name, w]) => {
+        const alive = procs.get(name)?.exitCode === null;
+        return { name, repository: w.repository, ready: alive, state: alive ? "running" : "sleeping", pinned: !!w.pinned, containers: false };
+      });
+    },
+    async scale(name, replicas) {
+      const all = read();
+      if (!all[name]) throw Object.assign(new Error("no such workspace"), { status: 404, code: "no_such_workspace" });
+      all[name].sleeping = replicas === 0;
+      writeAtomic(registry, JSON.stringify(all, null, 2));
+      if (replicas === 0) { procs.get(name)?.kill("SIGTERM"); procs.delete(name); }
+      else await start(name, all[name]);
+    },
+    async setPinned(name, pinned) {
+      const all = read();
+      if (!all[name]) throw Object.assign(new Error("no such workspace"), { status: 404, code: "no_such_workspace" });
+      all[name].pinned = !!pinned;
+      writeAtomic(registry, JSON.stringify(all, null, 2));
     },
     async create({ name, repository }) {
       const all = read();

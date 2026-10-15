@@ -3,7 +3,7 @@
 // /api/state, and re-emits their events on its own SSE hub. Without
 // PI_WEB_WORKSPACED_URL none of this is active and projects stay in-process.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -19,14 +19,27 @@ export function remoteWorkspacesFromEnv(env, deps) {
   const url = env.PI_WEB_WORKSPACED_URL;
   if (!url) return null;
   const modelAuthPath = path.join(env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"), "auth.json");
-  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, modelAuthPath, ...deps });
+  const cachePath = env.PI_WEB_HOME ? path.join(env.PI_WEB_HOME, "remote-projects.json") : null;
+  return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, modelAuthPath, cachePath, ...deps });
 }
 
-export function createRemoteWorkspaces({ url, token, hub, github, sup = null, modelAuthPath = null, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000, modelAuthSyncMs = MODEL_AUTH_SYNC_MS }) {
+export function createRemoteWorkspaces({ url, token, hub, github, sup = null, modelAuthPath = null, cachePath = null, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000, modelAuthSyncMs = MODEL_AUTH_SYNC_MS }) {
   const owners = { project: new Map(), session: new Map() };
   const streams = new Map();
   const auth = token ? { authorization: `Bearer ${token}` } : {};
   let stopped = false;
+
+  // Last known projects per workspace, so sleeping workers stay in the sidebar.
+  let snapshots = {};
+  try { snapshots = cachePath ? JSON.parse(readFileSync(cachePath, "utf8")) : {}; } catch { snapshots = {}; }
+  function saveSnapshots() {
+    if (!cachePath) return;
+    try {
+      writeFileSync(`${cachePath}.tmp`, JSON.stringify(snapshots), { mode: 0o600 });
+      renameSync(`${cachePath}.tmp`, cachePath);
+    } catch { /* the cache is a convenience */ }
+  }
+  for (const [name, projects] of Object.entries(snapshots)) remember(name, projects);
 
   const call = (path, init = {}) => fetchImpl(`${url}/v1${path}`, { ...init, headers: { ...auth, ...(init.headers || {}) } });
   const workerPath = (name, rest) => `/workspaces/${encodeURIComponent(name)}/api${rest}`;
@@ -49,22 +62,43 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     }
   }
 
+  function unsubscribe(name) {
+    streams.get(name)?.abort();
+    streams.delete(name);
+  }
+
   // Remote projects for /api/state; also refreshes ownership and event streams.
+  // Only running workers are polled or streamed: web must never wake a worker.
   async function projects() {
     let workspaces;
     try { workspaces = await list(); } catch { return []; }
-    const out = [];
-    const pending = w => ({ id: `workspace:${w.name}`, name: w.name, workspace: w.name, pending: true, branches: [], sessions: [], contexts: [], worktrees: {}, workspaceStatus: {} });
+    const known = new Set(workspaces.map(w => w.name));
+    let changed = false;
+    for (const name of Object.keys(snapshots)) if (!known.has(name)) { delete snapshots[name]; changed = true; }
+    for (const name of streams.keys()) if (!known.has(name)) unsubscribe(name);
+    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned });
     const lists = await Promise.all(workspaces.map(async w => {
-      if (!w.ready) return [pending(w)];
-      subscribe(w.name);
-      const state = await workerState(w.name).catch(() => null);
-      if (!state) return [];
-      remember(w.name, state.projects || []);
-      return (state.projects || []).map(p => ({ ...p, workspace: w.name }));
+      const running = w.state ? w.state === "running" : w.ready;
+      let fresh = null;
+      if (running) {
+        subscribe(w.name);
+        fresh = (await workerState(w.name).catch(() => null))?.projects || null;
+      } else unsubscribe(w.name);
+      if (fresh) {
+        remember(w.name, fresh);
+        if (JSON.stringify(snapshots[w.name]) !== JSON.stringify(fresh)) { snapshots[w.name] = fresh; changed = true; }
+      }
+      const shown = fresh || snapshots[w.name];
+      if (shown) return shown.map(p => tag(w, p));
+      return [tag(w, { id: `workspace:${w.name}`, name: w.name, pending: true, branches: [], sessions: [], contexts: [], worktrees: {}, workspaceStatus: {} })];
     }));
-    out.push(...lists.flat());
-    return out;
+    if (changed) saveSnapshots();
+    return lists.flat();
+  }
+
+  async function setPinned(name, pinned) {
+    const res = await call(`/workspaces/${encodeURIComponent(name)}/pin`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ pinned: !!pinned }) });
+    if (!res.ok) throw Object.assign(new Error("could not change keep-awake"), { code: "workspaced_unavailable", status: 502 });
   }
 
   async function owner(kind, id) {
@@ -102,6 +136,8 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
       while (!stopped && !controller.signal.aborted) {
         try {
           const res = await call(workerPath(name, "/events"), { signal: controller.signal });
+          // Sleeping: stop until projects() sees it running again.
+          if (res.status === 503) { if (streams.get(name) === controller) streams.delete(name); return; }
           if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
           const decoder = new TextDecoder();
           let buffer = "";
@@ -180,7 +216,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   }
 
   return {
-    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth,
+    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned,
     stop() { stopped = true; clearInterval(modelAuthTimer); for (const c of streams.values()) c.abort(); },
   };
 }
@@ -193,6 +229,11 @@ export function registerRemoteRoutes(api, remote) {
       return name ? remote.forward(c, name) : next();
     });
   }
+  api.put("/remote-workspaces/:name/pin", async c => {
+    const body = await c.req.json().catch(() => ({}));
+    await remote.setPinned(c.req.param("name"), !!body.pinned);
+    return c.json({ ok: true, pinned: !!body.pinned });
+  });
   api.post("/projects", async (c, next) => {
     const body = await c.req.json().catch(() => ({}));
     if (body.source !== "github" && body.source !== "git-url") return next();

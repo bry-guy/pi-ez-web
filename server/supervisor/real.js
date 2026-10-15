@@ -1229,6 +1229,12 @@ export class RealSupervisor {
   piConfigurationState() { return this.piConfiguration.state(); }
 
   isStreaming(id) { return !!this.live.get(id)?.session?.isStreaming; }
+  // Any agent turn, compaction, or queued prompt keeps the worker awake.
+  busy() {
+    if (this.pendingPrompts.size) return true;
+    for (const st of this.live.values()) if (st.session?.isStreaming || st.session?.isCompacting) return true;
+    return false;
+  }
   isCompacting(id) { return !!this.live.get(id)?.session?.isCompacting; }
   async transcript(id) {
     const st = this.live.get(id);
