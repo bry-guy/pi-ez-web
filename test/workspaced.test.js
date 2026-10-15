@@ -281,6 +281,24 @@ test("sweeper sleeps idle workers, but not pinned, busy, or recently used ones",
   } finally { worker.close(); }
 });
 
+test("sweeper upgrades outdated workers: sleeping now, awake only when idle", async () => {
+  let busy = true;
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true, busy })));
+  const provider = fakeLifecycleProvider(worker.address().port);
+  provider.ws.outdated = true;
+  provider.upgrade = async name => { provider.calls.push(["upgrade", name]); provider.ws.outdated = false; };
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: 0, log: () => {} });
+  try {
+    await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [["upgrade", "app"]], "sleeping");
+    provider.calls.length = 0; provider.ws.outdated = true; provider.ws.state = "running";
+    await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [], "busy");
+    busy = false; await lifecycle.sweep();
+    assert.deepEqual(provider.calls, [["upgrade", "app"]]);
+  } finally { worker.close(); }
+});
+
 test("kubernetes scale and pin are merge patches on the Deployment", async () => {
   const seen = [];
   const kube = { request: async (method, p, body, type) => { seen.push([method, p, body, type]); return { status: 200, body: {} }; } };
@@ -297,6 +315,10 @@ test("kubernetes scale and pin are merge patches on the Deployment", async () =>
   const d = deploymentManifest({ name: "app", repository: "o/app", image: "img" });
   assert.equal(d.spec.template.spec.enableServiceLinks, false);
   assert.equal(d.spec.template.spec.containers[0].readinessProbe.periodSeconds, 1);
+  await provider.upgrade("app");
+  const up = seen.at(-1);
+  assert.equal(up[3], "application/strategic-merge-patch+json", "merge by container name, keep env and probes");
+  assert.deepEqual(up[2].spec.template.spec.containers, [{ name: d.spec.template.spec.containers[0].name, image: "ghcr.io/bry-guy/pi-ez-web:latest" }]);
 });
 
 test("web keeps sleeping projects in the sidebar from a persisted snapshot", async () => {

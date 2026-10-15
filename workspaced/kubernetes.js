@@ -2,6 +2,8 @@ import { DEFAULT_GRANT } from "./grants.js";
 import { deploymentManifest, GITHUB_SECRET, GRANT_ANNOTATION, MODEL_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, PIN_ANNOTATION, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
 
 const MERGE_PATCH = "application/merge-patch+json";
+// Merges containers by name instead of replacing the list.
+const STRATEGIC_PATCH = "application/strategic-merge-patch+json";
 
 export function deploymentState(d) {
   if ((d.spec?.replicas ?? 1) === 0) return "sleeping";
@@ -77,9 +79,9 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
     if (!found) throw httpError("no such workspace", 404, "no_such_workspace");
     return found;
   }
-  async function patch(name, body) {
+  async function patch(name, body, type = MERGE_PATCH) {
     const { ns } = await mustLocate(name);
-    const res = await kube.request("PATCH", `${apps(ns)}/ws-${name}`, body, MERGE_PATCH);
+    const res = await kube.request("PATCH", `${apps(ns)}/ws-${name}`, body, type);
     if (res.status === 404) throw httpError("no such workspace", 404, "no_such_workspace");
     if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
   }
@@ -101,12 +103,15 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
             state: deploymentState(d),
             pinned: d.metadata.annotations?.[PIN_ANNOTATION] === "true",
             containers: !!d.spec?.template?.spec?.runtimeClassName,
+            outdated: d.spec?.template?.spec?.containers?.[0]?.image !== config.image,
           });
         }
       }
       return out;
     },
     scale: (name, replicas) => patch(name, { spec: { replicas } }),
+    // Restarts an awake worker; a sleeping one just starts on it next wake.
+    upgrade: name => patch(name, { spec: { template: { spec: { containers: [{ name: "workspace", image: config.image }] } } } }, STRATEGIC_PATCH),
     // The annotation is the record; workspaced keeps no database.
     setPinned: (name, pinned) => patch(name, { metadata: { annotations: { [PIN_ANNOTATION]: pinned ? "true" : null } } }),
     async create({ name, repository, grant, runtimeClassName = null }) {

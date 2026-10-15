@@ -100,9 +100,21 @@ export function createLifecycle({
       }
     }
     await makeRoom(null);
+    await upgrade();
+  }
+
+  // Move workers onto workspaced's image: sleeping ones now (free), awake
+  // ones only when idle, since it restarts them.
+  async function upgrade() {
+    if (!provider.upgrade) return;
+    for (const w of await refresh()) {
+      if (!w.outdated || (w.state !== "sleeping" && !await evictable(w))) continue;
+      await provider.upgrade(w.name).then(() => log(`workspaced: upgraded ${w.name}`), e => log(`workspaced: could not upgrade ${w.name}: ${e.message}`));
+    }
   }
   const timer = (idleMs || maxAwake) && sweepMs ? setInterval(() => sweep().catch(() => {}), sweepMs) : null;
   timer?.unref?.();
+  if (timer) setTimeout(() => sweep().catch(() => {}), 0).unref?.();
 
   return {
     info, touch, ensureAwake, sleep, sweep, refresh, makeRoom,
