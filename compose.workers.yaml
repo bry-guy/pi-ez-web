@@ -1,0 +1,32 @@
+# Adds workspaced so every project runs in its own worker process.
+# Usage: echo "WORKSPACED_TOKEN=$(openssl rand -hex 32)" >> .env
+#        docker compose -f compose.yaml -f compose.workers.yaml up --build -d
+# Workers here are child processes of workspaced in one container: one trust
+# zone, grants recorded but not enforced. Use the Kubernetes provider for isolation.
+services:
+  pi-ez-web:
+    environment:
+      PI_WEB_WORKSPACED_URL: http://workspaced:3150
+      WORKSPACED_TOKEN: ${WORKSPACED_TOKEN:?set WORKSPACED_TOKEN in .env}
+    depends_on: [workspaced]
+
+  workspaced:
+    image: ${PI_WEB_IMAGE:-pi-ez-web:local}
+    command: ["node", "workspaced/index.js"]
+    environment:
+      NODE_ENV: production
+      PORT: "3150"
+      PI_WEB_MODE: real
+      WORKSPACED_PROVIDER: local
+      WORKSPACED_ROOT: /data/workspaces
+      WORKSPACED_TOKEN: ${WORKSPACED_TOKEN:?set WORKSPACED_TOKEN in .env}
+      HOME: /data/home
+      XDG_CONFIG_HOME: /data/home/.config
+      XDG_DATA_HOME: /data/home/.local/share
+      XDG_CACHE_HOME: /data/home/.cache
+    volumes:
+      - pi-ez-workspaced-data:/data
+    restart: unless-stopped
+
+volumes:
+  pi-ez-workspaced-data:

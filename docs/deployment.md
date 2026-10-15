@@ -12,7 +12,7 @@ For remote access, use an SSH tunnel or put the app behind a TLS- and authentica
 
 Compose stores application settings, Pi credentials and transcripts, repositories, and worktrees in one named volume mounted at `/data`. `docker compose down` preserves it. **Do not use `docker compose down --volumes` to upgrade**; that deletes the volume.
 
-Back up the volume before upgrading and protect the archive like a credential. The backup procedure below stops the service, discovers the project-scoped volume, and refuses to overwrite an existing archive. If backup fails, the app stays stopped; fix the cause before starting it again. The restore procedure extracts into a new volume and keeps the original intact. It archives only the `/data` volume; separately mounted host repositories need their own backups. Bind-mounted directories must be writable by container UID/GID 1000. Keep repository and worktree paths stable: Git worktrees record absolute paths.
+Back up the volume before upgrading and protect the archive like a credential. The backup procedure below stops the service, discovers the project-scoped volume, and refuses to overwrite an existing archive. If backup fails, the app stays stopped; fix the cause before starting it again. The restore procedure extracts into a new volume and keeps the original intact. It archives only the `/data` volume; with `compose.workers.yaml`, back up `pi-ez-workspaced-data` the same way. Keep repository and worktree paths stable: Git worktrees record absolute paths.
 
 Use the same Compose overrides for start, backup, restore, and upgrades. To make the examples below use an external local override, export `COMPOSE_FILE=compose.yaml:/path/to/compose.private.yaml` first. When restoring, put `compose.restore.yaml` last.
 

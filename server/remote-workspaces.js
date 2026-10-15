@@ -254,7 +254,7 @@ export function registerRemoteRoutes(api, remote) {
   });
   api.post("/projects", async c => {
     const body = await c.req.json().catch(() => ({}));
-    if (body.source !== "github" && body.source !== "git-url") return c.json({ error: "local_projects_disabled" }, 400);
+    if (body.source !== "github" && body.source !== "git-url") return c.json({ error: "unsupported_repository_source" }, 400);
     return remote.createProject(c, body);
   });
 }

@@ -37,8 +37,8 @@ const state = {
     { id: "anthropic", name: "Anthropic", configured: true, sourceLabel: "OAuth", availableModels: 2, authMethods: [{ id: "oauth", label: "Anthropic OAuth" }], canLogout: true },
     { id: "openai", name: "OpenAI", configured: false, availableModels: 0, authMethods: [{ id: "api_key", label: "OpenAI API key" }], canLogout: false },
   ],
-  repositorySources: { default: "local", sources: [{ id: "local", enabled: true }, { id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
-  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "local", editable: true } },
+  repositorySources: { default: "github", sources: [{ id: "github", enabled: true, configured: false, authenticated: false, owner: "bry-guy" }, { id: "git-url", enabled: true }] },
+  settings: { githubOwner: { value: "bry-guy", editable: true }, defaultRepositorySource: { value: "github", editable: true } },
   piConfiguration: {
     config: { profile: "https://github.com/bry-guy/dotfiles", profileSource: "explicit", packages: ["npm:context-mode"], extensions: [] },
     profile: { status: "loaded", source: "https://github.com/bry-guy/dotfiles", error: null },
@@ -96,7 +96,6 @@ async function boot() {
       if (url === "/api/models") return json({ models: state.models });
       if (url.startsWith("/api/logs")) return json({ file: "logs/pi-ez-web.log", logs: [{ at: Date.now(), level: "info", source: "operation", message: "Server is ready." }] });
       if (url === "/api/events") return new Response(": connected v1\n\n", { headers: { "content-type": "text/event-stream" } });
-      if (url === "/api/repos") return json({ root: "/tmp", repos: [{ name: "other", path: "/tmp/other" }] });
       if (url.startsWith("/api/github/public-repos")) return json({ repos: [{ name: "pi-ez-web", fullName: "bry-guy/pi-ez-web", private: false }], nextPage: null });
       if (url === "/api/github/device-login" && options.method === "POST") return json({ flow: { id: "ghf1", state: "waiting_user", userCode: "TEST-CODE", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z" } }, true, 202);
       if (url === "/api/github/device-login/ghf1" && !options.method) {
@@ -703,13 +702,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-act='repo-picker']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   root.querySelector("[data-source-toggle]").click();
-  root.querySelector("[data-source='local']").click();
+  assert.equal(root.querySelector("[data-source='local']"), null, "local repositories are not a source");
+  root.querySelector("[data-source='github']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
   const filter = root.querySelector(".modal-filter");
   filter.focus();
-  filter.value = "oth";
+  filter.value = "pi-ez";
   filter.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   assert.equal(dom.window.document.activeElement, filter);
-  root.querySelector("pi-repo-picker [data-repo='/tmp/other']").click();
+  root.querySelector("pi-repo-picker [data-repo='bry-guy/pi-ez-web']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(store.state.repoPickerOpen, false, "project picker closes before background setup");
   assert.equal(store.state.operations.find(operation => operation.kind === "create-project")?.status, "success");

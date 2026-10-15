@@ -24,7 +24,6 @@ const routesBeforeA2 = [
   "POST /sessions/:id/extension-ui/:requestId",
   "DELETE /sessions/:id/extension-ui/:requestId",
   "POST /chats",
-  "GET /repos",
   "POST /projects",
   "POST /projects/:id/fetch",
   "POST /projects/:id/sessions",
@@ -65,12 +64,12 @@ const routesBeforeA2 = [
 
 test("buildApi route inventory removes only the retired legacy merge route", () => {
   const retiredRoute = "POST /sessions/:id/merge";
-  assert.equal(routesBeforeA2.length, 58);
+  assert.equal(routesBeforeA2.length, 57);
   assert.equal(routesBeforeA2.filter(route => route === retiredRoute).length, 1);
 
   const api = buildApi({}, { syncCoordinator: { state: () => ({}) } });
   const routesAfterA2 = api.routes.map(({ method, path }) => `${method} ${path}`);
   const addedSince = ["GET /projects/:id/synced-sessions"];
   assert.deepEqual(routesAfterA2.filter(route => !addedSince.includes(route)), routesBeforeA2.filter(route => route !== retiredRoute));
-  assert.equal(routesAfterA2.length, 57 + addedSince.length);
+  assert.equal(routesAfterA2.length, 56 + addedSince.length);
 });

@@ -11,7 +11,7 @@ import { createWorkspaceFixture } from "./helpers/workspace-fixture.js";
 async function waitFor(promise) {
   let timer;
   try {
-    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Timed out waiting for the held operation.")), 5000); })]);
+    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Timed out waiting for the held operation.")), 30_000); })]);
   } finally {
     clearTimeout(timer);
   }

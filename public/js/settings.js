@@ -393,7 +393,7 @@ class PiSettings extends HTMLElement {
         : syncState.connection === "disabled"
           ? "Disabled"
           : "Sync client unavailable";
-    const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "local";
+    const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "github";
     const sourceEditable = settings.defaultRepositorySource?.editable !== false;
     const owner = settings.githubOwner?.value || "";
     const ownerEditable = settings.githubOwner?.editable !== false;
@@ -507,7 +507,7 @@ class PiSettings extends HTMLElement {
           <div class="settings-row settings-path-row">
             <div class="sr-main"><div class="sr-title">Default source</div><div class="sr-sub">Choose where the project picker opens first.</div></div>
             <select class="settings-select" data-setting="defaultRepositorySource" ${sourceEditable ? "" : "disabled"}>
-              ${["local", "github", "git-url"].map(value => `<option value="${value}" ${source === value ? "selected" : ""}>${value === "local" ? "Local" : value === "github" ? "GitHub" : "Git URL"}</option>`).join("")}
+              ${["github", "git-url"].map(value => `<option value="${value}" ${source === value ? "selected" : ""}>${value === "github" ? "GitHub" : "Git URL"}</option>`).join("")}
             </select>
           </div>
           <div class="settings-row settings-path-row">

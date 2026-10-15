@@ -162,7 +162,7 @@ test("repository source config merges nested defaults and validates the default"
   assert.equal(cfg.repositorySources.github.clientId, null);
 
   saveConfig({ repositorySources: { default: "invalid" } });
-  assert.equal(repositorySource(loadConfig()), "local");
+  assert.equal(repositorySource(loadConfig()), "github");
 });
 
 test("environment overrides repository source settings", () => {

@@ -84,7 +84,6 @@ export const api = {
     return fetch(`/api/sessions/${encodeURIComponent(id)}/push`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(body) }).then(j);
   },
   deleteBranch: (projectId, branch, options = {}) => fetch(`/api/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: { ...JH, ...(options?.operationId ? { "x-pi-operation-id": options.operationId } : {}) }, body: JSON.stringify(options || {}) }).then(j),
-  repos: () => fetch("/api/repos").then(j),
   repositorySources: () => fetch("/api/repository-sources").then(j),
   githubRepos: (query = "", page = 1) => fetch(`/api/github/repos?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}`).then(j),
   githubPublicRepos: (owner, query = "", page = 1) => {

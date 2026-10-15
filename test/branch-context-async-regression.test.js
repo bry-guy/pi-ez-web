@@ -92,7 +92,7 @@ exec "$PI_TEST_REAL_GIT" "$@"
       return { status: response.status, body: await response.json() };
     };
     const waitHeld = async (outcome, phase, startedAt) => {
-      const deadline = Date.now() + 8_000;
+      const deadline = Date.now() + 30_000; // matches the request timeout; git spawns are slow under parallel suite load
       while (!fs.existsSync(marker) && Date.now() < deadline && child.exitCode === null) await delay(10);
       assert.ok(fs.existsSync(marker), `phase: ${phase}, elapsed: ${Date.now() - startedAt}ms\n${output}\nrequest: ${outcome()?.error?.stack || JSON.stringify(outcome()) || "pending"}\ngit trace:\n${fs.existsSync(trace) ? fs.readFileSync(trace, "utf8") : "absent"}`);
     };

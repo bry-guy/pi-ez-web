@@ -54,7 +54,7 @@ class PiRepoPicker extends HTMLElement {
   availableSources() {
     const configured = store.state.repositorySources?.sources || [];
     const enabled = new Set(configured.filter(source => source.enabled !== false).map(source => source.id));
-    return ["local", "github", "git-url"].filter(id => !configured.length || enabled.has(id));
+    return ["github", "git-url"].filter(id => !configured.length || enabled.has(id));
   }
   chooseSource(source) {
     if (!this.availableSources().includes(source)) return;
@@ -85,7 +85,7 @@ class PiRepoPicker extends HTMLElement {
     const row = e.target.closest("[data-repo]");
     if (!row) return;
     const value = row.dataset.repo;
-    await this.connect(this.source || "local", value, row.dataset.fullName);
+    await this.connect(this.source || "github", value, row.dataset.fullName);
   }
   async connect(source, value, fullName) {
     if (this.connecting) return;
@@ -95,7 +95,7 @@ class PiRepoPicker extends HTMLElement {
     const operation = beginOperation("create-project", "Create project", "", "Request started.");
     try {
       const grant = this.querySelector(".grant-select")?.value || undefined;
-      const body = source === "local" ? { source, repoPath: value, operationId: operation.id } : source === "github" ? { source, fullName, grant, operationId: operation.id } : { source, url: value, grant, operationId: operation.id };
+      const body = source === "github" ? { source, fullName, grant, operationId: operation.id } : { source, url: value, grant, operationId: operation.id };
       const result = await api.newProject(body);
       this.connecting = false;
       operation.sessionId = result.sessionId || null;
@@ -110,7 +110,6 @@ class PiRepoPicker extends HTMLElement {
       completeOperation(operation, {}, err);
       const messages = {
         project_exists: "Already connected.",
-        not_a_git_repo: "Not a git repository.",
         github_auth_required: "Connect GitHub before selecting a private repository.",
         repository_exists: "That repository already exists in the repository root.",
         branch_exists: "That branch already exists.",
@@ -126,9 +125,9 @@ class PiRepoPicker extends HTMLElement {
   async load() {
     if (this.loaded || !store.state.repoPickerOpen) return;
     this.loaded = true;
-    const source = this.source || "local";
+    const source = this.source || "github";
     if (source === "git-url") { this.renderResults(); return; }
-    if (source === "github") {
+    {
       const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
       this.githubNextPage = null;
       if (!status?.authenticated && !status?.owner) {
@@ -154,13 +153,6 @@ class PiRepoPicker extends HTMLElement {
       }
       this.renderResults();
       return;
-    }
-    try {
-      const { repos, root } = await api.repos();
-      store.set({ repos, reposRoot: root });
-    } catch (err) {
-      this.errorMsg = `Could not load repositories: ${err.error || err.message || err}`;
-      store.set({ repos: [] });
     }
     this.renderResults();
   }
@@ -242,7 +234,7 @@ class PiRepoPicker extends HTMLElement {
     if (!store.state.repoPickerOpen) {
       this.innerHTML = ""; this.loaded = false; this.errorMsg = null; this.sourceMenuOpen = false; this.source = null; this.grants = null; return;
     }
-    if (!this.source) this.source = store.state.repoPickerSource || store.state.repositorySources?.default || "local";
+    if (!this.source) this.source = store.state.repoPickerSource || store.state.repositorySources?.default || "github";
     if (!this.querySelector(".scrim")) {
       this.innerHTML = `<div class="scrim">
         <div class="modal">
@@ -253,7 +245,7 @@ class PiRepoPicker extends HTMLElement {
             </div>
             <div class="modal-filter-row">
               <div class="source-picker">
-                <button class="account-chip" data-source-toggle aria-haspopup="listbox" aria-expanded="false">Local ▾</button>
+                <button class="account-chip" data-source-toggle aria-haspopup="listbox" aria-expanded="false">GitHub ▾</button>
                 <div class="source-menu" hidden></div>
               </div>
               <input class="modal-filter" placeholder="Find a repository" aria-label="Find a repository">
@@ -264,28 +256,28 @@ class PiRepoPicker extends HTMLElement {
         </div>
       </div>`;
     }
-    const label = { local: "Local", github: "GitHub", "git-url": "Git URL" }[this.source] || "Local";
+    const label = this.source === "git-url" ? "Git URL" : "GitHub";
     const toggle = this.querySelector("[data-source-toggle]");
     if (toggle) { toggle.textContent = `${label} ▾`; toggle.setAttribute("aria-expanded", String(this.sourceMenuOpen)); }
     const menu = this.querySelector(".source-menu");
     if (menu) {
       menu.hidden = !this.sourceMenuOpen;
-      menu.innerHTML = this.availableSources().map(source => `<button data-source="${source}" role="option" aria-selected="${source === this.source}">${source === "local" ? "Local" : source === "github" ? "GitHub" : "Git URL"}</button>`).join("");
+      menu.innerHTML = this.availableSources().map(source => `<button data-source="${source}" role="option" aria-selected="${source === this.source}">${source === "github" ? "GitHub" : "Git URL"}</button>`).join("");
     }
     const filter = this.querySelector(".modal-filter");
     if (filter) {
       filter.hidden = this.source === "git-url";
-      filter.placeholder = this.source === "github" ? "Find a GitHub repository" : "Find a repository";
+      filter.placeholder = "Find a GitHub repository";
       if (filter.value !== store.state.repoQuery && document.activeElement !== filter) filter.value = store.state.repoQuery;
     }
-    // Grants exist only for project workers (workspaced); local repos run in-process.
+    // Grants exist only when project workers (workspaced) are configured.
     if (this.grants === undefined || this.grants === null) {
       this.grants = [];
       api.workspaceGrants().then(result => { this.grants = result.grants || []; this.render(); }).catch(() => {});
     }
     const select = this.querySelector(".grant-select");
     if (select) {
-      select.hidden = this.source === "local" || this.grants.length < 2;
+      select.hidden = this.grants.length < 2;
       const chosen = select.value || "default";
       select.innerHTML = this.grants.map(g => `<option value="${esc(g.name)}" title="${esc(g.description || "")}"${g.name === chosen ? " selected" : ""}>${esc(g.name)}${g.anyProject ? "" : " (listed repos only)"}</option>`).join("");
     }
@@ -295,7 +287,7 @@ class PiRepoPicker extends HTMLElement {
   renderResults() {
     const list = this.querySelector(".modal-list");
     if (!list) return;
-    const source = this.source || "local";
+    const source = this.source || "github";
     if (this.connecting) {
       list.innerHTML = `<div class="modal-empty">Connecting repository…</div>`;
       return;
@@ -309,7 +301,7 @@ class PiRepoPicker extends HTMLElement {
       list.innerHTML = `<div class="git-url-form"><label for="git-url-input">Public HTTPS Git URL</label><input id="git-url-input" class="git-url-input" value="${esc(this.gitUrl || "")}" placeholder="https://github.com/owner/repository.git"><button class="connect-btn" data-git-url-connect>Connect</button><div class="modal-help">Private GitHub repositories use the GitHub source. SSH URLs are not supported yet.</div>${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}</div>`;
       return;
     }
-    if (source === "github") {
+    {
       const status = store.state.repositorySources?.sources?.find(item => item.id === "github");
       const q = store.state.repoQuery.trim().toLowerCase();
       const rows = (this.githubRepos || [])
@@ -329,14 +321,6 @@ class PiRepoPicker extends HTMLElement {
       list.innerHTML = `${login}${setup}${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${rows || empty}${more}`;
       return;
     }
-    const raw = store.state.repoQuery.trim();
-    const q = raw.toLowerCase();
-    const results = store.state.repos.filter(r => !q || r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q));
-    const isPath = raw.startsWith("/") || raw.startsWith("~/") || raw === "~";
-    const pathRow = isPath ? `<div class="repo-row" role="button" tabindex="0" data-repo="${esc(raw)}"><div class="rr-main"><div class="rr-name">Connect ${esc(raw)}</div><div class="rr-meta"><span>use this path directly</span></div></div><span class="rr-vis">path</span></div>` : "";
-    const rows = results.map(r => `<div class="repo-row" role="button" tabindex="0" data-repo="${esc(r.path)}"><div class="rr-main"><div class="rr-name">${esc(r.name)}</div><div class="rr-meta"><span>${esc(r.path)}</span></div></div><span class="rr-vis">local</span></div>`).join("");
-    const empty = `<div class="modal-empty">No repositories ${q ? "match" : `found under ${esc(store.state.reposRoot || "the repos root")}`}.<br>Type an absolute path to a git repo to connect it, or set PI_WEB_REPOS_ROOT.</div>`;
-    list.innerHTML = `${this.errorMsg ? `<div class="modal-empty">${esc(this.errorMsg)}</div>` : ""}${pathRow}${rows || (pathRow ? "" : empty)}`;
   }
 }
 

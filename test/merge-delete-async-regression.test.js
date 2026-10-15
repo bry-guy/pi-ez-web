@@ -97,7 +97,7 @@ exec "$PI_TEST_REAL_GIT" "$@"
       const route = method === "DELETE" ? `/api/projects/${projectId}/branches/${source.branch}` : `/api/sessions/${source.sessionId}/merge-local`;
       const operation = request(route, method, body).then(value => ({ value }), error => ({ error }));
       pending.push(operation);
-      const deadline = Date.now() + 8_000;
+      const deadline = Date.now() + 30_000; // matches the request timeout; git spawns are slow under parallel suite load
       while (!fs.existsSync(marker) && Date.now() < deadline && child.exitCode === null) await delay(10);
       assert.ok(fs.existsSync(marker), `hold ${mode}: ${output}`);
       const health = await fetch(base + "/api/health", { signal: AbortSignal.timeout(2_000) });

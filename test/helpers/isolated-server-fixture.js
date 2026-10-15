@@ -72,7 +72,8 @@ export async function createIsolatedServerFixture({ createProject: createInitial
     process.env.PI_WEB_MOCK_DELTA_MS = "0";
 
     const { startServer } = await import("../../server/index.js");
-    const { loadBindings, loadClosed, saveBindings } = await import("../../server/config.js");
+    const { loadBindings, loadClosed, loadConfig, newId, normalizeHooks, saveBindings, saveConfig } = await import("../../server/config.js");
+    const { projectHooks } = await import("../../server/hooks.js");
     const ws = await import("../../server/workspaces.js");
     let supervisor;
     ({ server, sup: supervisor } = startServer(0));
@@ -94,8 +95,16 @@ export async function createIsolatedServerFixture({ createProject: createInitial
       const snapshot = await state();
       return snapshot.projects.find(item => item.id === id);
     };
-    const createProject = async body => {
-      const created = await (await post("/api/projects", body)).json();
+    // Projects normally come from a GitHub or Git URL clone; tests register an existing checkout directly.
+    const createProject = async ({ repoPath: dir, name, hooks } = {}) => {
+      const cfg = loadConfig();
+      if (cfg.projects.some(item => item.repoPath === dir)) return { error: "project_exists" };
+      const created = { id: newId("p") };
+      cfg.projects.push({ id: created.id, name: name || path.basename(dir), repoPath: dir, source: { type: "git-url" }, hooks: normalizeHooks(hooks) });
+      saveConfig(cfg);
+      created.sessionId = (await supervisor.createSession({ cwd: dir })).id;
+      saveBindings({ ...loadBindings(), [created.sessionId]: { projectId: created.id, workspacePath: dir } });
+      Object.assign(created, { repoPath: dir, setup: null, setupNeeded: !!projectHooks(loadConfig(), loadConfig().projects.find(item => item.id === created.id)).setup });
       if (projectId === null) {
         projectId = created.id;
         mainSessionId = created.sessionId;

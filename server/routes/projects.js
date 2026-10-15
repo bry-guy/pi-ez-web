@@ -2,22 +2,12 @@ export function register(api, deps) {
   const { path, loadConfig, newId, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup, syncAdapter } = deps;
 
 
-  api.get("/repos", c => {
-    const root = c.req.query("root") ? resolvePath(c.req.query("root")) : reposRoot(loadConfig());
-    return c.json({ root, repos: ws.findRepos(root).map(p => ({ path: p, name: path.basename(p) })) });
-  });
-
   api.post("/projects", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
-    const source = body.source || (body.repoPath ? "local" : repositorySource(cfg));
-    let repoPath = null;
-    let sourceInfo = { type: "local" };
-    let cloned = false;
-    if (source === "local") {
-      repoPath = body.repoPath ? resolvePath(body.repoPath) : null;
-      if (!repoPath || !ws.isGitRepo(repoPath)) return err(c, 400, "not_a_git_repo");
-    } else {
+    const source = body.source || repositorySource(cfg);
+    let repoPath, sourceInfo, cloned;
+    {
       try {
         const result = await cloneRepository({
           source,

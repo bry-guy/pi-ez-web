@@ -8,7 +8,7 @@ import { createWorkspaceFixture } from "./helpers/workspace-fixture.js";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function waitForFile(file, child, output, timeoutMs = 10_000) {
+async function waitForFile(file, child, output, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(file) && Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) throw new Error(`server exited before Git shim blocked\n${output()}`);

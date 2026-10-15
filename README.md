@@ -1,6 +1,6 @@
 # pi-ez-web
 
-A self-hosted web UI for [Pi](https://github.com/earendil-works/pi), the coding agent. Browse Pi sessions, chat with an agent, and work with repositories from desktop or mobile.
+A self-hosted web UI for [Pi](https://github.com/earendil-works/pi), the coding agent: chat with an agent about your repositories from desktop or mobile, with the same extensions and tools as the Pi CLI.
 
 ![pi-ez-web desktop screenshot](design/screenshots/pi-ez-web-desktop.png)
 
@@ -11,67 +11,79 @@ A self-hosted web UI for [Pi](https://github.com/earendil-works/pi), the coding 
 
 </details>
 
-## Run it
+> [!WARNING]
+> pi-ez-web has no login. Anyone who can reach it can run shell commands as its user. Keep it on `127.0.0.1`, an SSH tunnel, or behind an authenticating reverse proxy on a private network.
 
-You’ll need Docker with the Compose plugin. Clone the repo and start the app:
+## What you host
+
+Everything comes from one image, `ghcr.io/bry-guy/pi-ez-web`, run with different commands:
+
+```text
+ browser ──▶ web ──HTTP + token──▶ workspaced ──▶ worker (project A)
+            :3141                    :3150     └──▶ worker (project B) …
+```
+
+| Component | Command | Required | Role |
+| --- | --- | --- | --- |
+| [**web**](docs/web.md) | `node server/index.js` (default) | yes | The site: chats, sidebar, settings, model and GitHub sign-in |
+| [**workspaced**](docs/workspaced.md) | `node workspaced/index.js` | for isolated projects | Starts, sleeps and wakes one worker per project; hands out grants |
+| [**worker**](docs/worker.md) | started by workspaced | — | Runs Pi for one repository with that project's tools and secrets |
+| [pi-sync](https://github.com/bry-guy/pi-sync) | separate image | no | Syncs conversations with the Pi CLI on your other machines |
+
+web alone is a complete app: it runs projects in its own process. Add workspaced when projects should have their own process, volume, tools and secrets.
+
+## What to configure
+
+**web**: a persistent volume for `PI_WEB_HOME`, `PI_CODING_AGENT_DIR` and `HOME`. To use workers, also set `PI_WEB_WORKSPACED_URL` and `WORKSPACED_TOKEN`. Models, GitHub and the default repository source are set in **Settings**. → [web](docs/web.md), [Configuration](docs/configuration.md)
+
+**workspaced**: the same `WORKSPACED_TOKEN` and a provider. With `WORKSPACED_PROVIDER=local`, workers are child processes. With `kubernetes`, each worker is a pod with its own PVC, and you also set `WORKSPACE_IMAGE` and RBAC. Optional: `WORKSPACED_GRANTS` (what each project's worker may hold) and `WORKSPACED_IDLE_MINUTES` (default 5). → [workspaced](docs/workspaced.md)
+
+**workers**: nothing to deploy. Each project brings its own tools (`mise.toml`, `script/bootstrap`, …) installed by its **setup** hook. Secrets and cluster access come from the grant you pick when adding the repository. For OS packages, build a derived image (`FROM ghcr.io/bry-guy/pi-ez-web`) and set `WORKSPACE_IMAGE`. → [worker](docs/worker.md)
+
+## Try it with Docker Compose
+
+You need Docker with the Compose plugin.
+
+**1. web only.** One container; projects run inside it.
 
 ```sh
-git clone https://github.com/bry-guy/pi-ez-web.git
-cd pi-ez-web
+git clone https://github.com/bry-guy/pi-ez-web.git && cd pi-ez-web
 docker compose up --build -d
 ```
 
-Open [http://127.0.0.1:3141](http://127.0.0.1:3141); use the port you set if it differs. Compose builds the image locally and stores state in the `pi-ez-web-data` volume. No `config.json` is needed for the first start.
+Open <http://127.0.0.1:3141>. In **Settings**, sign in to a model provider, then use **Projects → Git URL** to clone a public repository and start a chat.
 
-For a local browser check, start the mock server in one terminal:
-
-```sh
-PORT=3141 npm run dev
-```
-
-Then open a browser in another terminal:
+**2. With workers.** Adds workspaced; each project gets its own worker process and state directory.
 
 ```sh
-npm run browser -- --device="iPhone 13" http://localhost:3141
+echo "WORKSPACED_TOKEN=$(openssl rand -hex 32)" >> .env
+docker compose -f compose.yaml -f compose.workers.yaml up --build -d
 ```
 
-## First chat
+Workers in Compose share one container and one user, so this separates state, not trust. For real isolation (own pod, volume, ServiceAccount, egress policy, optional VM sandbox), run workspaced with `WORKSPACED_PROVIDER=kubernetes`; see [workspaced](docs/workspaced.md#grants). [bry-guy/infra](https://github.com/bry-guy/infra/tree/main/selfhost/platform/pi-ez-workspaces) is a working k3s + Argo CD example.
 
-1. In **Settings**, connect a model provider with its browser sign-in or API key.
-2. Choose **Projects → Git URL** to clone a public HTTPS repository. For local repositories, mount the directory into the container. Private GitHub access needs server-side OAuth setup or an injected token; see [Configuration](docs/configuration.md).
-3. Open the project and start a chat.
-
-Provider credentials and app state stay in the persistent volume.
-
-## Optional configuration
-
-You can change the default model, project source, and GitHub owner in **Settings**. `config.json` is optional; use it to predefine project paths, hooks, or Pi packages. Compose’s `.env` file controls host port and image settings, but does not pass arbitrary variables into the app. See [Configuration](docs/configuration.md) before adding container variables or private GitHub access.
+State lives in the `pi-ez-web-data` and `pi-ez-workspaced-data` volumes. `docker compose down` keeps them; `down --volumes` deletes them.
 
 ## Access from another device
 
-Compose binds to `127.0.0.1` by default. Change the host port by setting `PI_WEB_PORT` in an optional `.env` file, for example:
-
-```sh
-PI_WEB_PORT=3142
-```
-
-After changing it, apply the setting with `docker compose up -d`. For a remote server, keep the loopback binding and connect with an SSH tunnel. If you changed the server port, replace the right-hand port below:
+Compose binds to `127.0.0.1:3141`; change the port with `PI_WEB_PORT` in `.env`. From another machine, tunnel:
 
 ```sh
 ssh -L 3141:127.0.0.1:3141 user@your-server
 ```
 
-There is no built-in authentication or sandbox; anyone who can reach the app can run trusted commands with the service user's permissions. Don’t expose it directly to the internet. For shared access, use a TLS- and authentication-protected reverse proxy on a network limited to trusted users; it must support streaming responses.
+For shared access, put web behind a TLS reverse proxy that authenticates users and passes the `/api/events` stream unbuffered. Never expose workspaced or workers; only web talks to them.
 
-## Data and updates
-
-Compose stores app settings, Pi credentials, chats, repositories, and worktrees in the `pi-ez-web-data` volume. `docker compose down` keeps it; `docker compose down --volumes` deletes it. Back up the volume before upgrading. From your checkout, update and rebuild with:
+## Upgrade and back up
 
 ```sh
-git pull
-docker compose up --build -d
+git pull && docker compose up --build -d   # add the same -f flags you started with
 ```
 
-See [Deployment](docs/deployment.md) for safe backup, restore, and rollback instructions.
+Back up the volumes first. [Deployment](docs/deployment.md) has backup, restore and rollback steps.
 
-[Configuration](docs/configuration.md) · [Deployment](docs/deployment.md)
+## Docs
+
+[web](docs/web.md) · [workspaced](docs/workspaced.md) · [worker](docs/worker.md) · [Configuration](docs/configuration.md) · [Deployment](docs/deployment.md) · [Implementation](docs/implementation.md) · [Roadmap](docs/roadmap.md)
+
+Development: `npm test`; `PORT=3141 npm run dev` starts a mock server with no model access.

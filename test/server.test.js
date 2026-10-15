@@ -153,15 +153,6 @@ test("repository-owner changes do not reload Pi configuration", async () => {
   }
 });
 
-test("repository picker uses the configured local repositories root", async () => {
-  const state = await (await get("/api/state")).json();
-  assert.equal(state.reposRoot, path.resolve(tmp, "local-repositories"));
-  assert.equal(state.reposRootSource, "config");
-  const repos = await (await get("/api/repos")).json();
-  assert.equal(repos.root, state.reposRoot);
-  assert.deepEqual(repos.repos, [{ path: repo, name: "repo" }]);
-});
-
 test("plain chats use isolated scratch workspaces and retain legacy discovery", async () => {
   const sse = new SSE(base + "/api/events");
   const a = await (await post("/api/chats")).json();

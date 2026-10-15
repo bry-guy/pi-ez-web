@@ -67,7 +67,7 @@ scratch directories under `chats/`; legacy sessions at the shared `chats/` cwd
 remain discoverable. Scratch directories are retained when a chat is closed and
 may be pruned manually. Override the app home with `PI_WEB_HOME`.
 
-The app supports Local, GitHub, and public HTTPS Git URL repository sources. Projects can inherit deployment-wide `projectHooks` and override them with a per-project `hooks` object; configured hooks run in the selected project checkout/worktree and expose their result through Workspace settings.
+The app supports GitHub and public HTTPS Git URL repository sources; there is no local-directory source. Projects can inherit deployment-wide `projectHooks` and override them with a per-project `hooks` object; configured hooks run in the selected project checkout/worktree and expose their result through Workspace settings.
 A configured GitHub owner can browse and clone public repositories without
 signing in; GitHub device authorization adds private repositories and stores
 its token separately from `config.json`. Private clones use a temporary
@@ -141,11 +141,10 @@ first message; pi-ez-web does not append a session name entry. The server sorts
 project session roots by numeric activity time, including activity in a forked
 child.
 
-The repository picker scans `$HOME/src` by default. Set `reposRoot` in
-`~/.pi-web-ui/config.json`, use `PI_WEB_REPOS_ROOT`, or type an absolute path
-in the picker to use a different local repository directory. The environment
-variable takes precedence over the config value. The picker also supports
-GitHub device login/private repository cloning and public HTTPS Git URLs.
+Repositories are cloned into `$HOME/src` by default. Set `reposRoot` in
+`~/.pi-web-ui/config.json` or `PI_WEB_REPOS_ROOT` to change it; the environment
+variable takes precedence. The picker supports GitHub device login/private
+repository cloning and public HTTPS Git URLs.
 `defaultModel: null` means Automatic; an explicit default must be currently
 available. Chats and project sessions can be created without a model and return
 `409 model_required` on the first prompt when no provider is usable.

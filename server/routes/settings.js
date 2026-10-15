@@ -71,7 +71,7 @@ export function register(api, deps) {
     }
     if (body.defaultRepositorySource !== undefined) {
       if (process.env.PI_WEB_REPOSITORY_SOURCE) return err(c, 409, "setting_overridden", { field: "defaultRepositorySource", source: "PI_WEB_REPOSITORY_SOURCE" });
-      if (!["local", "github", "git-url"].includes(body.defaultRepositorySource)) return err(c, 400, "invalid_repository_source");
+      if (!["github", "git-url"].includes(body.defaultRepositorySource)) return err(c, 400, "invalid_repository_source");
       cfg.repositorySources.default = body.defaultRepositorySource;
     }
     if (body.githubOwner !== undefined) {

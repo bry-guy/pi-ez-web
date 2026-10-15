@@ -10,30 +10,12 @@ In **Settings**, sign in to a provider or add an API key, then choose a default 
 
 ## Add repositories
 
-The project picker offers **Local**, **GitHub**, and **Git URL** sources:
+The project picker offers two sources. Both clone into `reposRoot` (`/data/repos` in Compose), or into the worker's own volume when workspaced is configured:
 
-- **Local** scans `reposRoot`, which is `/data/repos` in Compose. Git tracks worktree paths, so keep repository paths stable.
-- **Git URL** clones public HTTPS Git URLs. SSH URLs are not supported.
 - **GitHub** can browse public or private repositories. Private access uses GitHub sign-in; the server needs a public OAuth App client ID (`PI_WEB_GITHUB_CLIENT_ID`), not a client secret. Alternatively, set an externally managed `PI_WEB_GITHUB_TOKEN` in the service environment; it takes precedence over stored sign-in. The owner filter (`PI_WEB_GITHUB_OWNER`) is optional.
+- **Git URL** clones public HTTPS Git URLs. SSH URLs are not supported.
 
-The Compose file sets `PI_WEB_REPOS_ROOT=/data/repos`, which makes **Local repositories** read-only in Settings. To use a host checkout, add both a bind mount and a matching repository-root override in a Compose file kept outside the repo:
-
-```yaml
-services:
-  pi-ez-web:
-    environment:
-      PI_WEB_REPOS_ROOT: /srv/projects
-    volumes:
-      - /srv/projects:/srv/projects
-```
-
-Start with that override and keep using it on later starts and updates; without it, Compose returns to `/data/repos`:
-
-```sh
-docker compose -f compose.yaml -f /path/to/compose.private.yaml up -d
-```
-
-The container runs as UID/GID 1000, so the mounted directory must be writable by that user. GitHub sign-in credentials are stored in `$PI_WEB_HOME/github-auth.json`; provider credentials are separate and remain in Pi's auth directory.
+Existing checkouts on the host can't be connected; push them somewhere and clone. GitHub sign-in credentials are stored in `$PI_WEB_HOME/github-auth.json`; provider credentials are separate and remain in Pi's auth directory.
 
 ## Optional config file
 
@@ -42,7 +24,7 @@ Use `config.json` when you want to predefine projects or change settings that ar
 | Setting | Purpose |
 | --- | --- |
 | `projects` | Repositories and optional project hooks |
-| `reposRoot` | Local repository scan and clone location |
+| `reposRoot` | Where repositories are cloned |
 | `worktreeRoot` | Where the app creates worktrees; use a stable absolute path |
 | `defaultModel` | Automatic selection (`null`) or a `provider/modelId` |
 | `defaultThinkingLevel` | Default reasoning level for new chats |

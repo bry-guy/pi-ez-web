@@ -34,7 +34,7 @@ const DEFAULTS = {
     extensions: [], // additional package sources or server-local extension paths
   },
   repositorySources: {
-    default: "local",
+    default: "github",
     github: { clientId: null, owner: null },
   },
 };
@@ -230,7 +230,7 @@ export function loadConfig() {
     repositorySources: {
       ...DEFAULTS.repositorySources,
       ...sources,
-      default: ["local", "github", "git-url"].includes(sources.default) ? sources.default : DEFAULTS.repositorySources.default,
+      default: ["github", "git-url"].includes(sources.default) ? sources.default : DEFAULTS.repositorySources.default,
       github: {
         ...DEFAULTS.repositorySources.github,
         ...github,
@@ -259,8 +259,8 @@ export function reposRoot(cfg = loadConfig()) {
 }
 
 export function repositorySource(cfg = loadConfig()) {
-  const value = process.env.PI_WEB_REPOSITORY_SOURCE || cfg.repositorySources?.default || "local";
-  return ["local", "github", "git-url"].includes(value) ? value : "local";
+  const value = process.env.PI_WEB_REPOSITORY_SOURCE || cfg.repositorySources?.default;
+  return ["github", "git-url"].includes(value) ? value : "github";
 }
 
 export function githubConfig(cfg = loadConfig()) {
