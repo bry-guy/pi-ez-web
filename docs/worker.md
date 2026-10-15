@@ -26,6 +26,9 @@ USER node
 
 When more than `WORKSPACED_MAX_AWAKE` workers would run, the least recently used idle one sleeps: its volume stays, its processes stop, and the next request wakes it. Expanding or opening a sleeping project in the sidebar starts waking it right away. After start, a worker preloads Pi and its extensions in the background, and keeps compiled extensions in `~/.cache/pi-ez-web/jiti` so restarts don't recompile them. A worker is busy, and never put to sleep, while an agent turn, compaction or queued prompt is running. Pin a project with **Keep awake** to keep dev servers running.
 
+### When a worker breaks
+Kubernetes restarts a worker that exits, runs out of memory, or stops answering `/api/health` for a minute (liveness); a startup probe gives slow sandboxes such as Kata VMs up to 5 minutes to boot first. Chats survive on the volume; only a running turn is lost. The sidebar marks a worker that crashed, and replaces its status with **restart** when it cannot run (crash loop, image pull failure, unschedulable, stuck sandbox, eviction). The local (Compose) provider restarts a crashed worker up to 3 times in 10 minutes, then marks it failed.
+
 ## Health
 
 `GET /api/health` returns `ok`, `buildId` and `busy`. It is the readiness probe.

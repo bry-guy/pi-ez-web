@@ -63,7 +63,11 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
 
   app.post("/v1/workspaces/:name/wake", named(async (c, name) => {
     lifecycle.touch(name);
-    return await lifecycle.ensureAwake(name) ? c.json({ ok: true }) : starting(c, name);
+    return await lifecycle.ensureAwake(name) ? c.json({ ok: true }) : await starting(c, name);
+  }));
+  app.post("/v1/workspaces/:name/restart", named(async (c, name) => {
+    await lifecycle.restart(name);
+    return c.json({ ok: true });
   }));
   app.post("/v1/workspaces/:name/sleep", named(async (c, name) => {
     await lifecycle.sleep(name, "requested");
@@ -109,7 +113,7 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
     // Web's own polling never wakes a worker; anything the user does does.
     if (PASSIVE.test(rest)) {
       if ((await lifecycle.info(name))?.state === "sleeping") return c.json({ error: "workspace_sleeping", name }, 503);
-    } else if (!await lifecycle.ensureAwake(name)) return starting(c, name);
+    } else if (!await lifecycle.ensureAwake(name)) return await starting(c, name);
     const base = provider.upstream(name);
     if (!base) return c.json({ error: "workspace_unavailable", name }, 502);
     const raw = c.req.url;
@@ -133,7 +137,9 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
     return new Response(upstream.body, { status: upstream.status, headers: out });
   });
 
-  function starting(c, name) {
+  async function starting(c, name) {
+    const w = await lifecycle.info(name).catch(() => null);
+    if (w?.problem?.fatal) return c.json({ error: "workspace_failed", name, problem: w.problem, message: `This project's worker is not running. ${w.problem.message}` }, 503);
     c.header("retry-after", "5");
     return c.json({ error: "workspace_starting", name, message: "This project is starting. Try again in a few seconds." }, 503);
   }

@@ -68,6 +68,10 @@ export function deploymentManifest({ name, repository, image, grant = { name: "d
     name: "workspace", image, env, ...(envFrom.length ? { envFrom } : {}),
     ports: [{ name: "http", containerPort: WORKSPACE_PORT }],
     readinessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 1 },
+    // Startup allows a slow sandbox boot (Kata) without liveness killing it;
+    // liveness then restarts a worker that stops answering for a minute.
+    startupProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 1, failureThreshold: 300 },
+    livenessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 },
     volumeMounts: [{ name: "data", mountPath: DATA }, { name: "github", mountPath: GITHUB_DIR, readOnly: true }, { name: "model", mountPath: MODEL_DIR, readOnly: true }],
   }];
   if (runtimeClassName) {

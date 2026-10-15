@@ -12,6 +12,9 @@ export function createLifecycle({
   const lastUsed = new Map();
   const inflight = new Map();
   const waking = new Map();
+  // Wakes run one at a time: each start (and its preload, or a Kata VM boot)
+  // briefly needs more memory than an idle worker, so they must not stack.
+  let wakeQueue = Promise.resolve();
   let cache = { at: -Infinity, byName: new Map() };
 
   async function refresh() {
@@ -48,7 +51,9 @@ export function createLifecycle({
   async function makeRoom(keep, reserve = 0) {
     if (!maxAwake) return;
     const list = [...(await refresh())];
-    const awake = list.filter(w => w.state !== "sleeping" && w.name !== keep);
+    // A failed worker (crash loop, unschedulable, sandbox won't boot) holds no
+    // running process worth counting; leave it for the user to see and restart.
+    const awake = list.filter(w => w.state !== "sleeping" && w.state !== "failed" && !w.problem?.fatal && w.name !== keep);
     let excess = awake.length + reserve - maxAwake;
     const candidates = awake.sort((a, b) => (lastUsed.get(a.name) ?? 0) - (lastUsed.get(b.name) ?? 0));
     for (const w of candidates) {
@@ -65,6 +70,8 @@ export function createLifecycle({
     await provider.scale(name, 1);
     const deadline = started + wakeTimeoutMs;
     while (now() < deadline) {
+      const w = cache.byName.get(name);
+      if (w?.problem?.fatal) { log(`workspaced: ${name} failed to start: ${w.problem.reason}`); return false; }
       if (await health(name)) {
         log(`workspaced: woke ${name} in ${now() - started}ms`);
         cache.at = -Infinity;
@@ -72,6 +79,7 @@ export function createLifecycle({
         return true;
       }
       await new Promise(r => setTimeout(r, pollMs));
+      await refresh().catch(() => {});
     }
     return false;
   }
@@ -79,8 +87,13 @@ export function createLifecycle({
   // Resolves true once the worker answers; false if it is still starting.
   async function ensureAwake(name) {
     const w = await info(name);
+    if (w?.problem?.fatal) return false;
     if (w?.state !== "sleeping" && w?.state !== "starting") return true;
-    if (!waking.has(name)) waking.set(name, doWake(name).finally(() => waking.delete(name)));
+    if (!waking.has(name)) {
+      const run = wakeQueue.then(() => doWake(name)).finally(() => waking.delete(name));
+      wakeQueue = run.catch(() => {});
+      waking.set(name, run);
+    }
     return waking.get(name);
   }
 
@@ -105,6 +118,15 @@ export function createLifecycle({
   timer?.unref?.();
 
   return {
+    // Restart clears a failed worker; makes room first, like a wake.
+    async restart(name) {
+      if (!provider.restart) throw Object.assign(new Error("restart unsupported"), { status: 501, code: "restart_unsupported" });
+      await makeRoom(name, 1).catch(() => {});
+      await provider.restart(name);
+      cache.at = -Infinity;
+      touch(name);
+      log(`workspaced: restarted ${name}`);
+    },
     info, touch, ensureAwake, sleep, sweep, refresh, makeRoom,
     begin(name) { inflight.set(name, (inflight.get(name) || 0) + 1); touch(name); },
     end(name) { inflight.set(name, Math.max(0, (inflight.get(name) || 1) - 1)); touch(name); },

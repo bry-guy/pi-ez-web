@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createWorkspaced } from "../workspaced/index.js";
-import { deploymentState, kubernetesConfig, kubernetesProvider } from "../workspaced/kubernetes.js";
+import { deploymentState, kubernetesConfig, kubernetesProvider, podProblem, STUCK_START_MS } from "../workspaced/kubernetes.js";
 import { createLifecycle } from "../workspaced/lifecycle.js";
 import { parseGrants, repoKey, withGrantCheck } from "../workspaced/grants.js";
 import { localProvider } from "../workspaced/local.js";
@@ -95,7 +95,7 @@ test("local provider persists workspaces, spawns workers, and writes auth 0600",
   await provider.create({ name: "srvivor", repository: "bry-guy/srvivor" });
   assert.equal(spawned[0].PI_WEB_REPOS_ROOT, path.join(root, "srvivor", "repos"));
   assert.match(provider.upstream("srvivor"), /^http:\/\/127\.0\.0\.1:\d+$/);
-  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", grant: "default", ready: true, state: "running", pinned: false, containers: false }]);
+  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", grant: "default", ready: true, state: "running", problem: null, pinned: false, containers: false }]);
   await provider.setGitHubAuth({ accessToken: "t" });
   assert.equal(statSync(path.join(root, "github-auth.json")).mode & 0o777, 0o600);
   await assert.rejects(provider.create({ name: "srvivor", repository: "x/srvivor" }), { code: "workspace_name_taken" });
@@ -409,5 +409,125 @@ test("waking past the limit sleeps the least recently used idle worker first", a
     pinned.b = true; states.a = "running"; clock = 30; lifecycle.touch("c"); clock = 40; lifecycle.touch("a");
     await lifecycle.sweep();
     assert.deepEqual(calls.at(-1), ["c", 0], "pinned b is never chosen");
+  } finally { worker.close(); }
+});
+
+const pod = (status, created = "2026-01-01T00:00:00Z") => ({ metadata: { creationTimestamp: created }, status });
+const T0 = Date.parse("2026-01-01T00:00:00Z");
+
+test("podProblem names OOM, crash loops, scheduling and stuck sandboxes the same for runc and Kata", () => {
+  const running = { name: "workspace", restartCount: 0, state: { running: {} } };
+  assert.equal(podProblem(pod({ phase: "Running", containerStatuses: [running] }), T0), null);
+
+  const oomOnce = podProblem(pod({ phase: "Running", containerStatuses: [{ ...running, restartCount: 1, lastState: { terminated: { reason: "OOMKilled", exitCode: 137 } } }] }), T0);
+  assert.equal(oomOnce.reason, "OOMKilled"); assert.equal(oomOnce.fatal, false); assert.equal(oomOnce.restarts, 1);
+
+  // Kata: the VM's OOM can surface as exit 137 with reason Error.
+  const vmKilled = podProblem(pod({ phase: "Running", containerStatuses: [{ ...running, restartCount: 2, lastState: { terminated: { reason: "Error", exitCode: 137 } } }] }), T0);
+  assert.equal(vmKilled.reason, "OOMKilled");
+
+  const loop = podProblem(pod({ phase: "Running", containerStatuses: [{ name: "workspace", restartCount: 5, state: { waiting: { reason: "CrashLoopBackOff" } }, lastState: { terminated: { reason: "OOMKilled", exitCode: 137 } } }] }), T0);
+  assert.deepEqual([loop.reason, loop.fatal], ["OOMKilled", true]);
+  assert.match(loop.message, /out of memory/);
+
+  // Kata overhead can make a pod unschedulable on a full node.
+  const unsched = podProblem(pod({ phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable", message: "0/3 nodes: Insufficient memory" }] }), T0);
+  assert.deepEqual([unsched.reason, unsched.fatal], ["Unschedulable", true]);
+
+  // A Kata sandbox that never boots leaves the container waiting in ContainerCreating.
+  const creating = { phase: "Pending", containerStatuses: [{ name: "workspace", restartCount: 0, state: { waiting: { reason: "ContainerCreating" } } }] };
+  assert.equal(podProblem(pod(creating), T0 + 30_000), null, "still within normal boot time");
+  assert.equal(podProblem(pod(creating), T0 + STUCK_START_MS + 1).reason, "StuckStarting");
+
+  assert.equal(podProblem(pod({ phase: "Failed", reason: "Evicted", message: "low memory" }), T0).reason, "Evicted");
+  assert.equal(podProblem(pod({ phase: "Running", containerStatuses: [{ name: "workspace", state: { waiting: { reason: "ImagePullBackOff" } } }] }), T0).fatal, true);
+});
+
+test("kubernetes list reports the newest pod's problem, not for sleeping workers; restart rolls a new pod", async () => {
+  const calls = [];
+  const deploy = (name, replicas) => ({ metadata: { name: `ws-${name}`, labels: { "pi-ez.dev/workspace": name }, annotations: {} }, spec: { replicas }, status: {} });
+  const kube = { request: async (method, p, body) => {
+    calls.push([method, p, body]);
+    if (method === "GET" && p.includes("/deployments?")) return { status: 200, body: { items: [deploy("a", 1), deploy("b", 0)] } };
+    if (method === "GET" && p.includes("/pods?")) return { status: 200, body: { items: [
+      { metadata: { labels: { "pi-ez.dev/workspace": "a" }, creationTimestamp: "2026-01-01T00:00:00Z" }, status: { containerStatuses: [{ restartCount: 3, state: { waiting: { reason: "CrashLoopBackOff" } }, lastState: { terminated: { reason: "Error", exitCode: 1 } } }] } },
+      { metadata: { labels: { "pi-ez.dev/workspace": "b" }, creationTimestamp: "2026-01-01T00:00:00Z" }, status: { phase: "Failed", reason: "Evicted" } },
+    ] } };
+    if (method === "GET") return { status: 200, body: deploy("a", 1) };
+    return { status: 200, body: {} };
+  } };
+  const provider = kubernetesProvider({ kube });
+  const [a, b] = await provider.list();
+  assert.equal(a.problem.reason, "CrashLoopBackOff"); assert.equal(a.problem.fatal, true);
+  assert.equal(b.problem, null);
+  await provider.restart("a");
+  const patchBody = calls.find(c => c[0] === "PATCH")[2];
+  assert.equal(patchBody.spec.replicas, 1);
+  assert.ok(patchBody.spec.template.metadata.annotations["pi-ez.dev/restarted-at"]);
+});
+
+test("worker manifests give a slow sandbox time to boot, then restart a hung worker", () => {
+  const d = deploymentManifest({ name: "x", repository: "r", image: "i", grant: { name: "default" } });
+  const c = d.spec.template.spec.containers[0];
+  assert.ok(c.startupProbe.periodSeconds * c.startupProbe.failureThreshold >= 300);
+  assert.equal(c.livenessProbe.httpGet.path, "/api/health");
+});
+
+test("local provider restarts a crashed worker, stops after repeated crashes, and restart clears it", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "ws-crash-"));
+  const children = [];
+  const spawnImpl = () => { const child = new EventEmitter(); child.exitCode = null; child.kill = () => { child.exitCode = 0; child.emit("exit", 0, "SIGTERM"); }; children.push(child); return child; };
+  const provider = localProvider({ root, spawnImpl, maxRestarts: 2, restartDelayMs: 1, log: () => {} });
+  await provider.create({ name: "app", repository: "https://x/app.git", grant: { name: "default" } });
+  const crash = () => { const c = children.at(-1); c.exitCode = 137; c.emit("exit", null, "SIGKILL"); };
+  const settle = () => new Promise(r => setTimeout(r, 30));
+
+  crash(); await settle();
+  let [w] = await provider.list();
+  assert.equal(w.state, "running", "restarted");
+  assert.equal(w.problem.reason, "OOMKilled"); assert.equal(w.problem.fatal, false);
+  assert.equal(children.length, 2);
+
+  crash(); await settle(); crash(); await settle();
+  [w] = await provider.list();
+  assert.deepEqual([w.state, w.problem.fatal], ["failed", true]);
+  assert.equal(children.length, 3, "gave up after maxRestarts");
+
+  await provider.restart("app");
+  [w] = await provider.list();
+  assert.deepEqual([w.state, w.problem], ["running", null]);
+
+  // Sleeping on purpose is not a crash.
+  await provider.scale("app", 0); await settle();
+  [w] = await provider.list();
+  assert.deepEqual([w.state, w.problem], ["sleeping", null]);
+  provider.stop();
+});
+
+test("wakes run one at a time; a worker that cannot start answers 503 workspace_failed fast", async () => {
+  let active = 0, peak = 0;
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true })));
+  const states = { a: "sleeping", b: "sleeping", bad: "sleeping" };
+  const problems = {};
+  const provider = {
+    list: async () => Object.entries(states).map(([name, state]) => ({ name, state, pinned: false, problem: problems[name] || null })),
+    upstream: name => name === "bad" ? "http://127.0.0.1:1" : `http://127.0.0.1:${worker.address().port}`,
+    scale: async (name, n) => {
+      active++; peak = Math.max(peak, active);
+      await new Promise(r => setTimeout(r, 20));
+      states[name] = n ? "running" : "sleeping"; active--;
+      if (name === "bad" && n) { states.bad = "failed"; problems.bad = { reason: "Unschedulable", message: "No node can run it.", fatal: true }; }
+    },
+  };
+  const lifecycle = createLifecycle({ provider, maxAwake: 0, pollMs: 5, wakeTimeoutMs: 5_000, cacheMs: 0, log: () => {} });
+  try {
+    assert.deepEqual(await Promise.all([lifecycle.ensureAwake("a"), lifecycle.ensureAwake("b")]), [true, true]);
+    assert.equal(peak, 1);
+    const t0 = Date.now();
+    const res = await createWorkspaced({ provider, token: TOKEN, lifecycle }).request("/v1/workspaces/bad/api/files", { headers: auth });
+    assert.ok(Date.now() - t0 < 2_000, "did not wait out the wake timeout");
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.error, "workspace_failed"); assert.equal(body.problem.reason, "Unschedulable");
   } finally { worker.close(); }
 });

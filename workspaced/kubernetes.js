@@ -8,6 +8,41 @@ export function deploymentState(d) {
   return (d.status?.readyReplicas || 0) > 0 ? "running" : "starting";
 }
 
+// A sandbox (Kata VM) or container that hasn't started after this long is stuck,
+// not slow; kubelet keeps retrying but the user should hear about it.
+export const STUCK_START_MS = 3 * 60_000;
+const WAITING_PROBLEMS = new Set(["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "InvalidImageName"]);
+
+// What, if anything, is wrong with a worker, from its pod. Works the same for
+// runc and Kata: an OOM inside the VM is still a container OOMKilled, a VM the
+// kernel or kubelet kills shows as a restart or eviction, and a VM that never
+// boots leaves the pod in ContainerCreating (sandbox errors are only events).
+export function podProblem(pod, now = Date.now()) {
+  if (!pod) return null;
+  const s = pod.status || {};
+  const c = (s.containerStatuses || []).find(x => x.name === "workspace") || (s.containerStatuses || [])[0];
+  const restarts = c?.restartCount || 0;
+  const last = c?.lastState?.terminated;
+  const recent = last && { reason: last.reason || `exit ${last.exitCode}`, exitCode: last.exitCode, at: last.finishedAt || null };
+  const oom = recent && (recent.reason === "OOMKilled" || recent.exitCode === 137);
+  const problem = (reason, message, fatal) => ({ reason, message, fatal, restarts, last: recent || null });
+  if (s.phase === "Failed") return problem(s.reason || "Failed", s.message || "The worker's pod failed.", true);
+  const unsched = (s.conditions || []).find(x => x.type === "PodScheduled" && x.status === "False");
+  if (unsched) return problem("Unschedulable", `No node can run it: ${unsched.message || unsched.reason}`, true);
+  const waiting = c?.state?.waiting;
+  if (waiting && WAITING_PROBLEMS.has(waiting.reason)) {
+    const message = oom ? "It keeps running out of memory." : waiting.message || waiting.reason;
+    return problem(oom ? "OOMKilled" : waiting.reason, message, true);
+  }
+  const created = Date.parse(pod.metadata?.creationTimestamp || "") || now;
+  if (!c?.state?.running && !c?.state?.terminated && now - created > STUCK_START_MS) {
+    return problem("StuckStarting", "It has not started after 3 minutes; the sandbox may be failing to boot.", true);
+  }
+  if (oom) return problem("OOMKilled", "It ran out of memory and was restarted; the turn that was running was lost.", false);
+  if (recent && restarts) return problem(recent.reason, `It crashed (${recent.reason}) and was restarted.`, false);
+  return null;
+}
+
 // Workspaces as ws-<name> PVC + Service + Deployment. The cluster's labels and
 // annotations are the record of what exists; workspaced keeps no database.
 export function kubernetesConfig(env = process.env) {
@@ -84,16 +119,32 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
     if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
   }
 
+  // Newest pod per workspace; pods are optional context, never fatal to listing.
+  async function podsByName(ns) {
+    const res = await kube.request("GET", `${core("pods", ns)}?labelSelector=${selector}`);
+    const byName = new Map();
+    if (res.status !== 200) return byName;
+    for (const pod of res.body.items || []) {
+      const name = pod.metadata?.labels?.[NAME_LABEL];
+      const prev = byName.get(name);
+      if (!prev || (pod.metadata.creationTimestamp || "") > (prev.metadata.creationTimestamp || "")) byName.set(name, pod);
+    }
+    return byName;
+  }
+
   return {
     async list() {
       const out = [];
       for (const ns of namespaces) {
         const res = await kube.request("GET", `${apps(ns)}?labelSelector=${selector}`);
         if (res.status !== 200) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+        const pods = await podsByName(ns);
         for (const d of res.body.items || []) {
           const name = d.metadata.labels?.[NAME_LABEL];
           located.set(name, ns);
+          const problem = deploymentState(d) === "sleeping" ? null : podProblem(pods.get(name));
           out.push({
+            problem,
             name,
             repository: d.metadata.annotations?.[REPO_ANNOTATION] || null,
             grant: d.metadata.annotations?.[GRANT_ANNOTATION] || DEFAULT_GRANT,
@@ -107,6 +158,8 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
       return out;
     },
     scale: (name, replicas) => patch(name, { spec: { replicas } }),
+    // Like `kubectl rollout restart`: a new pod (and, under Kata, a new VM); the volume stays.
+    restart: name => patch(name, { spec: { replicas: 1, template: { metadata: { annotations: { "pi-ez.dev/restarted-at": new Date().toISOString() } } } } }),
     // The annotation is the record; workspaced keeps no database.
     setPinned: (name, pinned) => patch(name, { metadata: { annotations: { [PIN_ANNOTATION]: pinned ? "true" : null } } }),
     async create({ name, repository, grant, runtimeClassName = null }) {

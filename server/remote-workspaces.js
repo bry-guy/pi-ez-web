@@ -76,7 +76,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     let changed = false;
     for (const name of Object.keys(snapshots)) if (!known.has(name)) { delete snapshots[name]; changed = true; }
     for (const name of streams.keys()) if (!known.has(name)) unsubscribe(name);
-    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned, workspaceGrant: w.grant || "default" });
+    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned, workspaceGrant: w.grant || "default", workspaceProblem: w.problem || null });
     const lists = await Promise.all(workspaces.map(async w => {
       const running = w.state ? w.state === "running" : w.ready;
       let fresh = null;
@@ -99,6 +99,11 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   async function setPinned(name, pinned) {
     const res = await call(`/workspaces/${encodeURIComponent(name)}/pin`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ pinned: !!pinned }) });
     if (!res.ok) throw Object.assign(new Error("could not change keep-awake"), { code: "workspaced_unavailable", status: 502 });
+  }
+
+  async function restart(name) {
+    const res = await call(`/workspaces/${encodeURIComponent(name)}/restart`, { method: "POST" });
+    if (!res.ok) throw Object.assign(new Error("could not restart the worker"), { code: "workspaced_unavailable", status: 502 });
   }
 
   // Fire and forget: workspaced holds the request until the worker is ready.
@@ -233,7 +238,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   }
 
   return {
-    wake,
+    wake, restart,
     projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned, grants, setGrant,
     stop() { stopped = true; clearInterval(modelAuthTimer); for (const c of streams.values()) c.abort(); },
   };
@@ -252,6 +257,7 @@ export function registerRemoteRoutes(api, remote) {
     await remote.setPinned(c.req.param("name"), !!body.pinned);
     return c.json({ ok: true, pinned: !!body.pinned });
   });
+  api.post("/remote-workspaces/:name/restart", async c => { await remote.restart(c.req.param("name")); return c.json({ ok: true }); });
   api.post("/remote-workspaces/:name/wake", c => { remote.wake(c.req.param("name")); return c.json({ ok: true }, 202); });
   api.get("/remote-workspaces/grants", async c => c.json({ grants: await remote.grants(c.req.query("repository") || "") }));
   api.put("/remote-workspaces/:name/grant", async c => {
