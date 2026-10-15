@@ -94,7 +94,8 @@ class PiRepoPicker extends HTMLElement {
     this.renderResults();
     const operation = beginOperation("create-project", "Create project", "", "Request started.");
     try {
-      const body = source === "local" ? { source, repoPath: value, operationId: operation.id } : source === "github" ? { source, fullName, operationId: operation.id } : { source, url: value, operationId: operation.id };
+      const grant = this.querySelector(".grant-select")?.value || undefined;
+      const body = source === "local" ? { source, repoPath: value, operationId: operation.id } : source === "github" ? { source, fullName, grant, operationId: operation.id } : { source, url: value, grant, operationId: operation.id };
       const result = await api.newProject(body);
       this.connecting = false;
       operation.sessionId = result.sessionId || null;
@@ -115,6 +116,8 @@ class PiRepoPicker extends HTMLElement {
         branch_exists: "That branch already exists.",
         clone_failed: "Git could not clone this repository.",
         invalid_git_url: "Use a public HTTPS Git URL.",
+        grant_not_allowed: "This repository may not use that grant.",
+        no_such_grant: "That grant no longer exists.",
       };
       this.errorMsg = messages[err.error] || String(err.message || err.error || err);
       this.renderResults();
@@ -237,7 +240,7 @@ class PiRepoPicker extends HTMLElement {
   }
   render() {
     if (!store.state.repoPickerOpen) {
-      this.innerHTML = ""; this.loaded = false; this.errorMsg = null; this.sourceMenuOpen = false; this.source = null; return;
+      this.innerHTML = ""; this.loaded = false; this.errorMsg = null; this.sourceMenuOpen = false; this.source = null; this.grants = null; return;
     }
     if (!this.source) this.source = store.state.repoPickerSource || store.state.repositorySources?.default || "local";
     if (!this.querySelector(".scrim")) {
@@ -254,6 +257,7 @@ class PiRepoPicker extends HTMLElement {
                 <div class="source-menu" hidden></div>
               </div>
               <input class="modal-filter" placeholder="Find a repository" aria-label="Find a repository">
+              <select class="grant-select" aria-label="Grant" title="What this project's worker may hold, defined by whoever deploys pi-ez-web" hidden></select>
             </div>
           </div>
           <div class="modal-list"></div>
@@ -273,6 +277,17 @@ class PiRepoPicker extends HTMLElement {
       filter.hidden = this.source === "git-url";
       filter.placeholder = this.source === "github" ? "Find a GitHub repository" : "Find a repository";
       if (filter.value !== store.state.repoQuery && document.activeElement !== filter) filter.value = store.state.repoQuery;
+    }
+    // Grants exist only for project workers (workspaced); local repos run in-process.
+    if (this.grants === undefined || this.grants === null) {
+      this.grants = [];
+      api.workspaceGrants().then(result => { this.grants = result.grants || []; this.render(); }).catch(() => {});
+    }
+    const select = this.querySelector(".grant-select");
+    if (select) {
+      select.hidden = this.source === "local" || this.grants.length < 2;
+      const chosen = select.value || "default";
+      select.innerHTML = this.grants.map(g => `<option value="${esc(g.name)}" title="${esc(g.description || "")}"${g.name === chosen ? " selected" : ""}>${esc(g.name)}${g.anyProject ? "" : " (listed repos only)"}</option>`).join("");
     }
     this.renderResults();
     void this.load();

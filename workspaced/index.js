@@ -4,10 +4,10 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createLifecycle, PASSIVE } from "./lifecycle.js";
 import { slugFromRepository, validName } from "./manifests.js";
+import { grantAllows, parseGrants, resolveGrant, withGrantCheck } from "./grants.js";
 
 // Hop-by-hop and length/encoding headers; fetch() re-frames bodies itself.
 const DROP_HEADERS = ["connection", "keep-alive", "transfer-encoding", "upgrade", "host", "content-length", "content-encoding", "authorization"];
-const K8S_NAME_RE = /^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$/;
 
 function tokenMatches(header, token) {
   const given = Buffer.from(String(header || "").replace(/^Bearer /, ""));
@@ -18,7 +18,7 @@ function tokenMatches(header, token) {
 // workspaced: creates/removes per-project workspaces, holds grants, and routes
 // web's session traffic to each workspace's worker. Only web calls it.
 // auth "network" means a NetworkPolicy admits only web; otherwise a bearer token.
-export function createWorkspaced({ provider, token, auth = "token", fetchImpl = globalThis.fetch, lifecycle = createLifecycle({ provider, fetchImpl, idleMs: 0 }) }) {
+export function createWorkspaced({ provider, grants = parseGrants(""), token, auth = "token", fetchImpl = globalThis.fetch, lifecycle = createLifecycle({ provider, fetchImpl, idleMs: 0 }) }) {
   if (auth !== "network" && !token) throw new Error("WORKSPACED_TOKEN is required unless WORKSPACED_AUTH=network");
   const app = new Hono();
   const named = handler => async c => {
@@ -34,6 +34,13 @@ export function createWorkspaced({ provider, token, auth = "token", fetchImpl = 
 
   app.get("/v1/workspaces", async c => c.json({ workspaces: await provider.list() }));
 
+  // Grant shapes, optionally only those a repository may use (the add-project picker).
+  app.get("/v1/grants", c => {
+    const repository = c.req.query("repository");
+    const shown = Object.values(grants).filter(g => !repository || grantAllows(g, repository));
+    return c.json({ grants: shown });
+  });
+
   app.post("/v1/workspaces", async c => {
     const body = await c.req.json().catch(() => null);
     const repository = typeof body?.repository === "string" ? body.repository.trim() : "";
@@ -41,9 +48,8 @@ export function createWorkspaced({ provider, token, auth = "token", fetchImpl = 
     const name = body.name ?? slugFromRepository(repository);
     if (!validName(name)) return c.json({ error: "invalid_name" }, 400);
     const runtimeClassName = body.containers ? "kata" : null;
-    const secretName = body.secretName || null;
-    if (secretName && !K8S_NAME_RE.test(secretName)) return c.json({ error: "invalid_secret_name" }, 400);
-    await provider.create({ name, repository, runtimeClassName, secretName });
+    const grant = resolveGrant(grants, body.grant, repository);
+    await provider.create({ name, repository, runtimeClassName, grant });
     return c.json({ name }, 201);
   });
 
@@ -67,6 +73,16 @@ export function createWorkspaced({ provider, token, auth = "token", fetchImpl = 
     await provider.setPinned(name, !!body?.pinned);
     lifecycle.touch(name);
     return c.json({ ok: true, pinned: !!body?.pinned });
+  }));
+
+  app.put("/v1/workspaces/:name/grant", named(async (c, name) => {
+    const body = await c.req.json().catch(() => null);
+    const w = (await provider.list()).find(x => x.name === name);
+    if (!w) return c.json({ error: "no_such_workspace" }, 404);
+    const grant = resolveGrant(grants, body?.grant, w.repository);
+    if (!provider.setGrant) return c.json({ error: "grants_unsupported" }, 501);
+    await provider.setGrant(name, grant);
+    return c.json({ ok: true, grant: grant.name });
   }));
 
   app.put("/v1/github-auth", async c => {
@@ -125,11 +141,11 @@ export function createWorkspaced({ provider, token, auth = "token", fetchImpl = 
   return app;
 }
 
-async function providerFromEnv(env = process.env) {
+async function providerFromEnv(grants, env = process.env) {
   if ((env.WORKSPACED_PROVIDER || "local") === "kubernetes") {
     const { inClusterKube } = await import("./kube.js");
     const { kubernetesProvider } = await import("./kubernetes.js");
-    return kubernetesProvider({ kube: inClusterKube() });
+    return kubernetesProvider({ kube: inClusterKube(), grants });
   }
   const { localProvider } = await import("./local.js");
   const provider = localProvider({ root: env.WORKSPACED_ROOT || `${env.HOME}/.pi-ez-workspaces` });
@@ -139,9 +155,10 @@ async function providerFromEnv(env = process.env) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3150);
-  const provider = await providerFromEnv();
+  const grants = parseGrants(process.env.WORKSPACED_GRANTS || "");
+  const provider = withGrantCheck(await providerFromEnv(grants), grants);
   const idleMinutes = Number(process.env.WORKSPACED_IDLE_MINUTES ?? 5);
   const lifecycle = createLifecycle({ provider, idleMs: idleMinutes * 60_000 });
-  serve({ fetch: createWorkspaced({ provider, lifecycle, token: process.env.WORKSPACED_TOKEN, auth: process.env.WORKSPACED_AUTH }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
+  serve({ fetch: createWorkspaced({ provider, grants, lifecycle, token: process.env.WORKSPACED_TOKEN, auth: process.env.WORKSPACED_AUTH }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
   console.log(`workspaced (${process.env.WORKSPACED_PROVIDER || "local"}) → :${port}`);
 }

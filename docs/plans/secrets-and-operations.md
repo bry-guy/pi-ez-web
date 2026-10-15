@@ -1,6 +1,6 @@
 # Secrets, grants and operations
 
-Status: agreed 2026-10-15. Phase 1 in progress.
+Status: agreed 2026-10-15. Phase 1 live; phase 2 committed, not released.
 
 ## Model
 Apps read env vars and never call 1Password. A repo declares variable

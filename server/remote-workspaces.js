@@ -76,7 +76,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     let changed = false;
     for (const name of Object.keys(snapshots)) if (!known.has(name)) { delete snapshots[name]; changed = true; }
     for (const name of streams.keys()) if (!known.has(name)) unsubscribe(name);
-    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned });
+    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned, workspaceGrant: w.grant || "default" });
     const lists = await Promise.all(workspaces.map(async w => {
       const running = w.state ? w.state === "running" : w.ready;
       let fresh = null;
@@ -99,6 +99,18 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   async function setPinned(name, pinned) {
     const res = await call(`/workspaces/${encodeURIComponent(name)}/pin`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ pinned: !!pinned }) });
     if (!res.ok) throw Object.assign(new Error("could not change keep-awake"), { code: "workspaced_unavailable", status: 502 });
+  }
+
+  async function grants(repository) {
+    const res = await call(`/grants${repository ? `?repository=${encodeURIComponent(repository)}` : ""}`);
+    if (!res.ok) throw Object.assign(new Error("workspaced unavailable"), { code: "workspaced_unavailable", status: 502 });
+    return (await res.json()).grants || [];
+  }
+
+  async function setGrant(name, grant) {
+    const res = await call(`/workspaces/${encodeURIComponent(name)}/grant`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant }) });
+    const body = await res.json().catch(() => ({}));
+    return { status: res.status, body };
   }
 
   async function owner(kind, id) {
@@ -204,7 +216,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     if (typeof repository !== "string" || !repository.trim()) return c.json({ error: "invalid_repository" }, 400);
     await pushGitHubAuth();
     await pushModelAuth();
-    const res = await call("/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: repository.trim(), containers: !!body.containers }) });
+    const res = await call("/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: repository.trim(), containers: !!body.containers, ...(body.grant ? { grant: String(body.grant) } : {}) }) });
     const created = await res.json().catch(() => ({}));
     if (!res.ok) return c.json({ error: created.error || "workspaced_unavailable" }, res.status);
     await waitReady(created.name);
@@ -216,7 +228,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   }
 
   return {
-    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned,
+    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned, grants, setGrant,
     stop() { stopped = true; clearInterval(modelAuthTimer); for (const c of streams.values()) c.abort(); },
   };
 }
@@ -233,6 +245,12 @@ export function registerRemoteRoutes(api, remote) {
     const body = await c.req.json().catch(() => ({}));
     await remote.setPinned(c.req.param("name"), !!body.pinned);
     return c.json({ ok: true, pinned: !!body.pinned });
+  });
+  api.get("/remote-workspaces/grants", async c => c.json({ grants: await remote.grants(c.req.query("repository") || "") }));
+  api.put("/remote-workspaces/:name/grant", async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const { status, body: out } = await remote.setGrant(c.req.param("name"), body.grant);
+    return c.json(out, status);
   });
   api.post("/projects", async (c, next) => {
     const body = await c.req.json().catch(() => ({}));

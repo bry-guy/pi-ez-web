@@ -10,6 +10,7 @@ import { serve } from "@hono/node-server";
 import { createWorkspaced } from "../workspaced/index.js";
 import { deploymentState, kubernetesConfig, kubernetesProvider } from "../workspaced/kubernetes.js";
 import { createLifecycle } from "../workspaced/lifecycle.js";
+import { parseGrants, repoKey, withGrantCheck } from "../workspaced/grants.js";
 import { localProvider } from "../workspaced/local.js";
 import { deploymentManifest, slugFromRepository } from "../workspaced/manifests.js";
 import { createRemoteWorkspaces, registerRemoteRoutes } from "../server/remote-workspaces.js";
@@ -32,7 +33,7 @@ test("privileged docker sidecar only exists under a sandbox runtime class", () =
   assert.equal(plain.containers.length, 1);
   assert.equal(plain.runtimeClassName, undefined);
   assert.equal(plain.automountServiceAccountToken, false);
-  const kata = deploymentManifest({ ...base, runtimeClassName: "kata", serviceAccountName: "ws-x" }).spec.template.spec;
+  const kata = deploymentManifest({ ...base, runtimeClassName: "kata", grant: { name: "g", env: [], serviceAccount: "ws-x" } }).spec.template.spec;
   assert.equal(kata.runtimeClassName, "kata");
   assert.equal(kata.containers[1].securityContext.privileged, true);
   assert.equal(kata.serviceAccountName, "ws-x");
@@ -94,14 +95,14 @@ test("local provider persists workspaces, spawns workers, and writes auth 0600",
   await provider.create({ name: "srvivor", repository: "bry-guy/srvivor" });
   assert.equal(spawned[0].PI_WEB_REPOS_ROOT, path.join(root, "srvivor", "repos"));
   assert.match(provider.upstream("srvivor"), /^http:\/\/127\.0\.0\.1:\d+$/);
-  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", ready: true, state: "running", pinned: false, containers: false }]);
+  assert.deepEqual(await provider.list(), [{ name: "srvivor", repository: "bry-guy/srvivor", grant: "default", ready: true, state: "running", pinned: false, containers: false }]);
   await provider.setGitHubAuth({ accessToken: "t" });
   assert.equal(statSync(path.join(root, "github-auth.json")).mode & 0o777, 0o600);
   await assert.rejects(provider.create({ name: "srvivor", repository: "x/srvivor" }), { code: "workspace_name_taken" });
   const again = localProvider({ root, spawnImpl });
   await again.init();
   assert.equal(spawned.length, 2, "init restarts registered workers");
-  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "workspaces.json"), "utf8")), { srvivor: { repository: "bry-guy/srvivor" } });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "workspaces.json"), "utf8")), { srvivor: { repository: "bry-guy/srvivor", grant: "default" } });
   await again.scale("srvivor", 0);
   await again.setPinned("srvivor", true);
   assert.deepEqual((await again.list()).map(w => [w.state, w.pinned]), [["sleeping", true]]);
@@ -282,9 +283,10 @@ test("kubernetes scale and pin are merge patches on the Deployment", async () =>
   const provider = kubernetesProvider({ kube, config: kubernetesConfig({}) });
   await provider.scale("app", 0);
   await provider.setPinned("app", true);
-  assert.deepEqual(seen.map(s => [s[0], s[1].split("/").pop(), s[3]]), [["PATCH", "ws-app", "application/merge-patch+json"], ["PATCH", "ws-app", "application/merge-patch+json"]]);
-  assert.deepEqual(seen[0][2], { spec: { replicas: 0 } });
-  assert.deepEqual(seen[1][2], { metadata: { annotations: { "pi-ez.dev/keep-awake": "true" } } });
+  const patches = seen.filter(s => s[0] === "PATCH");
+  assert.deepEqual(patches.map(s => [s[1].split("/").pop(), s[3]]), [["ws-app", "application/merge-patch+json"], ["ws-app", "application/merge-patch+json"]]);
+  assert.deepEqual(patches[0][2], { spec: { replicas: 0 } });
+  assert.deepEqual(patches[1][2], { metadata: { annotations: { "pi-ez.dev/keep-awake": "true" } } });
   assert.equal(deploymentState({ spec: { replicas: 0 } }), "sleeping");
   assert.equal(deploymentState({ spec: { replicas: 1 }, status: {} }), "starting");
   assert.equal(deploymentState({ spec: { replicas: 1 }, status: { readyReplicas: 1 } }), "running");
@@ -323,4 +325,62 @@ test("web keeps sleeping projects in the sidebar from a persisted snapshot", asy
     worker.closeAllConnections();
     worker.close();
   }
+});
+
+test("grants: repo-locked grants refuse other repositories, also on wake", async () => {
+  const grants = parseGrants(JSON.stringify({
+    default: { anyProject: true },
+    operator: { repos: ["bry-guy/infra"], namespace: "pi-ez-operator", serviceAccount: "infra-operator", env: ["operator-env"], egress: "open" },
+  }));
+  assert.throws(() => parseGrants(JSON.stringify({ x: { anyProject: true } })), /default/);
+  assert.throws(() => parseGrants(JSON.stringify({ default: { anyProject: true }, y: {} })), /anyProject or repos/);
+  assert.equal(repoKey("https://github.com/Bry-Guy/infra.git"), "bry-guy/infra");
+  assert.equal(repoKey("git@github.com:bry-guy/infra"), "bry-guy/infra");
+  const created = [];
+  let listed = [];
+  const provider = { list: async () => listed, create: async w => created.push(w), scale: async () => "scaled", setGrant: async (n, g) => created.push({ regrant: g.name }) };
+  const app = createWorkspaced({ provider, grants, auth: "network" });
+  const json = body => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await app.request("/v1/workspaces", json({ repository: "redis/redis", grant: "operator" }))).status, 403);
+  assert.equal((await app.request("/v1/workspaces", json({ repository: "redis/redis", grant: "nope" }))).status, 400);
+  assert.equal((await app.request("/v1/workspaces", json({ repository: "redis/redis" }))).status, 201);
+  assert.equal(created[0].grant.name, "default");
+  assert.equal((await app.request("/v1/workspaces", json({ repository: "https://github.com/bry-guy/infra", grant: "operator" }))).status, 201);
+  assert.equal(created[1].grant.serviceAccount, "infra-operator");
+  const offered = await (await app.request("/v1/grants?repository=redis/redis")).json();
+  assert.deepEqual(offered.grants.map(g => g.name), ["default"]);
+  listed = [{ name: "redis", repository: "redis/redis", grant: "default" }];
+  const put = grant => app.request("/v1/workspaces/redis/grant", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant }) });
+  assert.equal((await put("operator")).status, 403);
+  assert.equal((await put("default")).status, 200);
+  // A worker whose grant no longer allows its repo cannot be woken.
+  const guarded = withGrantCheck(provider, grants);
+  listed = [{ name: "redis", repository: "redis/redis", grant: "operator" }];
+  await assert.rejects(guarded.scale("redis", 1), { code: "grant_not_allowed" });
+  assert.equal(await guarded.scale("redis", 0), "scaled");
+});
+
+test("grants: manifests and the kubernetes provider honour namespace, SA, env and egress", async () => {
+  const grant = parseGrants(JSON.stringify({ default: { anyProject: true }, operator: { repos: ["o/infra"], namespace: "ops", serviceAccount: "op", env: ["op-env"], egress: "open" } })).operator;
+  const d = deploymentManifest({ name: "infra", repository: "o/infra", image: "img", grant });
+  const pod = d.spec.template;
+  assert.equal(d.metadata.annotations["pi-ez.dev/grant"], "operator");
+  assert.equal(pod.metadata.labels["pi-ez.dev/egress"], "open");
+  assert.equal(pod.spec.serviceAccountName, "op");
+  assert.deepEqual(pod.spec.containers[0].envFrom, [{ secretRef: { name: "op-env", optional: true } }]);
+  const plain = deploymentManifest({ name: "r", repository: "r/r", image: "img" }).spec.template;
+  assert.equal(plain.spec.automountServiceAccountToken, false);
+  assert.equal(plain.metadata.labels["pi-ez.dev/egress"], undefined);
+  const posts = [];
+  const kube = { request: async (method, p, body) => {
+    if (method === "POST") { posts.push(p); return { status: 201, body: {} }; }
+    if (method === "GET" && p.includes("?")) return { status: 200, body: { items: p.includes("/namespaces/ops/") ? [{ metadata: { labels: { "pi-ez.dev/workspace": "infra" }, annotations: { "pi-ez.dev/repository": "o/infra", "pi-ez.dev/grant": "operator" } }, spec: { replicas: 1 }, status: {} }] : [] } };
+    return { status: 404, body: {} };
+  } };
+  const provider = kubernetesProvider({ kube, config: kubernetesConfig({}), grants: { operator: grant } });
+  await provider.create({ name: "infra", repository: "o/infra", grant });
+  assert.ok(posts.every(p => p.includes("/namespaces/ops/")), posts.join());
+  const [w] = await provider.list();
+  assert.equal(w.grant, "operator");
+  assert.equal(provider.upstream("infra"), "http://ws-infra.ops.svc.cluster.local:3141");
 });

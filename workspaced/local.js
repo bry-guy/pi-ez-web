@@ -50,7 +50,7 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
     async list() {
       return Object.entries(read()).map(([name, w]) => {
         const alive = procs.get(name)?.exitCode === null;
-        return { name, repository: w.repository, ready: alive, state: alive ? "running" : "sleeping", pinned: !!w.pinned, containers: false };
+        return { name, repository: w.repository, grant: w.grant || "default", ready: alive, state: alive ? "running" : "sleeping", pinned: !!w.pinned, containers: false };
       });
     },
     async scale(name, replicas) {
@@ -67,10 +67,11 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       all[name].pinned = !!pinned;
       writeAtomic(registry, JSON.stringify(all, null, 2));
     },
-    async create({ name, repository }) {
+    // Local workers share this machine's trust zone; a grant is recorded, not enforced.
+    async create({ name, repository, grant }) {
       const all = read();
       if (all[name] && all[name].repository !== repository) throw Object.assign(new Error("workspace name taken"), { status: 409, code: "workspace_name_taken" });
-      all[name] = { repository };
+      all[name] = { ...all[name], repository, grant: grant?.name || "default" };
       writeAtomic(registry, JSON.stringify(all, null, 2));
       await start(name, all[name]);
     },

@@ -2,6 +2,8 @@ export const MANAGED_BY = "pi-ez-workspaced";
 export const NAME_LABEL = "pi-ez.dev/workspace";
 export const REPO_ANNOTATION = "pi-ez.dev/repository";
 export const PIN_ANNOTATION = "pi-ez.dev/keep-awake";
+export const GRANT_ANNOTATION = "pi-ez.dev/grant";
+export const EGRESS_LABEL = "pi-ez.dev/egress";
 export const WORKSPACE_PORT = 3141;
 export const GITHUB_SECRET = "pi-ez-github-auth";
 const GITHUB_DIR = "/run/secrets/pi-ez-github";
@@ -43,8 +45,12 @@ export function serviceManifest({ name, repository }) {
   };
 }
 
-export function deploymentManifest({ name, repository, image, serviceAccountName = null, runtimeClassName = null, secretName = null, envConfigMap = null, imagePullSecret = null, dindImage = "docker:28-dind" }) {
+// The grant (see grants.js) supplies the ServiceAccount, env Secrets, egress
+// label and runtime class; nothing else may give a worker credentials.
+export function deploymentManifest({ name, repository, image, grant = { name: "default", env: [] }, runtimeClassName = null, envConfigMap = null, imagePullSecret = null, dindImage = "docker:28-dind" }) {
   if (!validName(name)) throw new Error("invalid workspace name");
+  runtimeClassName = grant.runtimeClass || runtimeClassName;
+  const serviceAccountName = grant.serviceAccount || null;
   const env = [
     ["PORT", String(WORKSPACE_PORT)], ["PI_WEB_MODE", "real"],
     ["HOME", HOME], ["XDG_CONFIG_HOME", `${HOME}/.config`], ["XDG_DATA_HOME", `${HOME}/.local/share`], ["XDG_CACHE_HOME", `${HOME}/.cache`],
@@ -55,7 +61,8 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
   ].map(([n, value]) => ({ name: n, value }));
   const envFrom = [
     ...(envConfigMap ? [{ configMapRef: { name: envConfigMap, optional: true } }] : []),
-    ...(secretName ? [{ secretRef: { name: secretName } }] : []),
+    // Optional: a grant may name Secrets the deployer hasn't filled yet.
+    ...(grant.env || []).map(secret => ({ secretRef: { name: secret, optional: true } })),
   ];
   const containers = [{
     name: "workspace", image, env, ...(envFrom.length ? { envFrom } : {}),
@@ -83,13 +90,14 @@ export function deploymentManifest({ name, repository, image, serviceAccountName
     });
   }
   return {
-    apiVersion: "apps/v1", kind: "Deployment", metadata: meta(name, repository),
+    apiVersion: "apps/v1", kind: "Deployment",
+    metadata: { ...meta(name, repository), annotations: { [REPO_ANNOTATION]: repository, [GRANT_ANNOTATION]: grant.name } },
     spec: {
       replicas: 1,
       strategy: { type: "Recreate" },
       selector: { matchLabels: { [NAME_LABEL]: name } },
       template: {
-        metadata: { labels: { "app.kubernetes.io/managed-by": MANAGED_BY, [NAME_LABEL]: name } },
+        metadata: { labels: { "app.kubernetes.io/managed-by": MANAGED_BY, [NAME_LABEL]: name, ...(grant.egress ? { [EGRESS_LABEL]: grant.egress } : {}) } },
         spec: {
           // Workers have no business discovering each other via injected *_SERVICE_HOST env.
           enableServiceLinks: false,

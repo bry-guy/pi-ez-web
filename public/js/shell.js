@@ -279,7 +279,7 @@ class PiSidebar extends HTMLElement {
   // (e.g. a dev server you want left running).
   workspaceToggle(p) {
     const label = p.workspacePinned ? "pinned" : p.workspaceState === "sleeping" ? "asleep" : p.workspaceState === "starting" ? "starting" : "awake";
-    const title = p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake.";
+    const title = `Grant: ${p.workspaceGrant || "default"}. ${p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake."}`;
     return `<button class="row-ws ${label}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}. ${title}`)}">${label}</button>`;
   }
 
