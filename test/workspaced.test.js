@@ -342,7 +342,7 @@ test("grants: repo-locked grants refuse other repositories, also on wake", async
   assert.equal(repoKey("git@github.com:bry-guy/infra"), "bry-guy/infra");
   const created = [];
   let listed = [];
-  const provider = { list: async () => listed, create: async w => created.push(w), scale: async () => "scaled", setGrant: async (n, g) => created.push({ regrant: g.name }) };
+  const provider = { list: async () => listed, create: async w => created.push(w), scale: async () => "scaled", setGrant: async (_n, g) => created.push({ regrant: g.name }) };
   const app = createWorkspaced({ provider, grants, auth: "network" });
   const json = body => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   assert.equal((await app.request("/v1/workspaces", json({ repository: "redis/redis", grant: "operator" }))).status, 403);
@@ -387,4 +387,27 @@ test("grants: manifests and the kubernetes provider honour namespace, SA, env an
   const [w] = await provider.list();
   assert.equal(w.grant, "operator");
   assert.equal(provider.upstream("infra"), "http://ws-infra.ops.svc.cluster.local:3141");
+});
+
+test("waking past the limit sleeps the least recently used idle worker first", async () => {
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true, busy: false })));
+  const states = { a: "running", b: "running", c: "sleeping" };
+  const pinned = {};
+  const calls = [];
+  const provider = {
+    list: async () => Object.entries(states).map(([name, state]) => ({ name, state, pinned: !!pinned[name] })),
+    upstream: () => `http://127.0.0.1:${worker.address().port}`,
+    scale: async (name, n) => { calls.push([name, n]); states[name] = n ? "running" : "sleeping"; },
+  };
+  let clock = 0;
+  const lifecycle = createLifecycle({ provider, maxAwake: 2, sweepMs: 0, pollMs: 1, cacheMs: 0, now: () => clock, log: () => {} });
+  try {
+    await lifecycle.refresh();
+    clock = 10; lifecycle.touch("a"); clock = 20; lifecycle.touch("b");
+    assert.equal(await lifecycle.ensureAwake("c"), true);
+    assert.deepEqual(calls, [["a", 0], ["c", 1]], "a was used least recently");
+    pinned.b = true; states.a = "running"; clock = 30; lifecycle.touch("c"); clock = 40; lifecycle.touch("a");
+    await lifecycle.sweep();
+    assert.deepEqual(calls.at(-1), ["c", 0], "pinned b is never chosen");
+  } finally { worker.close(); }
 });

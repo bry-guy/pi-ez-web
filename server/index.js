@@ -2,7 +2,8 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import os from "node:os";
 import { Hono } from "hono";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +27,20 @@ export function linkModelAuth(env = process.env) {
   mkdirSync(dir, { recursive: true });
   rmSync(link, { force: true });
   symlinkSync(target, link);
+}
+
+// Pi compiles extensions with jiti into os.tmpdir()/jiti, which a restarted
+// container loses (~9s of recompiling). Point it at the persistent cache dir.
+// TMPDIR itself stays put: the agent's scratch files belong in /tmp.
+export function linkJitiCache(env = process.env, tmp = os.tmpdir()) {
+  const target = path.join(env.XDG_CACHE_HOME || path.join(env.HOME || os.homedir(), ".cache"), "pi-ez-web", "jiti");
+  const link = path.join(tmp, "jiti");
+  try {
+    try { if (readlinkSync(link) === target) return; } catch (e) { if (e.code === "EINVAL" && lstatSync(link).isDirectory()) rmSync(link, { recursive: true, force: true }); }
+    mkdirSync(target, { recursive: true });
+    rmSync(link, { force: true });
+    symlinkSync(target, link);
+  } catch (error) { console.error(`pi-ez-web: could not persist the extension cache: ${error.message}`); }
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -126,6 +141,7 @@ export function createApp({ syncCoordinator = null, uiOnly = uiOnlyEnabled() } =
   if (!uiOnly) {
     ensureHome();
     linkModelAuth();
+    if ((process.env.PI_WEB_MODE || "real") !== "mock") linkJitiCache();
     sup = createSupervisor(hub);
     const realMode = (process.env.PI_WEB_MODE || "real") !== "mock";
     const adapter = !syncCoordinator && realMode
@@ -158,7 +174,11 @@ export function startServer(port, options = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { server } = startServer();
+  const { server, sup } = startServer();
+  server.once("listening", () => {
+    const repo = loadConfig().projects[0]?.repoPath;
+    if (sup?.prewarm) setTimeout(() => void sup.prewarm(repo || process.cwd()), 0);
+  });
   server.on("error", (e) => {
     if (e.code === "EADDRINUSE") {
       console.error(`pi-web-ui: port ${e.port} is already in use (another instance running?). Set PORT to change it.`);

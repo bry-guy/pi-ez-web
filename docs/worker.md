@@ -24,7 +24,7 @@ USER node
 
 ## Lifecycle
 
-A worker sleeps after `WORKSPACED_IDLE_MINUTES` without use: its volume stays, its processes stop, and the next request wakes it. A worker is busy, and never put to sleep, while an agent turn, compaction or queued prompt is running. Pin a project with **Keep awake** to keep dev servers running.
+When more than `WORKSPACED_MAX_AWAKE` workers would run, the least recently used idle one sleeps: its volume stays, its processes stop, and the next request wakes it. Expanding or opening a sleeping project in the sidebar starts waking it right away. After start, a worker preloads Pi and its extensions in the background, and keeps compiled extensions in `~/.cache/pi-ez-web/jiti` so restarts don't recompile them. A worker is busy, and never put to sleep, while an agent turn, compaction or queued prompt is running. Pin a project with **Keep awake** to keep dev servers running.
 
 ## Health
 

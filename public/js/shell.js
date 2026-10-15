@@ -55,10 +55,17 @@ export function openSessionPicker(projectId, { mode = "new", sourceSessionId = n
   });
 }
 
+// Start a sleeping worker as soon as the user shows interest, so its ~3s
+// startup overlaps with reading and typing instead of the first request.
+function wakeEarly(project) {
+  if (project?.workspace && project.workspaceState === "sleeping") void api.wakeWorkspace(project.workspace);
+}
+
 export function selectSession(projectId, sessionId, { showOperation = false } = {}) {
   cancelExtensionUiFor(sessionId);
   const project = store.state.projects.find(p => p.id === projectId);
   const node = findNode(project?.sessions, sessionId);
+  wakeEarly(project);
   store.set({
     view: "chat", projectId, sessionId, chatId: null, drawerOpen: false, sessionPicker: null, sessionPickerError: null,
     filesOpen: store.state.filesOpen, files: [], fileError: null, filePath: null, fileView: null,
@@ -256,6 +263,7 @@ class PiSidebar extends HTMLElement {
       const id = t.dataset.treeId;
       if (!id) return;
       store.state.openTree[id] = !store.state.openTree[id];
+      if (store.state.openTree[id]) wakeEarly(store.state.projects.find(p => p.id === id));
       store.notify("state");
     } else if (act === "toggle-pin") {
       e.stopPropagation();

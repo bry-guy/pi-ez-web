@@ -52,6 +52,7 @@ const j = async (r) => {
 export const api = {
   state: () => fetch("/api/state", { cache: "no-store" }).then(j),
   workspaceGrants: () => fetch("/api/remote-workspaces/grants").then(j),
+  wakeWorkspace: name => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/wake`, { method: "POST", headers: JH, body: "{}" }).catch(() => {}),
   pinWorkspace: (name, pinned) => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/pin`, { method: "PUT", headers: JH, body: JSON.stringify({ pinned }) }).then(j),
   health: () => fetch(`/api/health?probe=${Date.now()}`, { cache: "no-store" }).then(j),
   logs: (limit = 500) => fetch(`/api/logs?limit=${encodeURIComponent(limit)}`, { cache: "no-store" }).then(j),

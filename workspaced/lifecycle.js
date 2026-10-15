@@ -1,11 +1,13 @@
 // Sleep/wake for workers. A sleeping worker is scaled to zero (its volume
-// stays), so idle projects cost no memory. Activity = proxied requests other
+// stays), so idle projects cost no memory. At most maxAwake run at once; the
+// least recently used idle one sleeps to make room. idleMs optionally also
+// sleeps workers after a fixed idle time. Activity = proxied requests other
 // than the passive ones web makes on its own (state, events, health).
 export const PASSIVE = /^\/api\/(events|state|health)$/;
 
 export function createLifecycle({
   provider, fetchImpl = globalThis.fetch, log = console.log,
-  idleMs = 5 * 60_000, sweepMs = 60_000, wakeTimeoutMs = 45_000, pollMs = 500, cacheMs = 3_000, now = Date.now,
+  idleMs = 0, maxAwake = 3, sweepMs = 60_000, wakeTimeoutMs = 45_000, pollMs = 500, cacheMs = 3_000, now = Date.now,
 }) {
   const lastUsed = new Map();
   const inflight = new Map();
@@ -33,8 +35,33 @@ export function createLifecycle({
     } catch { return null; }
   }
 
+  // Can this worker be put to sleep right now without interrupting anything?
+  async function evictable(w) {
+    if (w.state !== "running" || w.pinned || inflight.get(w.name)) return false;
+    const h = await health(w.name);
+    if (h?.busy) { touch(w.name); return false; }
+    return true;
+  }
+
+  // LRU: keep at most maxAwake workers up (pinned ones count but are never
+  // chosen); put the least recently used idle ones to sleep to make room.
+  async function makeRoom(keep, reserve = 0) {
+    if (!maxAwake) return;
+    const list = [...(await refresh())];
+    const awake = list.filter(w => w.state !== "sleeping" && w.name !== keep);
+    let excess = awake.length + reserve - maxAwake;
+    const candidates = awake.sort((a, b) => (lastUsed.get(a.name) ?? 0) - (lastUsed.get(b.name) ?? 0));
+    for (const w of candidates) {
+      if (excess <= 0) break;
+      if (!await evictable(w)) continue;
+      await sleep(w.name, "least recently used").then(() => excess--, e => log(`workspaced: could not sleep ${w.name}: ${e.message}`));
+    }
+    if (excess > 0) log(`workspaced: ${excess} over the ${maxAwake}-worker limit; every awake worker is busy or pinned`);
+  }
+
   async function doWake(name) {
     const started = now();
+    await makeRoom(name, 1);
     await provider.scale(name, 1);
     const deadline = started + wakeTimeoutMs;
     while (now() < deadline) {
@@ -66,20 +93,19 @@ export function createLifecycle({
   // Busy = a request in flight (hooks, setup, bang commands) or the worker
   // reporting an agent turn; background processes the agent left don't count.
   async function sweep() {
-    if (!idleMs) return;
-    for (const w of await refresh()) {
-      if (w.state !== "running" || w.pinned || inflight.get(w.name)) continue;
-      if (now() - (lastUsed.get(w.name) ?? now()) < idleMs) continue;
-      const h = await health(w.name);
-      if (h?.busy) { touch(w.name); continue; }
-      await sleep(w.name, "idle").catch(e => log(`workspaced: could not sleep ${w.name}: ${e.message}`));
+    if (idleMs) {
+      for (const w of await refresh()) {
+        if (now() - (lastUsed.get(w.name) ?? now()) < idleMs || !await evictable(w)) continue;
+        await sleep(w.name, "idle").catch(e => log(`workspaced: could not sleep ${w.name}: ${e.message}`));
+      }
     }
+    await makeRoom(null);
   }
-  const timer = idleMs && sweepMs ? setInterval(() => sweep().catch(() => {}), sweepMs) : null;
+  const timer = (idleMs || maxAwake) && sweepMs ? setInterval(() => sweep().catch(() => {}), sweepMs) : null;
   timer?.unref?.();
 
   return {
-    info, touch, ensureAwake, sleep, sweep, refresh,
+    info, touch, ensureAwake, sleep, sweep, refresh, makeRoom,
     begin(name) { inflight.set(name, (inflight.get(name) || 0) + 1); touch(name); },
     end(name) { inflight.set(name, Math.max(0, (inflight.get(name) || 1) - 1)); touch(name); },
     stop() { clearInterval(timer); },

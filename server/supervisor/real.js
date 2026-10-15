@@ -1230,6 +1230,24 @@ export class RealSupervisor {
 
   isStreaming(id) { return !!this.live.get(id)?.session?.isStreaming; }
   // Any agent turn, compaction, or queued prompt keeps the worker awake.
+  // Load the SDK, model runtime and extensions once after startup so the first
+  // message doesn't pay for them. Touches no session, so it never counts as busy.
+  async prewarm(cwd) {
+    const started = performance.now();
+    try {
+      const SDKModule = await SDK();
+      await this._modelRuntime();
+      const agentDir = SDKModule.getAgentDir();
+      await this.piConfiguration.resolve();
+      const { settingsManager } = await this.piConfiguration.createSettingsManager(cwd, agentDir, SDKModule.SettingsManager, { loadPackages: true });
+      const syncExtensionPath = await this.syncAdapter?.extensionPath?.() || null;
+      await new SDKModule.DefaultResourceLoader({ cwd, agentDir, settingsManager, additionalExtensionPaths: [WEB_SUBAGENT_EXTENSION, ...(syncExtensionPath ? [syncExtensionPath] : [])] }).reload();
+      console.log(`pi-ez-web: prewarmed in ${Math.round(performance.now() - started)}ms`);
+    } catch (error) {
+      console.error("pi-ez-web: prewarm failed (first message will load instead)", publicError(error?.message || String(error)));
+    }
+  }
+
   busy() {
     if (this.pendingPrompts.size) return true;
     for (const st of this.live.values()) if (st.session?.isStreaming || st.session?.isCompacting) return true;

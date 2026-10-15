@@ -2,21 +2,18 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { test } from "node:test";
 import * as ws from "../server/workspaces.js";
-import { chatsDir, loadBindings, loadConfig, saveConfig, sessionSlug } from "../server/config.js";
+import { chatsDir, loadConfig, saveConfig } from "../server/config.js";
 import {
   base,
   get,
   home,
-  git,
   J,
-  makeRepo,
   post,
-  repo,
   SSE,
   supervisor,
-  tmp,
   setupServerFixture,
 } from "./helpers/server-fixture.js";
 
@@ -343,4 +340,14 @@ test("bang runs in the workspace and lands in the transcript", async () => {
   const snap = await (await get(`/api/sessions/${id}/transcript`)).json();
   const bang = snap.records.find(r => r.role === "bang");
   assert.ok(bang && /bang-ok/.test(bang.out));
+});
+
+test("the extension compile cache survives restarts via a link into the cache dir", async () => {
+  const { linkJitiCache } = await import("../server/index.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jiti-"));
+  fs.mkdirSync(path.join(dir, "tmp", "jiti"), { recursive: true });
+  linkJitiCache({ XDG_CACHE_HOME: path.join(dir, "cache") }, path.join(dir, "tmp"));
+  linkJitiCache({ XDG_CACHE_HOME: path.join(dir, "cache") }, path.join(dir, "tmp"));
+  assert.equal(fs.readlinkSync(path.join(dir, "tmp", "jiti")), path.join(dir, "cache", "pi-ez-web", "jiti"));
+  fs.rmSync(dir, { recursive: true, force: true });
 });

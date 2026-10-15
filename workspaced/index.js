@@ -49,6 +49,7 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
     if (!validName(name)) return c.json({ error: "invalid_name" }, 400);
     const runtimeClassName = body.containers ? "kata" : null;
     const grant = resolveGrant(grants, body.grant, repository);
+    await lifecycle.makeRoom(name, 1).catch(() => {}); // best effort; never blocks adding a project
     await provider.create({ name, repository, runtimeClassName, grant });
     return c.json({ name }, 201);
   });
@@ -157,8 +158,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3150);
   const grants = parseGrants(process.env.WORKSPACED_GRANTS || "");
   const provider = withGrantCheck(await providerFromEnv(grants), grants);
-  const idleMinutes = Number(process.env.WORKSPACED_IDLE_MINUTES ?? 5);
-  const lifecycle = createLifecycle({ provider, idleMs: idleMinutes * 60_000 });
+  const idleMinutes = Number(process.env.WORKSPACED_IDLE_MINUTES ?? 0);
+  const maxAwake = Number(process.env.WORKSPACED_MAX_AWAKE ?? 3);
+  const lifecycle = createLifecycle({ provider, idleMs: idleMinutes * 60_000, maxAwake });
   serve({ fetch: createWorkspaced({ provider, grants, lifecycle, token: process.env.WORKSPACED_TOKEN, auth: process.env.WORKSPACED_AUTH }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
   console.log(`workspaced (${process.env.WORKSPACED_PROVIDER || "local"}) → :${port}`);
 }

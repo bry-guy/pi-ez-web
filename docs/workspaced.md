@@ -16,7 +16,8 @@ The control plane. It creates, wakes, sleeps and deletes one worker per project 
 | `PORT` | `3150` | Listen port |
 | `WORKSPACED_TOKEN` | required | Bearer token web must send |
 | `WORKSPACED_AUTH` | `token` | `network` drops the token and trusts a NetworkPolicy that admits only web. Use it only where policies are enforced |
-| `WORKSPACED_IDLE_MINUTES` | `5` | Sleep a worker after this long without use (`0` disables). Sleeping keeps its volume; background processes stop unless the project is pinned *Keep awake* |
+| `WORKSPACED_MAX_AWAKE` | `3` | At most this many workers run at once. Waking another puts the least recently used idle one to sleep (never a pinned or busy one). `0` disables. Sleeping keeps the volume; background processes stop unless the project is pinned *Keep awake* |
+| `WORKSPACED_IDLE_MINUTES` | `0` (off) | Optionally also sleep any worker after this long without use |
 | `WORKSPACED_GRANTS` | `{"default":{"anyProject":true}}` | Grant shapes as JSON, see below |
 | `WORKSPACED_ROOT` | `~/.pi-ez-workspaces` | local: where workers' state lives |
 | `WORKSPACED_NAMESPACE` | `pi-ez-workspaces` | kubernetes: home namespace for workers |

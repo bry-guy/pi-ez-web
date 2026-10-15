@@ -36,7 +36,7 @@ web alone is a complete app: it runs projects in its own process. Add workspaced
 
 **web**: a persistent volume for `PI_WEB_HOME`, `PI_CODING_AGENT_DIR` and `HOME`. To use workers, also set `PI_WEB_WORKSPACED_URL` and `WORKSPACED_TOKEN`. Models, GitHub and the default repository source are set in **Settings**. → [web](docs/web.md), [Configuration](docs/configuration.md)
 
-**workspaced**: the same `WORKSPACED_TOKEN` and a provider. With `WORKSPACED_PROVIDER=local`, workers are child processes. With `kubernetes`, each worker is a pod with its own PVC, and you also set `WORKSPACE_IMAGE` and RBAC. Optional: `WORKSPACED_GRANTS` (what each project's worker may hold) and `WORKSPACED_IDLE_MINUTES` (default 5). → [workspaced](docs/workspaced.md)
+**workspaced**: the same `WORKSPACED_TOKEN` and a provider. With `WORKSPACED_PROVIDER=local`, workers are child processes. With `kubernetes`, each worker is a pod with its own PVC, and you also set `WORKSPACE_IMAGE` and RBAC. Optional: `WORKSPACED_GRANTS` (what each project's worker may hold) and `WORKSPACED_MAX_AWAKE` (default 3; the least recently used idle worker sleeps to make room). → [workspaced](docs/workspaced.md)
 
 **workers**: nothing to deploy. Each project brings its own tools (`mise.toml`, `script/bootstrap`, …) installed by its **setup** hook. Secrets and cluster access come from the grant you pick when adding the repository. For OS packages, build a derived image (`FROM ghcr.io/bry-guy/pi-ez-web`) and set `WORKSPACE_IMAGE`. → [worker](docs/worker.md)
 
@@ -60,7 +60,7 @@ echo "WORKSPACED_TOKEN=$(openssl rand -hex 32)" >> .env
 docker compose -f compose.yaml -f compose.workers.yaml up --build -d
 ```
 
-Workers in Compose share one container and one user, so this separates state, not trust. For real isolation (own pod, volume, ServiceAccount, egress policy, optional VM sandbox), run workspaced with `WORKSPACED_PROVIDER=kubernetes`; see [workspaced](docs/workspaced.md#grants). [bry-guy/infra](https://github.com/bry-guy/infra/tree/main/selfhost/platform/pi-ez-workspaces) is a working k3s + Argo CD example.
+Workers in Compose share one container and one user, so this separates state, not trust. For real isolation (own pod, volume, ServiceAccount, egress policy, optional VM sandbox), run workspaced with `WORKSPACED_PROVIDER=kubernetes`; see [workspaced](docs/workspaced.md#grants).
 
 State lives in the `pi-ez-web-data` and `pi-ez-workspaced-data` volumes. `docker compose down` keeps them; `down --volumes` deletes them.
 
@@ -86,4 +86,4 @@ Back up the volumes first. [Deployment](docs/deployment.md) has backup, restore 
 
 [web](docs/web.md) · [workspaced](docs/workspaced.md) · [worker](docs/worker.md) · [Configuration](docs/configuration.md) · [Deployment](docs/deployment.md) · [Implementation](docs/implementation.md) · [Roadmap](docs/roadmap.md)
 
-Development: `npm test`; `PORT=3141 npm run dev` starts a mock server with no model access.
+Development: `npm test`; `PORT=3141 npm run dev` starts a mock server with no model access, and `npm run browser -- --device="iPhone 13" http://localhost:3141` opens it in a mobile browser.
