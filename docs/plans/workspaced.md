@@ -59,7 +59,7 @@ One image, three entrypoints.
 
 ## Worker lifecycle (implemented)
 - Workers sleep (Deployment `replicas: 0`, PVC kept) after
-  `WORKSPACED_IDLE_MINUTES` (default 20, `0` off) without user traffic.
+  `WORKSPACED_IDLE_MINUTES` (default 5, fractions allowed, `0` off) without user traffic.
 - Busy = a proxied request in flight (hooks, setup, bang) or the worker's
   `/api/health` `busy` (agent turn, compaction, queued prompt). Processes
   the agent left running don't count; they die on sleep.

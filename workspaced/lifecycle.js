@@ -5,7 +5,7 @@ export const PASSIVE = /^\/api\/(events|state|health)$/;
 
 export function createLifecycle({
   provider, fetchImpl = globalThis.fetch, log = console.log,
-  idleMs = 20 * 60_000, sweepMs = 60_000, wakeTimeoutMs = 45_000, pollMs = 500, cacheMs = 3_000, now = Date.now,
+  idleMs = 5 * 60_000, sweepMs = 60_000, wakeTimeoutMs = 45_000, pollMs = 500, cacheMs = 3_000, now = Date.now,
 }) {
   const lastUsed = new Map();
   const inflight = new Map();

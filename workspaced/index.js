@@ -140,7 +140,7 @@ async function providerFromEnv(env = process.env) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3150);
   const provider = await providerFromEnv();
-  const idleMinutes = Number(process.env.WORKSPACED_IDLE_MINUTES ?? 20);
+  const idleMinutes = Number(process.env.WORKSPACED_IDLE_MINUTES ?? 5);
   const lifecycle = createLifecycle({ provider, idleMs: idleMinutes * 60_000 });
   serve({ fetch: createWorkspaced({ provider, lifecycle, token: process.env.WORKSPACED_TOKEN, auth: process.env.WORKSPACED_AUTH }).fetch, port, hostname: process.env.WORKSPACED_HOST || "0.0.0.0" });
   console.log(`workspaced (${process.env.WORKSPACED_PROVIDER || "local"}) → :${port}`);
