@@ -1,6 +1,6 @@
 # Secrets, grants and operations
 
-Status: agreed 2026-10-15. Phase 1 live; phases 2-3 built, rolling out.
+Status: agreed 2026-10-15. Phases 1-3 live (d270cae); infra worker `ws-infra` on the operator grant ran release:plan with no 1Password.
 
 ## Model
 Apps read env vars and never call 1Password. A repo declares variable
