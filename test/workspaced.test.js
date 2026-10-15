@@ -411,3 +411,17 @@ test("waking past the limit sleeps the least recently used idle worker first", a
     assert.deepEqual(calls.at(-1), ["c", 0], "pinned b is never chosen");
   } finally { worker.close(); }
 });
+
+test("a slow worker does not hold up the project list; its snapshot shows instead", async () => {
+  const fetchImpl = async (url, init = {}) => {
+    if (url.endsWith("/v1/workspaces")) return new Response(JSON.stringify({ workspaces: [{ name: "slow", state: "running" }] }));
+    if (url.includes("/events")) return new Promise(() => {});
+    return new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason)));
+  };
+  const remote = createRemoteWorkspaces({ url: "http://w", token: TOKEN, hub: { emit() {} }, fetchImpl, stateTimeoutMs: 50, retryMs: 60_000 });
+  const t0 = Date.now();
+  const projects = await remote.projects();
+  assert.ok(Date.now() - t0 < 1000);
+  assert.equal(projects[0].pending, true);
+  remote.close?.();
+});

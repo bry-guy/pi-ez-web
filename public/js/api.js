@@ -136,12 +136,22 @@ export const api = {
   close: (id, operationId = null, kind = "session") => fetch(`/api/sessions/${id}/close`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify({ ...(operationId ? { operationId } : {}), kind }) }).then(j),
 };
 
+const STATE_CACHE = "pi-ez-web:state";
+// Draws the last known sidebar before the network answers; refreshState replaces it.
+export function paintCachedState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STATE_CACHE) || "null");
+    if (Array.isArray(s?.projects) && Array.isArray(s?.chats) && !store.state.projects?.length) store.set({ projects: s.projects, chats: s.chats });
+  } catch { /* ignore a corrupt cache */ }
+}
+
 let stateRefreshPromise = null;
 export function refreshState() {
   if (stateRefreshPromise) return stateRefreshPromise;
   const request = (async () => {
     const s = await api.state();
     applyState(s);
+    try { localStorage.setItem(STATE_CACHE, JSON.stringify({ projects: s.projects, chats: s.chats })); } catch { /* quota or private mode */ }
   })();
   stateRefreshPromise = request;
   request.then(

@@ -23,7 +23,7 @@ export function remoteWorkspacesFromEnv(env, deps) {
   return createRemoteWorkspaces({ url: url.replace(/\/+$/, ""), token: env.WORKSPACED_TOKEN || null, modelAuthPath, cachePath, ...deps });
 }
 
-export function createRemoteWorkspaces({ url, token, hub, github, sup = null, modelAuthPath = null, cachePath = null, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, retryMs = 5_000, modelAuthSyncMs = MODEL_AUTH_SYNC_MS }) {
+export function createRemoteWorkspaces({ url, token, hub, github, sup = null, modelAuthPath = null, cachePath = null, fetchImpl = globalThis.fetch, readyTimeoutMs = 180_000, stateTimeoutMs = 400, retryMs = 5_000, modelAuthSyncMs = MODEL_AUTH_SYNC_MS }) {
   const owners = { project: new Map(), session: new Map() };
   const streams = new Map();
   const auth = token ? { authorization: `Bearer ${token}` } : {};
@@ -51,7 +51,8 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
   }
 
   async function workerState(name) {
-    const res = await call(workerPath(name, "/state"));
+    // A slow worker must not hold up the sidebar; its cached snapshot shows instead.
+    const res = await call(workerPath(name, "/state"), { signal: AbortSignal.timeout(stateTimeoutMs) });
     return res.ok ? res.json() : null;
   }
 

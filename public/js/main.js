@@ -6,7 +6,7 @@ import "./settings.js";
 import "./files.js";
 import "./repo-picker.js";
 import "./app.js";
-import { checkActiveSync, connectSSE, openTranscript, refreshState, resumeConnection } from "./api.js";
+import { checkActiveSync, connectSSE, openTranscript, paintCachedState, refreshState, resumeConnection } from "./api.js";
 import { store } from "./store.js";
 import { openSavedSelectionEarly, restoreLastSelection, selectChat, selectSession } from "./shell.js";
 
@@ -56,12 +56,13 @@ window.addEventListener("focus", checkActiveSync);
 setInterval(() => { if (document.visibilityState === "visible") void checkActiveSync(); }, 20_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resumeConnection(); });
 window.addEventListener("pageshow", resumeConnection);
-await loadUiConfig();
+paintCachedState();
+const uiConfig = loadUiConfig();
 void registerServiceWorker();
 connectSSE();
 const earlyId = openSavedSelectionEarly();
 try {
-  await refreshState();
+  await Promise.all([uiConfig, refreshState()]);
 } catch {
   // PiApp renders the fatal restart prompt from store.state.fatalError.
 }
