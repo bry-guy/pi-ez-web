@@ -3,10 +3,10 @@ import https from "node:https";
 
 const SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount";
 
-// Minimal in-cluster Kubernetes API client; the gateway needs a handful of CRUD
+// Minimal in-cluster Kubernetes API client; workspaced needs a handful of CRUD
 // calls, which does not justify a client library dependency.
 export function inClusterKube({ host = process.env.KUBERNETES_SERVICE_HOST, port = process.env.KUBERNETES_SERVICE_PORT || "443" } = {}) {
-  if (!host) throw new Error("KUBERNETES_SERVICE_HOST is not set; the gateway must run in-cluster");
+  if (!host) throw new Error("KUBERNETES_SERVICE_HOST is not set; workspaced must run in-cluster");
   const ca = readFileSync(`${SA_DIR}/ca.crt`);
   return {
     request(method, path, body, contentType = "application/json") {

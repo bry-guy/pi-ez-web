@@ -36,12 +36,14 @@ export const SYNC_ERROR_STATUS = Object.freeze({
 
 // Collisions count like humans do: foo, foo-2, foo-3.
 // The `.N` namespace is reserved for fork children (see forkWorkspace).
-export function repositorySourceState(cfg, github) {
+// With workspaced, projects live only in workers, so web offers no local source.
+export function repositorySourceState(cfg, github, { local = true } = {}) {
   const status = github.status();
+  const fallback = repositorySource(cfg);
   return {
-    default: repositorySource(cfg),
+    default: !local && fallback === "local" ? "github" : fallback,
     sources: [
-      { id: "local", enabled: true },
+      { id: "local", enabled: local },
       {
         id: "github",
         enabled: true,

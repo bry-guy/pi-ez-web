@@ -54,12 +54,12 @@ export function register(api, deps) {
       models,
       providers,
       piConfiguration,
-      repositorySources: repositorySourceState(cfg, github),
+      repositorySources: repositorySourceState(cfg, github, { local: !remote }),
       settings: settingsState(cfg, github),
       sync: sync.state(),
       reposRoot: reposRoot(cfg),
       reposRootSource: process.env.PI_WEB_REPOS_ROOT ? "environment" : cfg.reposRoot ? "config" : "default",
-      projects: remote ? [...projects, ...await remote.projects()] : projects,
+      projects: remote ? await remote.projects() : projects,
       chats: await chatsState(sup, sync),
     });
   });
@@ -71,5 +71,5 @@ export function register(api, deps) {
 
   api.get("/providers", async c => c.json({ providers: await sup.listProviders() }));
 
-  api.get("/repository-sources", c => c.json(repositorySourceState(loadConfig(), github)));
+  api.get("/repository-sources", c => c.json(repositorySourceState(loadConfig(), github, { local: !remote })));
 }

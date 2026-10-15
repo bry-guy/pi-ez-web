@@ -108,7 +108,7 @@ export function deploymentManifest({ name, repository, image, grant = { name: "d
           containers,
           volumes: [
             { name: "data", persistentVolumeClaim: { claimName: `ws-${name}` } },
-            // Optional so workspaces start before the first gateway login; kubelet refreshes it after.
+            // Optional so workspaces start before the first web login; kubelet refreshes it after.
             { name: "github", secret: { secretName: GITHUB_SECRET, optional: true, defaultMode: 0o440 } },
             { name: "model", secret: { secretName: MODEL_SECRET, optional: true, defaultMode: 0o440 } },
           ],

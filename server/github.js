@@ -24,7 +24,7 @@ function safeJson(response) {
 }
 
 function authPath() {
-  // A gateway-shared login is mounted read-only from a Secret.
+  // workspaced mounts the shared login read-only from a Secret into workers.
   return process.env.PI_WEB_GITHUB_AUTH_FILE || path.join(appHome(), "github-auth.json");
 }
 

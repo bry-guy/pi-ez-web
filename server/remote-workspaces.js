@@ -252,9 +252,9 @@ export function registerRemoteRoutes(api, remote) {
     const { status, body: out } = await remote.setGrant(c.req.param("name"), body.grant);
     return c.json(out, status);
   });
-  api.post("/projects", async (c, next) => {
+  api.post("/projects", async c => {
     const body = await c.req.json().catch(() => ({}));
-    if (body.source !== "github" && body.source !== "git-url") return next();
+    if (body.source !== "github" && body.source !== "git-url") return c.json({ error: "local_projects_disabled" }, 400);
     return remote.createProject(c, body);
   });
 }

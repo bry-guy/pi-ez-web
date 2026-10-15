@@ -138,6 +138,10 @@ test("web routes owned ids to workers, merges state, and re-sequences events", a
     assert.deepEqual(projects.map(p => [p.id, p.workspace]), [["p1", "srvivor"]]);
     assert.deepEqual(await (await api.request("/sessions/s1/message", { method: "POST", body: "{}" })).json(), { path: "/api/sessions/s1/message", method: "POST" });
     assert.deepEqual(await (await api.request("/sessions/local-chat/message", { method: "POST" })).json(), { local: true });
+    // Projects exist only in workers: web refuses in-process (local) projects.
+    const local = await api.request("/projects", { method: "POST", body: JSON.stringify({ source: "local", repoPath: "/tmp" }) });
+    assert.equal(local.status, 400);
+    assert.deepEqual(await local.json(), { error: "local_projects_disabled" });
     for (let i = 0; i < 50 && !frames.some(f => f.includes("token")); i++) await new Promise(r => setTimeout(r, 20));
     const evt = JSON.parse(frames.find(f => f.includes("token")).split("data: ")[1]);
     assert.equal(evt.seq, 1, "web renumbers worker events");

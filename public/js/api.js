@@ -2,7 +2,7 @@ import { appendOperationEvent, completeOperation, completeOperationSnapshot } fr
 import { CONTRACT_VERSION, store } from "./store.js";
 
 const JH = { "content-type": "application/json" };
-// The app may be served under a gateway prefix (e.g. /w/<name>/); root-absolute
+// The app may be served under a path prefix; root-absolute
 // API paths are resolved against the document base so "/" stays unchanged.
 export const BASE = new URL(".", document.baseURI).pathname;
 const withBase = url => typeof url === "string" && url.startsWith("/") ? BASE + url.slice(1) : url;

@@ -18,7 +18,7 @@ grants:
   default:  { anyProject: true }                      # no secrets
   preview:  { anyProject: true, env: [preview-env], egress: preview }
   operator: { repos: [bry-guy/infra], serviceAccount: infra-operator,
-              env: [operator-env], egress: open }
+              env: [operator-env], egress: open }   # ghcr + platform profiles
 ```
 
 - Projects are never listed in deploy code. Add any repo in the UI and pick
@@ -47,7 +47,7 @@ Stricter (admission policy) is later.
    namespace adds nothing: workspaced holds the grant either way).
    `infra-operator` is cluster-admin; prestart turns any grant SA into
    `~/.kube/config`; infra's `mise.pi-ez.toml` points tasks at it.
-   `operator-env` holds resolved values, starting with the `ghcr` profile,
+   `operator-env` holds resolved values of the `ghcr` and `platform` profiles,
    written from the Mac by `mise run selfhost:platform:pi-ez-operator:env:apply`
    (re-run on rotation; ESO later). No 1Password token, no new vault. Prove
    it by releasing pi-ez-web to preview from the worker. Retire in-process

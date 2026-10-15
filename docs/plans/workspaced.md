@@ -1,7 +1,7 @@
 # Plan: web + workspaced + worker
 
-Status: draft, advisor-reviewed. Supersedes the gateway approach in
-project-workspaces.md.
+Status: live. The gateway and in-process projects are removed; web holds no
+projects when workspaced is configured.
 
 ## Shape
 
@@ -72,18 +72,10 @@ One image, three entrypoints.
 - Readiness probe 1s; startup logs carry ms since process start; workspaced
   logs wake→ready time.
 
-## Cleanup backlog (old implementation)
-- Existing workers don't get manifest changes (1s probe, no service links):
-  nothing reconciles. Patch them by hand or add reconcile.
+## Cleanup backlog
+- Existing workers don't get manifest changes: nothing reconciles. Patch by
+  hand or add reconcile.
 - Worker env: ship the prestart script as a file, not an env value.
-- Cluster: delete leftover `pi-ez-gateway` ServiceAccount, Service, Role,
-  RoleBinding, Deployment (Argo prune is off).
-- Code/docs: remove gateway remnants and superseded
-  `project-workspaces.md`.
-- Web: remove in-process projects (web = chats, sidebar, logins, routing).
-  Decide whether step 3 (local provider) still gates this.
-- Migrate srvivor, infra, pi-sync to workers; then delete the in-process
-  copies and old `/data/repos` checkouts on the pi-web PVC.
 
 ## Open: worker sandbox (blocks egress limits)
 Kata as configured costs ~2Gi/250m per worker (`podFixed` overhead) —

@@ -4,7 +4,7 @@ pi-ez-web should let repositories declare the tools and operating-system environ
 
 ## Phase 1 — trusted operator and project hooks
 
-The first dogfooding target is an explicitly trusted, single-user operator deployment. It is equivalent in authority to running Pi from an administrator workstation and must remain restricted to a trusted LAN or tailnet. See the [minimal Phase 1 implementation plan](plans/minimal-trusted-operator-phase-1.md).
+The deployment is web (chats, logins) plus workspaced and one worker per project; each project's authority comes from a deployer-defined grant. See [secrets, grants and operations](plans/secrets-and-operations.md).
 
 - Give the deployed image the small bootstrap toolset needed to run project hooks; repositories remain responsible for declaring their versioned tools.
 - Add generic per-project hooks in deployment-owned pi-ez-web configuration. A project may use Mise (`mise install`, `mise run bootstrap`, `mise run check`), repository scripts (`./script/install`, `./script/check`), or another tool without changing pi-ez-web.
