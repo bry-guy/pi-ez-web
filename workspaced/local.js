@@ -22,13 +22,45 @@ function writeAtomic(file, data) {
 
 // Workers as child processes of workspaced in the same container (Compose).
 // One trust boundary: workers share HOME and tools; only state dirs differ.
-export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {}) {
+// A worker that dies on its own is restarted, at most maxRestarts times within
+// restartWindowMs; after that it stays down and reports the problem.
+export function localProvider({ root, spawnImpl = spawn, server = SERVER, maxRestarts = 3, restartWindowMs = 10 * 60_000, restartDelayMs = 1_000, log = console.log } = {}) {
   mkdirSync(root, { recursive: true });
   const registry = path.join(root, "workspaces.json");
   const authFile = path.join(root, "github-auth.json");
   const modelAuthFile = path.join(root, "model-auth.json");
   const procs = new Map();
+  const crashes = new Map(); // name → { times: [ms], last: {reason, exitCode, signal, at}, fatal }
   const read = () => { try { return JSON.parse(readFileSync(registry, "utf8")); } catch { return {}; } };
+
+  function describe(code, signal) {
+    // SIGKILL nobody asked for is almost always the kernel's OOM killer.
+    if (signal === "SIGKILL" || code === 137) return { reason: "OOMKilled", message: "It was killed, most likely out of memory." };
+    return { reason: signal || `exit ${code}`, message: `It crashed (${signal || `exit ${code}`}).` };
+  }
+
+  function onExit(name, child, code, signal) {
+    if (procs.get(name) !== child) return; // stopped on purpose (sleep, remove)
+    procs.delete(name);
+    const now = Date.now();
+    const c = crashes.get(name) || { times: [] };
+    c.times = [...c.times.filter(t => now - t < restartWindowMs), now];
+    c.last = { ...describe(code, signal), exitCode: code, signal, at: new Date(now).toISOString() };
+    c.fatal = c.times.length > maxRestarts;
+    crashes.set(name, c);
+    log(`workspaced: worker ${name} died (${c.last.reason})${c.fatal ? "; not restarting" : "; restarting"}`);
+    if (!c.fatal) setTimeout(() => {
+      const w = read()[name];
+      if (w && !w.sleeping && !procs.has(name)) start(name, w).catch(e => log(`workspaced: restart ${name} failed: ${e.message}`));
+    }, restartDelayMs).unref?.();
+  }
+
+  function problem(name) {
+    const c = crashes.get(name);
+    if (!c?.last) return null;
+    const message = c.fatal ? `${c.last.message} It kept crashing, so it was not restarted again.` : `${c.last.message} It was restarted; the turn that was running was lost.`;
+    return { reason: c.last.reason, message, fatal: !!c.fatal, restarts: c.times.length, last: c.last };
+  }
 
   async function start(name, { repository }) {
     if (procs.get(name)?.exitCode === null) return;
@@ -43,14 +75,17 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
     });
     child.port = port;
     procs.set(name, child);
+    child.on?.("exit", (code, signal) => onExit(name, child, code, signal));
   }
 
   // Stops the worker and starts it again; reset also wipes its data first.
   async function respawn(name, { wipe = false } = {}) {
     const all = read();
     if (!all[name]) throw Object.assign(new Error("no such workspace"), { status: 404, code: "no_such_workspace" });
-    procs.get(name)?.kill("SIGTERM");
-    procs.delete(name);
+    const child = procs.get(name);
+    procs.delete(name); // before kill, so onExit treats it as intended
+    child?.kill("SIGTERM");
+    crashes.delete(name); // a restart clears a failed worker's history
     if (wipe) rmSync(path.join(root, name), { recursive: true, force: true });
     await start(name, all[name]);
   }
@@ -60,7 +95,9 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
     async list() {
       return Object.entries(read()).map(([name, w]) => {
         const alive = procs.get(name)?.exitCode === null;
-        return { name, repository: w.repository, grant: w.grant || "default", ready: alive, state: alive ? "running" : "sleeping", pinned: !!w.pinned, containers: false };
+        const p = w.sleeping ? null : problem(name);
+        const state = alive ? "running" : w.sleeping ? "sleeping" : p?.fatal ? "failed" : "starting";
+        return { name, repository: w.repository, grant: w.grant || "default", ready: alive, state, problem: p, pinned: !!w.pinned, containers: false };
       });
     },
     async scale(name, replicas) {
@@ -68,7 +105,9 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       if (!all[name]) throw Object.assign(new Error("no such workspace"), { status: 404, code: "no_such_workspace" });
       all[name].sleeping = replicas === 0;
       writeAtomic(registry, JSON.stringify(all, null, 2));
-      if (replicas === 0) { procs.get(name)?.kill("SIGTERM"); procs.delete(name); }
+      const child = procs.get(name);
+      procs.delete(name); // before kill, so onExit treats it as intended
+      if (replicas === 0) child?.kill("SIGTERM");
       else await start(name, all[name]);
     },
     restart: name => respawn(name),
@@ -97,8 +136,10 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       await start(name, all[name]);
     },
     async remove(name, { purge = false } = {}) {
-      procs.get(name)?.kill("SIGTERM");
+      const child = procs.get(name);
       procs.delete(name);
+      child?.kill("SIGTERM");
+      crashes.delete(name);
       const all = read();
       delete all[name];
       writeAtomic(registry, JSON.stringify(all, null, 2));
@@ -116,6 +157,6 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       if (content === null) rmSync(modelAuthFile, { force: true });
       else writeAtomic(modelAuthFile, content);
     },
-    stop() { for (const child of procs.values()) child.kill("SIGTERM"); },
+    stop() { const all = [...procs.values()]; procs.clear(); for (const child of all) child.kill("SIGTERM"); },
   };
 }

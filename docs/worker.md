@@ -28,6 +28,9 @@ When more than `WORKSPACED_MAX_AWAKE` workers would run, the least recently used
 
 **Reload** (`POST /api/pi/reload`, reached through workspaced's `…/reload`) re-fetches the Pi profile and its dotfiles resources and reloads Pi. It answers `409 pi_configuration_busy` while an agent turn runs. It does not re-run `PI_WEB_PRESTART_COMMAND`, which runs only when the worker starts; **restart** does that.
 
+### When a worker breaks
+Kubernetes restarts a worker that exits, runs out of memory, or stops answering `/api/health` for a minute (liveness); a startup probe gives slow sandboxes such as Kata VMs up to 5 minutes to boot first. Chats survive on the volume; only a running turn is lost. The sidebar marks a worker that crashed, and replaces its status with **restart** when it cannot run (crash loop, image pull failure, unschedulable, stuck sandbox, eviction). The local (Compose) provider restarts a crashed worker up to 3 times in 10 minutes, then marks it failed.
+
 ## Health
 
 `GET /api/health` returns `ok`, `buildId` and `busy`. It is the readiness probe.

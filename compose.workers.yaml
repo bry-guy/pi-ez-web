@@ -24,6 +24,10 @@ services:
       XDG_CONFIG_HOME: /data/home/.config
       XDG_DATA_HOME: /data/home/.local/share
       XDG_CACHE_HOME: /data/home/.cache
+      # Each awake worker needs ~150-250 MB plus what its agent runs. Keep
+      # max awake x that under the memory Docker has (2 GB by default on Docker Desktop).
+      WORKSPACED_MAX_AWAKE: ${WORKSPACED_MAX_AWAKE:-2}
+    mem_limit: ${WORKSPACED_MEMORY:-1536m}
     volumes:
       - pi-ez-workspaced-data:/data
     restart: unless-stopped

@@ -264,6 +264,11 @@ class PiSidebar extends HTMLElement {
       store.state.openTree[id] = !store.state.openTree[id];
       if (store.state.openTree[id]) wakeEarly(store.state.projects.find(p => p.id === id));
       store.notify("state");
+    } else if (act === "restart-ws") {
+      e.stopPropagation();
+      api.restartWorkspace(t.dataset.ws)
+        .then(() => refreshState())
+        .catch(err => store.setError(`Restart failed: ${err.error || err.message || err}`));
     } else if (act === "toggle-pin") {
       e.stopPropagation();
       api.pinWorkspace(t.dataset.ws, t.dataset.pinned !== "1")
@@ -280,9 +285,14 @@ class PiSidebar extends HTMLElement {
   // Project workers sleep when idle and wake on use; pinning keeps one awake
   // (e.g. a dev server you want left running).
   workspaceToggle(p) {
+    const problem = p.workspaceProblem;
+    if (problem?.fatal || p.workspaceState === "failed") {
+      const why = problem?.message || "The worker is not running.";
+      return `<button class="row-ws failed" data-act="restart-ws" data-ws="${esc(p.workspace)}" title="${esc(`${why} Click to restart it.`)}" aria-label="${esc(`${p.name}: failed. ${why} Restart`)}">restart</button>`;
+    }
     const label = workerStateLabel(p.workspaceState);
-    const title = `Grant: ${p.workspaceGrant || "default"}. ${p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake."}`;
-    return `<button class="row-ws ${label}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}${p.workspacePinned ? ", kept awake" : ""}. ${title}`)}">${label}${p.workspacePinned ? `<i class="row-ws-keep" aria-hidden="true"></i>` : ""}</button>`;
+    const title = `${problem ? `${problem.message} ` : ""}Grant: ${p.workspaceGrant || "default"}. ${p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake."}`;
+    return `<button class="row-ws ${label}${problem ? " warn" : ""}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}${p.workspacePinned ? ", kept awake" : ""}. ${title}`)}">${label}${p.workspacePinned ? `<i class="row-ws-keep" aria-hidden="true"></i>` : ""}</button>`;
   }
 
   sessionRows(p, nodes, depth, q, out, forceAll = false) {

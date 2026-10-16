@@ -77,7 +77,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     let changed = false;
     for (const name of Object.keys(snapshots)) if (!known.has(name)) { delete snapshots[name]; changed = true; }
     for (const name of streams.keys()) if (!known.has(name)) unsubscribe(name);
-    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned, workspaceGrant: w.grant || "default" });
+    const tag = (w, p) => ({ ...p, workspace: w.name, workspaceState: w.state || (w.ready ? "running" : "starting"), workspacePinned: !!w.pinned, workspaceGrant: w.grant || "default", workspaceProblem: w.problem || null });
     const lists = await Promise.all(workspaces.map(async w => {
       const running = w.state ? w.state === "running" : w.ready;
       let fresh = null;
