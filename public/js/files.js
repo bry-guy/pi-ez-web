@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { store } from "./store.js";
-import { esc, gitStatusText } from "./shell.js";
+import { esc, gitStatusText, icon } from "./shell.js";
 
 
 /* ---------------- file panel ---------------- */
@@ -275,7 +275,7 @@ class PiFiles extends HTMLElement {
     this.innerHTML = `<aside class="files">
       <div class="files-head">
         <div class="sec-label">Files</div>
-        <button class="ghost-btn" data-act="close" title="Collapse">×</button>
+        <button class="ghost-btn" data-act="close" title="Collapse files" aria-label="Collapse files">${icon("chevronRight")}</button>
       </div>
       ${summary ? `<div class="file-git">${esc(summary)}</div>` : ""}
       <div class="file-target-row file-tree-target" role="group" aria-label="Diff target"><label for="file-target">Diff target</label><select id="file-target" class="file-target" aria-label="Diff target">${this.targetOptions(selectedTarget)}</select></div>

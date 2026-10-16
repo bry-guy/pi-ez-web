@@ -910,6 +910,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.filePath, null);
   assert.equal(dom.window.document.activeElement?.dataset.file, "src/app.js", "closing restores focus to the selected file");
   assert.ok(root.querySelector("pi-files .files:not(.file-viewer)"));
+  assert.equal(root.querySelector("pi-files .files:not(.file-viewer) [data-act='close']").getAttribute("aria-label"), "Collapse files", "the Files panel collapses with a chevron, not ×");
   assert.equal(root.querySelector(".files-scroll").scrollTop, 37);
   fileTarget = root.querySelector(".file-target");
   fileTarget.value = "origin";

@@ -188,7 +188,7 @@ aside.rail {
   border: 0; background: transparent; color: var(--faint); cursor: pointer;
   font-family: var(--mono); font-size: 14px; padding: 4px 6px; border-radius: 6px;
 }
-.icon { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.icon { width: 20px; height: 20px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .ghost-btn:hover, .ghost-btn:focus-visible { background: var(--surface-2); color: var(--text); }
 .rail-actions { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 8px; }
 .rail-nav {
@@ -259,7 +259,7 @@ aside.mini {
 .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
 .mini-btn.quiet { border-color: transparent; background: transparent; color: var(--muted); font-size: 14px; }
 .mini-btn.quiet:hover { background: var(--surface-2); color: var(--text); border-color: transparent; }
-.mini-btn .icon { width: 15px; height: 15px; margin: auto; }
+.mini-btn .icon { width: 20px; height: 20px; margin: auto; }
 .mini-gap { height: 8px; }
 .mini-flex { flex: 1; }
 
