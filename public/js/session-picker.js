@@ -257,11 +257,11 @@ class PiSessionPicker extends HTMLElement {
     const knownBranches = new Set([...(project.branches || []), ...(project.contexts || []).map(context => context.branch).filter(Boolean)]);
     const needsPrimaryFetch = !knownBranches.has(branch) && baseBranch === primary;
     this.busy = true;
-    this.busyLabel = needsPrimaryFetch ? `Fetching ${primary}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Forking…";
+    this.busyLabel = needsPrimaryFetch ? `Fetching ${primary}…` : mode === "new" ? "Creating session…" : mode === "switch" ? "Switching…" : "Copying…";
     store.set({ sessionPickerError: null });
     const operation = beginOperation(
       mode === "new" ? "create-session" : mode === "switch" ? "switch-session" : "fork-session",
-      mode === "new" ? "Create session" : mode === "switch" ? "Switch session" : "Fork session",
+      mode === "new" ? "Create session" : mode === "switch" ? "Switch session" : "Copy conversation",
       "",
       needsPrimaryFetch ? `Waiting for ${primary} preparation…` : "Request started.",
       picker.sourceSessionId,
@@ -390,7 +390,7 @@ class PiSessionPicker extends HTMLElement {
     const current = picker.currentBranch || "";
     const primarySelected = current === primary;
     const actionButtons = existing
-      ? `<button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Fork</button>`
+      ? `<button class="settings-save" data-act="apply-session-branch" data-mode="fork" ${this.busy || !different ? "disabled" : ""}>Copy conversation to new branch</button>`
       : `<button class="settings-save" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button>`;
     const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
     const fetchRunning = !!runningPickerOperation("fetch", picker.sourceSessionId);
@@ -402,9 +402,10 @@ class PiSessionPicker extends HTMLElement {
     const hookButtons = hookNames.map(name => {
       const label = hookLabel(name);
       const running = !!runningPickerOperation("hook", picker.sourceSessionId, label);
-      return `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? `${label}ing…` : label)}</button>`;
+      return `<button class="settings-action" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? `${label}ing…` : name === "setup" ? "Run project setup script" : label)}</button>`;
     }).join("");
-    const sessionActions = `<section class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="workspace-actions session-picker-session-buttons">${hookButtons}${actionButtons}</div></section>`;
+    const actionHints = `${hookNames.includes("setup") ? `<p class="session-picker-help">Setup runs the project's setup hook in the new worktree.</p>` : ""}${existing ? `<p class="session-picker-help">Copy duplicates the transcript into a new session on the chosen branch; switching moves it instead.</p>` : ""}`;
+    const sessionActions = `<section class="session-picker-actions"><div class="session-context-heading session-picker-actions-heading"><span>Session</span></div><div class="workspace-actions session-picker-session-buttons">${hookButtons}${actionButtons}</div>${actionHints}</section>`;
     this.loadSynced();
     const synced = mode === "new" ? picker.synced : undefined;
     const syncedRows = (synced || []).map(item => `<button type="button" class="session-history-row" data-act="open-synced" data-sync-id="${esc(item.sessionId)}" data-branch="${esc(item.branch || "")}" aria-label="Open ${esc(item.title || "Untitled conversation")}"><span class="session-history-main"><strong>${esc(item.title || "Untitled conversation")}</strong><small>${esc(item.branch || primary)}${item.leaseHolder ? ` · running on ${esc(item.leaseHolder)}` : ""}</small></span><span class="session-history-resume">Open</span></button>`).join("");

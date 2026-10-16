@@ -386,6 +386,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(checkButton.textContent, "Check");
   assert.equal(checkButton.parentElement, sessionButtons);
   assert.equal(forkButton.parentElement, sessionButtons);
+  assert.equal(forkButton.textContent, "Copy conversation to new branch");
   assert.equal(root.querySelector(".session-picker-actions [data-act='close-session-picker']"), null);
   const gitSection = root.querySelector(".session-branch-actions");
   const sessionSection = root.querySelector(".session-picker-actions");
