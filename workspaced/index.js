@@ -77,9 +77,43 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
   const refuseBusy = async (c, name) => c.req.query("force") !== "1" && await lifecycle.busy(name)
     ? c.json({ error: "workspace_busy", name, message: "This project is busy. Try again when it is idle, or force it." }, 409)
     : null;
+  // Restart and reset need an awake worker; a sleeping one is never woken by them.
+  const refuseAsleep = async (c, name) => (await lifecycle.info(name))?.state === "sleeping"
+    ? c.json({ error: "asleep", name, message: "This project is asleep. Wake it first." }, 409)
+    : null;
+  app.post("/v1/workspaces/:name/restart", named(async (c, name) => {
+    const refusal = await refuseAsleep(c, name) || await refuseBusy(c, name);
+    if (refusal) return refusal;
+    await provider.restart(name);
+    return c.json({ ok: true });
+  }));
+  app.post("/v1/workspaces/:name/reset", named(async (c, name) => {
+    const body = await c.req.json().catch(() => null);
+    if (body?.confirm !== name) return c.json({ error: "confirm_required", message: `Send {"confirm": "${name}"} to wipe this project's data.` }, 400);
+    const refusal = await refuseAsleep(c, name) || await refuseBusy(c, name);
+    if (refusal) return refusal;
+    await provider.reset(name);
+    return c.json({ ok: true });
+  }));
+  // Re-fetches the profile and dotfiles resources and reloads Pi; the worker answers 409 when busy.
+  app.post("/v1/workspaces/:name/reload", named(async (c, name) => {
+    const refusal = await refuseAsleep(c, name);
+    if (refusal) return refusal;
+    const base = provider.upstream(name);
+    if (!base) return c.json({ error: "workspace_unavailable", name }, 502);
+    lifecycle.begin(name);
+    try {
+      const res = await fetchImpl(`${base}/api/pi/reload`, { method: "POST", signal: AbortSignal.timeout(120_000) });
+      return c.json(await res.json().catch(() => ({ error: "workspace_unavailable", name })), res.status);
+    } catch {
+      return c.json({ error: "workspace_unavailable", name }, 502);
+    } finally {
+      lifecycle.end(name);
+    }
+  }));
   app.post("/v1/workspaces/:name/sleep", named(async (c, name) => {
-    const busy = await refuseBusy(c, name);
-    if (busy) return busy;
+    const refusal = await refuseBusy(c, name);
+    if (refusal) return refusal;
     await lifecycle.sleep(name, "requested");
     return c.json({ ok: true });
   }));

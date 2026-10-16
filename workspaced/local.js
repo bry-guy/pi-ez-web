@@ -45,6 +45,16 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
     procs.set(name, child);
   }
 
+  // Stops the worker and starts it again; reset also wipes its data first.
+  async function respawn(name, { wipe = false } = {}) {
+    const all = read();
+    if (!all[name]) throw Object.assign(new Error("no such workspace"), { status: 404, code: "no_such_workspace" });
+    procs.get(name)?.kill("SIGTERM");
+    procs.delete(name);
+    if (wipe) rmSync(path.join(root, name), { recursive: true, force: true });
+    await start(name, all[name]);
+  }
+
   return {
     async init() { for (const [name, w] of Object.entries(read())) if (!w.sleeping) await start(name, w); },
     async list() {
@@ -61,6 +71,8 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       if (replicas === 0) { procs.get(name)?.kill("SIGTERM"); procs.delete(name); }
       else await start(name, all[name]);
     },
+    restart: name => respawn(name),
+    reset: name => respawn(name, { wipe: true }),
     // ps reports this process only (not its children) and %cpu averaged over its life.
     async usage() {
       const live = [...procs].filter(([, c]) => c.pid && c.exitCode === null);

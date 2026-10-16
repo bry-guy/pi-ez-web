@@ -69,7 +69,23 @@ test("buildApi route inventory removes only the retired legacy merge route", () 
 
   const api = buildApi({}, { syncCoordinator: { state: () => ({}) } });
   const routesAfterA2 = api.routes.map(({ method, path }) => `${method} ${path}`);
-  const addedSince = ["GET /projects/:id/synced-sessions"];
+  const addedSince = ["GET /projects/:id/synced-sessions", "POST /pi/reload"];
   assert.deepEqual(routesAfterA2.filter(route => !addedSince.includes(route)), routesBeforeA2.filter(route => route !== retiredRoute));
   assert.equal(routesAfterA2.length, 56 + addedSince.length);
+});
+
+test("POST /pi/reload reloads Pi configuration and refuses while a turn is running", async () => {
+  let busy = true;
+  const sup = { reloadPiConfiguration: async () => {
+    if (busy) throw Object.assign(new Error("pi_configuration_busy"), { code: "pi_configuration_busy" });
+    return { profile: { status: "none" } };
+  } };
+  const api = buildApi(sup, { syncCoordinator: { state: () => ({}) } });
+  const refused = await api.request("/pi/reload", { method: "POST" });
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).error, "pi_configuration_busy");
+  busy = false;
+  const ok = await api.request("/pi/reload", { method: "POST" });
+  assert.equal(ok.status, 200);
+  assert.deepEqual((await ok.json()).piConfiguration, { profile: { status: "none" } });
 });

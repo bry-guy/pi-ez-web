@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtempSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -555,4 +555,99 @@ test("sleep refuses a busy worker unless forced", async () => {
     provider.ws.state = "running"; busy = false;
     assert.equal((await sleep("")).status, 200, "idle workers sleep without force");
   } finally { worker.close(); }
+});
+
+test("restart and reset refuse busy or sleeping workers; reset needs its name as confirm", async () => {
+  let busy = false;
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true, busy })));
+  const provider = fakeLifecycleProvider(worker.address().port);
+  provider.restart = async name => provider.calls.push(["restart", name]);
+  provider.reset = async name => provider.calls.push(["reset", name]);
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: -1, log: () => {} });
+  const app = createWorkspaced({ provider, token: TOKEN, lifecycle });
+  const post = (p, body, q = "") => app.request(`/v1/workspaces/app/${p}${q}`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  try {
+    assert.equal((await post("restart")).status, 409, "asleep");
+    assert.equal((await post("reset", { confirm: "app" })).status, 409, "asleep");
+    assert.deepEqual(provider.calls, []);
+    provider.ws.state = "running";
+    busy = true;
+    const refused = await post("restart");
+    assert.equal((await refused.json()).error, "workspace_busy");
+    assert.equal((await post("reset", { confirm: "app" }, "?force=1")).status, 200, "force");
+    busy = false;
+    assert.equal((await post("reset", { confirm: "nope" })).status, 400);
+    assert.equal((await post("reset")).status, 400);
+    assert.equal((await post("restart")).status, 200);
+    assert.deepEqual(provider.calls, [["reset", "app"], ["restart", "app"]]);
+  } finally { worker.close(); }
+});
+
+test("reload proxies to the worker, passes its 409 through, and never wakes a sleeping worker", async () => {
+  const seen = [];
+  const worker = await listen((req, res) => {
+    seen.push([req.method, req.url]);
+    res.statusCode = seen.length === 1 ? 200 : 409;
+    res.end(JSON.stringify(seen.length === 1 ? { ok: true } : { error: "pi_configuration_busy" }));
+  });
+  const provider = fakeLifecycleProvider(worker.address().port);
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: -1, log: () => {} });
+  const app = createWorkspaced({ provider, token: TOKEN, lifecycle });
+  try {
+    const asleep = await app.request("/v1/workspaces/app/reload", { method: "POST", headers: auth });
+    assert.equal(asleep.status, 409);
+    assert.equal((await asleep.json()).error, "asleep");
+    assert.deepEqual(provider.calls, [], "no wake");
+    provider.ws.state = "running";
+    const ok = await app.request("/v1/workspaces/app/reload", { method: "POST", headers: auth });
+    assert.equal(ok.status, 200);
+    const busy = await app.request("/v1/workspaces/app/reload", { method: "POST", headers: auth });
+    assert.equal(busy.status, 409);
+    assert.equal((await busy.json()).error, "pi_configuration_busy");
+    assert.deepEqual(seen, [["POST", "/api/pi/reload"], ["POST", "/api/pi/reload"]]);
+  } finally { worker.close(); }
+});
+
+test("kubernetes restart patches the pod template; reset scales down, drops the PVC, recreates it, scales up", async () => {
+  const seen = [];
+  let pvcExists = true;
+  const deployment = { metadata: { annotations: { "pi-ez.dev/repository": "o/app" } }, spec: { replicas: 1, template: { spec: { containers: [{ image: "img" }] } } } };
+  const kube = { request: async (method, p, body, type) => {
+    seen.push([method, p, body, type]);
+    if (method === "GET" && p.endsWith("/deployments/ws-app")) return { status: 200, body: deployment };
+    if (method === "GET" && p.includes("/pods?")) return { status: 200, body: { items: [] } };
+    if (method === "GET" && p.endsWith("/persistentvolumeclaims/ws-app")) return { status: pvcExists ? 200 : 404, body: {} };
+    if (method === "DELETE" && p.endsWith("/persistentvolumeclaims/ws-app")) { pvcExists = false; return { status: 200, body: {} }; }
+    if (method === "POST") { pvcExists = true; return { status: 201, body: {} }; }
+    return { status: 200, body: {} };
+  } };
+  const provider = kubernetesProvider({ kube, config: kubernetesConfig({}), removePollMs: 1 });
+  await provider.restart("app");
+  const restart = seen.filter(s => s[0] === "PATCH").at(-1);
+  assert.ok(restart[2].spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]);
+  assert.equal(restart[2].spec.replicas, undefined, "stays awake");
+  seen.length = 0;
+  await provider.reset("app");
+  const ops = seen.filter(s => s[0] !== "GET").map(s => s[0] === "PATCH" ? `PATCH ${s[2].spec.replicas}` : `${s[0]} ${s[1].split("/").at(-1)}`);
+  assert.deepEqual(ops, ["PATCH 0", "DELETE ws-app", "POST persistentvolumeclaims", "PATCH 1"]);
+  assert.deepEqual(seen.find(s => s[0] === "POST")[2].spec, { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "20Gi" } } });
+});
+
+test("local restart respawns the worker; reset also wipes its data", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "workspaced-reset-"));
+  const spawned = [];
+  const spawnImpl = (_bin, _args, opts) => { const child = new EventEmitter(); child.exitCode = null; child.kill = () => { child.exitCode = 0; }; spawned.push(child); return child; };
+  const provider = localProvider({ root, spawnImpl });
+  await provider.create({ name: "app", repository: "o/app" });
+  const dataFile = path.join(root, "app", "marker");
+  mkdirSync(path.join(root, "app"));
+  writeFileSync(dataFile, "x");
+  await provider.restart("app");
+  assert.equal(spawned.length, 2);
+  assert.equal(spawned[0].exitCode, 0, "old worker stopped");
+  assert.equal(await provider.list().then(l => l[0].state), "running");
+  await provider.reset("app");
+  assert.equal(spawned.length, 3);
+  assert.equal(existsSync(dataFile), false, "data wiped");
+  assert.equal(await provider.list().then(l => l[0].state), "running");
 });

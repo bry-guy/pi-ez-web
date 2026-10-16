@@ -26,6 +26,8 @@ USER node
 
 When more than `WORKSPACED_MAX_AWAKE` workers would run, the least recently used idle one sleeps: its volume stays, its processes stop, and the next request wakes it. Expanding or opening a sleeping project in the sidebar starts waking it right away. After start, a worker preloads Pi and its extensions in the background, and keeps compiled extensions in `~/.cache/pi-ez-web/jiti` so restarts don't recompile them. A worker is busy, and never put to sleep, while an agent turn, compaction or queued prompt is running. Pin a project with **Keep awake** to keep dev servers running.
 
+**Reload** (`POST /api/pi/reload`, reached through workspaced's `…/reload`) re-fetches the Pi profile and its dotfiles resources and reloads Pi. It answers `409 pi_configuration_busy` while an agent turn runs. It does not re-run `PI_WEB_PRESTART_COMMAND`, which runs only when the worker starts; **restart** does that.
+
 ## Health
 
 `GET /api/health` returns `ok`, `buildId` and `busy`. It is the readiness probe.

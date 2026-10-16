@@ -116,6 +116,19 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
     return out;
   }
 
+  // Pods (and, with pvc, the PVC) are gone; the PVC holds unpushed work, so it's only waited on when asked.
+  async function waitGone(ns, name, { pvc = false, timeoutMs = removeTimeoutMs } = {}) {
+    const pods = `${core("pods", ns)}?labelSelector=${encodeURIComponent(`${NAME_LABEL}=${name}`)}`;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const podRes = await kube.request("GET", pods);
+      const pvcGone = !pvc || (await kube.request("GET", `${core("persistentvolumeclaims", ns)}/ws-${name}`)).status === 404;
+      if (pvcGone && !(podRes.body?.items || []).length) return;
+      if (Date.now() > deadline) throw httpError("workspace is still terminating", 504, "workspace_remove_timeout");
+      await new Promise(r => setTimeout(r, removePollMs));
+    }
+  }
+
   return {
     async usage() {
       if (Date.now() - usageCache.at < USAGE_TTL_MS) return usageCache.value;
@@ -184,15 +197,22 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
         if (res.status >= 300 && res.status !== 404) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
       }
       // Return only once the pod (and purged PVC) are gone, so a re-add starts clean.
-      const pods = `${core("pods", ns)}?labelSelector=${encodeURIComponent(`${NAME_LABEL}=${name}`)}`;
-      const deadline = Date.now() + removeTimeoutMs;
-      for (;;) {
-        const podRes = await kube.request("GET", pods);
-        const pvcGone = !purge || (await kube.request("GET", `${core("persistentvolumeclaims", ns)}/ws-${name}`)).status === 404;
-        if (pvcGone && !(podRes.body?.items || []).length) { located.delete(name); return; }
-        if (Date.now() > deadline) throw httpError("workspace is still terminating", 504, "workspace_remove_timeout");
-        await new Promise(r => setTimeout(r, removePollMs));
-      }
+      await waitGone(ns, name, { pvc: purge });
+      located.delete(name);
+    },
+    // A new pod with the same volume; the rollout annotation is what kubectl rollout restart sets.
+    restart: name => patch(name, { spec: { template: { metadata: { annotations: { "kubectl.kubernetes.io/restartedAt": new Date().toISOString() } } } } }),
+    // Scale to zero, drop the PVC, and bring up a fresh clone. Stays awake.
+    async reset(name) {
+      const { ns, deployment } = await mustLocate(name);
+      const repository = deployment.metadata.annotations?.[REPO_ANNOTATION];
+      await patch(name, { spec: { replicas: 0 } });
+      await waitGone(ns, name);
+      const res = await kube.request("DELETE", `${core("persistentvolumeclaims", ns)}/ws-${name}`);
+      if (res.status >= 300 && res.status !== 404) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
+      await waitGone(ns, name, { pvc: true });
+      await create(core("persistentvolumeclaims", ns), pvcManifest({ name, repository, storage: config.storage, storageClassName: config.storageClassName }));
+      await patch(name, { spec: { replicas: 1 } });
     },
     upstream: name => `http://ws-${name}.${located.get(name) || home}.svc.cluster.local:${WORKSPACE_PORT}`,
     setGitHubAuth: auth => putSecretFile(GITHUB_SECRET, "github-auth.json", auth ? JSON.stringify(auth) : null),

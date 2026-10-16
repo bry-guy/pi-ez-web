@@ -3,6 +3,16 @@ export function register(api, deps) {
 
 
   // ---------- settings ----------
+  // Re-fetches the profile and its resources, then reloads Pi. Busy → 409.
+  api.post("/pi/reload", async c => {
+    try {
+      return c.json({ ok: true, piConfiguration: await sup.reloadPiConfiguration() });
+    } catch (e) {
+      if (e.code === "pi_configuration_busy") return err(c, 409, e.code, { message: "An active session is still running." });
+      throw e;
+    }
+  });
+
   api.post("/settings", async c => {
     const body = await c.req.json();
     const cfg = loadConfig();
