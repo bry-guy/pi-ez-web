@@ -767,12 +767,12 @@ class PiComposer extends HTMLElement {
       <div class="command-popover hidden" role="listbox" aria-label="Pi commands"></div>
       <div class="composer-attachments"></div>
       <textarea rows="2"></textarea>
-      <pi-context-meter></pi-context-meter>
       <div class="composer-foot">
         <div class="attachment-picker">
           <input class="image-input" type="file" accept="image/*" multiple hidden>
           <button class="attach-btn" type="button" title="Attach images" aria-label="Attach images">＋</button>
         </div>
+        <pi-context-meter></pi-context-meter>
         <pi-model-picker data-mode="session" data-variant="composer"></pi-model-picker>
         <pi-thinking-picker></pi-thinking-picker>
         <button class="stop-btn hidden" type="button" aria-label="Stop" title="Stop"><span class="sq" aria-hidden="true"></span>Stop</button>
