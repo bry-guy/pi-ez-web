@@ -17,6 +17,8 @@ Object.assign(globalThis, {
   MouseEvent: dom.window.MouseEvent,
   CustomEvent: dom.window.CustomEvent,
   localStorage: dom.window.localStorage,
+  location: dom.window.location,
+  history: dom.window.history,
 });
 
 const realSetInterval = globalThis.setInterval;
@@ -93,9 +95,9 @@ api.state = () => stateHandler();
 api.settings = (...args) => rootHandler(...args);
 resetHandlers();
 
-function mountSettings() {
+function mountSettings(category = "repositories") {
   serverState = makeState();
-  store.set({ ...structuredClone(serverState), view: "settings" });
+  store.set({ ...structuredClone(serverState), view: "settings", settingsCategory: category });
   const settings = document.createElement("pi-settings");
   document.body.append(settings);
   return settings;
@@ -108,17 +110,21 @@ function typeInto(control, value) {
 
 function unmountSettings(settings) {
   settings.remove();
-  store.set({ view: "chat" });
+  store.set({ view: "chat", settingsCategory: null });
   resetHandlers();
 }
 
+// Drafts live on the element across category switches; only the active page's controls are rendered.
+function showCategory(category) {
+  store.set({ settingsCategory: category });
+}
+
 test("notifications preserve drafts, focus, selection, and details while refreshing untouched state", () => {
-  const settings = mountSettings();
+  const settings = mountSettings("repositories");
   const owner = settings.querySelector("[data-setting='githubOwner']");
   owner.focus();
   typeInto(owner, "draft-owner");
   owner.setSelectionRange(5, 5);
-  settings.querySelector(".settings-advanced").open = true;
 
   store.set({ error: "not rendered by settings" });
   assert.strictEqual(settings.querySelector("[data-setting='githubOwner']"), owner);
@@ -129,7 +135,6 @@ test("notifications preserve drafts, focus, selection, and details while refresh
   assert.equal(settings.querySelector("[data-setting='githubOwner']").value, "draft-owner");
   assert.equal(document.activeElement, settings.querySelector("[data-setting='githubOwner']"));
   assert.equal(settings.querySelector("[data-setting='githubOwner']").selectionStart, 5);
-  assert.equal(settings.querySelector(".settings-advanced").open, true);
 
   store.set({
     settings: {
@@ -141,26 +146,32 @@ test("notifications preserve drafts, focus, selection, and details while refresh
   });
   assert.equal(settings.querySelector("[data-setting='githubOwner']").value, "draft-owner");
   assert.equal(settings.querySelector("[data-setting='defaultRepositorySource']").value, "github");
+  showCategory("defaults");
   assert.equal(settings.querySelector(".repos-root-input").value, "~/worktrees");
+
+  showCategory("pi");
+  settings.querySelector(".settings-advanced").open = true;
+  store.set({ error: "not rendered by settings" });
+  assert.equal(settings.querySelector(".settings-advanced").open, true);
   unmountSettings(settings);
 });
 
 test("textarea, select, checkbox, and newly disabled fields restore correctly", () => {
-  const settings = mountSettings();
+  const settings = mountSettings("pi");
   const packages = settings.querySelector("[data-setting='piPackages']");
-  packages.focus();
   typeInto(packages, "npm:draft\nnpm:second");
-  packages.setSelectionRange(5, 5);
 
+  showCategory("repositories");
   const source = settings.querySelector("[data-setting='defaultRepositorySource']");
   source.value = "github";
   source.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  const syncUrl = settings.querySelector("[data-setting='syncServerUrl']");
-  typeInto(syncUrl, "https://draft.test");
+  typeInto(settings.querySelector("[data-setting='githubOwner']"), "draft-owner");
+
+  showCategory("sync");
+  typeInto(settings.querySelector("[data-setting='syncServerUrl']"), "https://draft.test");
   const syncAll = settings.querySelector("[data-setting='syncAllConversations']");
   syncAll.checked = true;
   syncAll.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  typeInto(settings.querySelector("[data-setting='githubOwner']"), "draft-owner");
 
   store.set({
     providers: [{ id: "new-provider", name: "New provider" }],
@@ -179,33 +190,35 @@ test("textarea, select, checkbox, and newly disabled fields restore correctly", 
     },
   });
 
-  assert.equal(settings.querySelector("[data-setting='piPackages']").value, "npm:draft\nnpm:second");
-  assert.equal(settings.querySelector("[data-setting='piPackages']").selectionStart, 5);
-  assert.equal(document.activeElement, settings.querySelector("[data-setting='piPackages']"));
-  assert.equal(settings.querySelector("[data-setting='defaultRepositorySource']").value, "github");
   assert.equal(settings.querySelector("[data-setting='syncServerUrl']").value, "https://draft.test");
   assert.equal(settings.querySelector("[data-setting='syncAllConversations']").checked, true);
+  showCategory("repositories");
+  assert.equal(settings.querySelector("[data-setting='defaultRepositorySource']").value, "github");
   assert.equal(settings.querySelector("[data-setting='githubOwner']").value, "new-owner");
   assert.equal(settings.querySelector("[data-setting='githubOwner']").disabled, true);
+  showCategory("pi");
+  assert.equal(settings.querySelector("[data-setting='piPackages']").value, "npm:draft\nnpm:second");
   unmountSettings(settings);
 });
 
 test("successful repository save clears only submitted drafts and failed save retains them", async () => {
-  let settings = mountSettings();
-  typeInto(settings.querySelector("[data-setting='githubOwner']"), "saved-owner");
+  let settings = mountSettings("pi");
   typeInto(settings.querySelector("[data-setting='piProfile']"), "draft-profile");
+  showCategory("repositories");
+  typeInto(settings.querySelector("[data-setting='githubOwner']"), "saved-owner");
   await settings.saveRepositorySettings();
   assert.equal(settings.querySelector("[data-setting='githubOwner']").value, "saved-owner");
+  showCategory("pi");
   assert.equal(settings.querySelector("[data-setting='piProfile']").value, "draft-profile");
   store.set({ settings: {
     ...store.state.settings,
     githubOwner: { value: "server-owner", editable: true },
   } });
+  showCategory("repositories");
   assert.equal(settings.querySelector("[data-setting='githubOwner']").value, "server-owner");
-  assert.equal(settings.querySelector("[data-setting='piProfile']").value, "draft-profile");
   unmountSettings(settings);
 
-  settings = mountSettings();
+  settings = mountSettings("repositories");
   typeInto(settings.querySelector("[data-setting='githubOwner']"), "failed-owner");
   patchHandler = async () => { throw Object.assign(new Error("invalid owner"), { error: "invalid_github_owner" }); };
   await settings.saveRepositorySettings();
@@ -218,7 +231,7 @@ test("successful repository save clears only submitted drafts and failed save re
 });
 
 test("repos-root and Pi saves clear only successful section drafts", async () => {
-  let settings = mountSettings();
+  let settings = mountSettings("defaults");
   typeInto(settings.querySelector(".repos-root-input"), "~/saved-root");
   await settings.saveReposRoot();
   assert.equal(settings.querySelector(".repos-root-input").value, "~/saved-root");
@@ -230,7 +243,7 @@ test("repos-root and Pi saves clear only successful section drafts", async () =>
   assert.equal(settings.querySelector(".repos-root-input").value, "~/failed-root");
   unmountSettings(settings);
 
-  settings = mountSettings();
+  settings = mountSettings("pi");
   typeInto(settings.querySelector("[data-setting='piProfile']"), "new-profile");
   typeInto(settings.querySelector("[data-setting='piPackages']"), "npm:new");
   typeInto(settings.querySelector("[data-setting='piExtensions']"), "/new-extension");
@@ -251,7 +264,7 @@ test("repos-root and Pi saves clear only successful section drafts", async () =>
 });
 
 test("edits typed during a save survive its successful response", async () => {
-  const settings = mountSettings();
+  const settings = mountSettings("repositories");
   typeInto(settings.querySelector("[data-setting='githubOwner']"), "submitted-owner");
   let finish;
   patchHandler = patch => new Promise(resolve => {
@@ -274,7 +287,7 @@ test("edits typed during a save survive its successful response", async () => {
 });
 
 test("close and reopen clears drafts without letting an old save clear new drafts", async () => {
-  const settings = mountSettings();
+  const settings = mountSettings("repositories");
   typeInto(settings.querySelector("[data-setting='githubOwner']"), "submitted-owner");
   let finish;
   patchHandler = patch => new Promise(resolve => {
@@ -296,7 +309,7 @@ test("close and reopen clears drafts without letting an old save clear new draft
 });
 
 test("Pi drafts remain until state refresh completes and default-thinking autosave stays active", async () => {
-  const settings = mountSettings();
+  const settings = mountSettings("pi");
   let finishState;
   stateHandler = () => new Promise(resolve => {
     finishState = () => resolve(structuredClone(serverState));
@@ -318,6 +331,7 @@ test("Pi drafts remain until state refresh completes and default-thinking autosa
     serverState.defaultThinkingLevel = patch.defaultThinkingLevel;
     return { defaultThinkingLevel: patch.defaultThinkingLevel };
   };
+  showCategory("defaults");
   const thinking = settings.querySelector("[data-setting='defaultThinkingLevel']");
   thinking.value = "high";
   thinking.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -330,7 +344,7 @@ test("Pi drafts remain until state refresh completes and default-thinking autosa
 });
 
 test("secret auth prompts are not drafts and prompt identity replaces reused markup", () => {
-  const settings = mountSettings();
+  const settings = mountSettings("providers");
   settings.flow = { id: "flow-1", state: "waiting_input", prompt: { id: "prompt-1", type: "secret", message: "Enter code" } };
   settings.render();
   const input = settings.querySelector("[data-auth-input]");

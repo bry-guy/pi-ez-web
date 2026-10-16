@@ -19,6 +19,16 @@ Without workspaced, web runs projects itself in its own process. That is the one
 
 Everything else (default model, Pi profile and packages, repository source) is in **Settings** or [`config.json`](configuration.md).
 
+## Settings
+
+**Settings** lists its categories on the left (on a phone, first): Providers, Pi, Workers, Sync, Repositories, Defaults, Appearance, Diagnostics. Each category has its own address (`#settings/workers`, `#settings/pi`, …), so reloading or using Back returns to it. `<` returns to the chat, and on a phone `<` on a category returns to the list.
+
+- **Pi**: the dotfiles profile, extra packages to load, and local extension paths (advanced), with what Pi loaded and any problems. **Save & reload** fetches the profile, installs missing packages, and reloads idle sessions. It is refused while a session is running; stop it first.
+- **Workers** (needs workspaced; otherwise the page says workers are not enabled): each worker's state (asleep, starting, awake, busy), keep-awake, last use, resource requests and limits, live usage (`n/a` when workspaced reports none), and its grant: name, service account, namespace, egress, runtime class, and environment variable names (never values). **Reload** re-reads one worker's profile and extensions; **Reload all awake workers** does every awake worker and lists each result. **Restart** starts a fresh pod and reruns startup; the disk is kept. **Reset** wipes the worker's disk and needs its name typed; add the project again afterwards. A busy or asleep worker refuses restart and reset, and the page says why. The page refreshes every 5 seconds while it is visible.
+- The sidebar shows each project's worker state; a small dot marks a worker kept awake.
+
+`mise run dev` (mock mode) shows three fixed sample workers, so the Workers page can be tried without a cluster.
+
 ## Logins reach workers
 
 When you sign in to GitHub or a model provider, web sends the login to workspaced (`PUT /v1/github-auth`, `PUT /v1/model-auth`), and workspaced hands it to every worker read-only. Every worker can therefore read those logins. You sign in once, in web.

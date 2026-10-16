@@ -1,8 +1,8 @@
-import { api, refreshState } from "./api.js";
+import { api, refreshState, refreshWorkers } from "./api.js";
 import { beginOperation, combineOperationResults, completeOperation, operationFor, operationHint } from "./operations.js";
 import { setHTML, store } from "./store.js";
 import { esc, openSessionPicker, selectSession } from "./shell.js";
-import { gitErrorMessage } from "./panel-utils.js";
+import { gitErrorMessage, workerErrorMessage } from "./panel-utils.js";
 
 
 /* ---------------- logs modal ---------------- */
@@ -100,6 +100,11 @@ class PiConfirm extends HTMLElement {
       if (e.target === scrim || e.target.closest("[data-act='cancel']")) store.set({ confirm: null });
       else if (e.target.closest("[data-act='go']")) void this.go();
     });
+    this.addEventListener("input", e => {
+      if (!e.target.matches("[data-confirm-typed]")) return;
+      this.typed = e.target.value;
+      this.querySelector("[data-act='go']").disabled = this.typed !== store.state.confirm?.name;
+    });
     this.addEventListener("change", e => {
       if (e.target.matches("[data-confirm-delete-after]")) store.set(s => ({ confirm: { ...s.confirm, deleteAfter: e.target.checked } }));
       if (e.target.matches("[data-confirm-close-sessions]")) store.set(s => ({ confirm: { ...s.confirm, closeSessions: e.target.checked } }));
@@ -112,6 +117,7 @@ class PiConfirm extends HTMLElement {
   async go() {
     const c = store.state.confirm;
     if (!c || this.busy) return;
+    if (c.type === "restartWorker" || c.type === "resetWorker") return this.goWorker(c);
     const project = store.state.projects.find(item => item.id === c.projectId);
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     this.busy = true;
@@ -153,18 +159,46 @@ class PiConfirm extends HTMLElement {
     } finally { this.busy = false; this.busyLabel = null; this.render(); }
   }
 
+  // Worker restart and reset go straight to workspaced; a refusal (busy, asleep) stays in the dialog.
+  async goWorker(c) {
+    if (c.type === "resetWorker" && this.typed !== c.name) return;
+    this.busy = true;
+    this.render();
+    try {
+      if (c.type === "resetWorker") await api.resetWorkspace(c.name, c.name);
+      else await api.restartWorkspace(c.name);
+      store.set({ confirm: null });
+      await refreshWorkers();
+    } catch (err) {
+      const active = store.state.confirm;
+      if (active?.id === c.id && active.type === c.type) store.set({ confirm: { ...active, error: workerErrorMessage(err) } });
+      else store.setError(`Could not ${c.type === "resetWorker" ? "reset" : "restart"} ${c.name}: ${workerErrorMessage(err)}`);
+    } finally { this.busy = false; this.render(); }
+  }
+
   flatten(nodes) { return (nodes || []).flatMap(node => [node, ...this.flatten(node.children)]); }
 
   render() {
     const c = store.state.confirm;
     if (!c) { this.innerHTML = ""; return; }
+    const confirmKey = `${c.type}:${c.id}`;
+    if (this.confirmKey !== confirmKey) { this.confirmKey = confirmKey; this.typed = ""; }
     const project = store.state.projects.find(item => item.id === c.projectId);
     const primary = c.primaryBranch || project?.defaultBranch || project?.primaryBranch || "main";
     const sessions = c.sessions || [];
     const activeSessions = sessions.filter(session => session.streaming);
     const sessionList = sessions.length ? `<div class="confirm-sessions"><strong>Sessions using this branch</strong>${sessions.map(session => `<div>${esc(session.title)} · ${session.streaming ? "working" : "idle"}</div>`).join("")}</div>` : "";
     let title = "", body = "", options = "", action = "Confirm";
-    if (c.type === "close") {
+    if (c.type === "restartWorker") {
+      title = `Restart ${esc(c.name)}?`;
+      body = "Its worker gets a fresh pod and reruns startup. Its disk is kept.";
+      action = "Restart worker";
+    } else if (c.type === "resetWorker") {
+      title = `Reset ${esc(c.name)}?`;
+      body = "This wipes the worker's disk, including its project checkout and any uncommitted work. Add the project again afterwards.";
+      options = `<label class="confirm-typed"><span>Type <code>${esc(c.name)}</code> to confirm</span><input class="settings-inline-input" data-confirm-typed value="${esc(this.typed || "")}" autocomplete="off" spellcheck="false"></label>`;
+      action = "Reset worker";
+    } else if (c.type === "close") {
       title = c.kind === "chat" ? "Close chat" : "Close session";
       body = `“${esc(c.label)}” will be archived. Its transcript and Git context remain available.`;
       action = c.kind === "chat" ? "Close chat" : "Close session";
@@ -186,7 +220,7 @@ class PiConfirm extends HTMLElement {
       options = `${sessions.length ? `<div class="confirm-warn">Affected sessions will move to ${esc(primary)} unless you choose to close them.</div>` : ""}${activeSessions.length ? `<label class="confirm-check"><input type="checkbox" data-confirm-close-sessions ${c.closeSessions ? "checked" : ""}><span>Close affected sessions instead of moving them to ${esc(primary)}</span></label>` : ""}${c.dirty ? `<label class="confirm-check"><input type="checkbox" data-confirm-force ${c.force ? "checked" : ""}><span>I understand uncommitted changes will be deleted</span></label>` : ""}`;
       action = "Delete branch";
     }
-    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount);
+    const disabled = this.busy || (c.type === "deleteBranch" && c.dirty && !c.force) || (c.type === "push" && !c.commitCount) || (c.type === "resetWorker" && this.typed !== c.name);
     const progressOperation = c.type === "deleteBranch" ? operationFor("delete", { sessionId: c.id }) : ["merge", "push"].includes(c.type) ? operationFor(c.type, { sessionId: c.id }) : null;
     const progressHint = operationHint(progressOperation, this.busyLabel || "Working…") || this.busyLabel || "Working…";
     const progress = this.busy

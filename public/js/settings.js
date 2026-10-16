@@ -1,16 +1,39 @@
-import { api, refreshState } from "./api.js";
+import { api, refreshState, refreshWorkers } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
 import { setHTML, store } from "./store.js";
-import { esc } from "./shell.js";
-import { operationFeedback } from "./panel-utils.js";
+import { esc, icon, workerStateLabel } from "./shell.js";
+import { operationFeedback, workerErrorMessage } from "./panel-utils.js";
 
 
 /* ---------------- settings ---------------- */
+const CATEGORIES = [
+  ["providers", "Providers"],
+  ["pi", "Pi"],
+  ["workers", "Workers"],
+  ["sync", "Sync"],
+  ["repositories", "Repositories"],
+  ["defaults", "Defaults"],
+  ["appearance", "Appearance"],
+  ["diagnostics", "Diagnostics"],
+];
+const CATEGORY_IDS = new Set(CATEGORIES.map(([id]) => id));
+const DEFAULT_CATEGORY = "providers";
+const WORKERS_POLL_MS = 5_000;
+
+// #settings is the category list; #settings/<category> is one page.
+export function settingsRoute(hash) {
+  const match = /^#settings(?:\/([a-z]+))?$/.exec(hash);
+  return match ? { view: "settings", settingsCategory: CATEGORY_IDS.has(match[1]) ? match[1] : null } : null;
+}
+const settingsHash = (open, category) => !open ? "" : category ? `#settings/${category}` : "#settings";
+const amounts = values => Object.entries(values || {}).filter(([, value]) => value).map(([key, value]) => `${key} ${value}`).join(" · ") || "not set";
+
 class PiSettings extends HTMLElement {
   connectedCallback() {
     this.feedback = null;
     this.drafts = new Map();
     this.detailsOpen = new Map();
+    this.workerResults = null;
     this.resettingInteraction = true;
     this.settingsOpen = store.state.view === "settings";
     this.onDocumentKeydown = e => {
@@ -18,10 +41,18 @@ class PiSettings extends HTMLElement {
         && !store.state.logsOpen && !store.state.repoPickerOpen && !store.state.sessionPicker
         && !store.state.confirm && !store.state.extensionUi) {
         e.preventDefault();
-        store.set({ view: "chat" });
+        store.set({ view: "chat", settingsCategory: null });
       }
     };
     document.addEventListener("keydown", this.onDocumentKeydown);
+    this.onPopState = () => {
+      const route = settingsRoute(location.hash);
+      if (route) store.set(route);
+      else if (store.state.view === "settings") store.set({ view: "chat", settingsCategory: null });
+    };
+    window.addEventListener("popstate", this.onPopState);
+    this.onVisibility = () => this.syncWorkers();
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.unsub = store.subscribe(w => {
       if (w !== "state") return;
       const settingsOpen = store.state.view === "settings";
@@ -30,6 +61,7 @@ class PiSettings extends HTMLElement {
         this.resettingInteraction = true;
         this.__html = null;
       }
+      this.syncHash(this.settingsOpen, settingsOpen);
       this.settingsOpen = settingsOpen;
       this.render();
     });
@@ -54,12 +86,40 @@ class PiSettings extends HTMLElement {
     this.__html = null;
     this.unsub?.();
     document.removeEventListener("keydown", this.onDocumentKeydown);
+    window.removeEventListener("popstate", this.onPopState);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     clearTimeout(this.flowTimer);
     clearTimeout(this.feedbackTimer);
+    clearInterval(this.workersTimer);
+    this.workersTimer = null;
+  }
+  // Opening pushes a history entry, moving between pages replaces it, and closing
+  // goes back over it, so Back leaves Settings in one step.
+  syncHash(wasOpen, open) {
+    if (!wasOpen && !open) return;
+    const hash = settingsHash(open, store.state.settingsCategory);
+    if (location.hash === hash) return;
+    const url = `${location.pathname}${location.search}${hash}`;
+    if (open && !wasOpen) history.pushState({ piSettings: true }, "", url);
+    else if (open) history.replaceState(history.state, "", url);
+    else if (history.state?.piSettings) history.back();
+    else history.replaceState(null, "", url);
+  }
+  // Workers refresh while their page is visible and stop when it is hidden or left.
+  syncWorkers() {
+    const active = store.state.view === "settings" && store.state.settingsCategory === "workers" && document.visibilityState === "visible";
+    if (active && !this.workersTimer) {
+      void refreshWorkers();
+      this.workersTimer = setInterval(() => void refreshWorkers(), WORKERS_POLL_MS);
+    } else if (!active && this.workersTimer) {
+      clearInterval(this.workersTimer);
+      this.workersTimer = null;
+    }
   }
   resetDrafts() {
     this.drafts = new Map();
     this.detailsOpen = new Map();
+    this.workerResults = null;
   }
   settingKey(control) {
     if (control?.matches?.(".repos-root-input")) return "reposRoot";
@@ -112,7 +172,10 @@ class PiSettings extends HTMLElement {
     this.render();
   }
   async onClick(e) {
-    if (e.target.closest("[data-act='close-settings']")) { store.set({ view: "chat" }); return; }
+    if (e.target.closest("[data-act='close-settings']")) { store.set({ view: "chat", settingsCategory: null }); return; }
+    const category = e.target.closest("[data-settings-category]");
+    if (category) { store.set({ settingsCategory: category.dataset.settingsCategory }); return; }
+    if (e.target.closest("[data-act='settings-list']")) { store.set({ settingsCategory: null }); return; }
     if (e.target.closest("[data-act='open-logs']")) { store.set({ logsOpen: true, logsError: null }); return; }
     const theme = e.target.closest("[data-theme-choice]");
     if (theme) {
@@ -128,6 +191,9 @@ class PiSettings extends HTMLElement {
     if (e.target.closest("[data-act='save-pi-configuration']")) return this.savePiConfiguration();
     if (e.target.closest("[data-act='open-github-picker']")) return this.openGithubPicker();
     if (e.target.closest("[data-github-logout]")) return this.logoutGithub();
+    if (e.target.closest("[data-act='reload-all-workers']")) return this.reloadAllWorkers();
+    const workerAction = e.target.closest("[data-act$='-worker']");
+    if (workerAction) return this.workerAction(workerAction.dataset.act, workerAction.dataset.name, workerAction.dataset.pinned === "1");
     const login = e.target.closest("[data-auth-login]");
     if (login) return this.startAuth(login.dataset.authLogin, login.dataset.authType);
     const logout = e.target.closest("[data-auth-logout]");
@@ -240,6 +306,30 @@ class PiSettings extends HTMLElement {
         : `Pi configuration failed: ${err.error || err.message || err}`;
       this.setFeedback(message, "error");
     }
+  }
+  // Restart and reset open the shared confirmation dialog (dialogs.js); reload and keep-awake act directly.
+  async workerAction(action, name, pinned) {
+    if (action === "restart-worker" || action === "reset-worker") {
+      store.set({ confirm: { type: action === "reset-worker" ? "resetWorker" : "restartWorker", id: name, name } });
+      return;
+    }
+    try {
+      if (action === "keep-awake-worker") await api.pinWorkspace(name, !pinned);
+      else await api.reloadWorkspace(name);
+      this.setFeedback(action === "keep-awake-worker" ? `Keep awake ${pinned ? "off" : "on"} for ${name}.` : `${name} reloaded.`);
+    } catch (err) {
+      this.setFeedback(`${name}: ${workerErrorMessage(err)}`, "error");
+    }
+    await refreshWorkers();
+  }
+  async reloadAllWorkers() {
+    try {
+      this.workerResults = (await api.reloadWorkspaces()).results;
+    } catch (err) {
+      this.workerResults = null;
+      this.setFeedback(`Reload failed: ${workerErrorMessage(err)}`, "error");
+    }
+    await refreshWorkers();
   }
   async startAuth(providerId, type) {
     if (this.flow) return;
@@ -377,27 +467,22 @@ class PiSettings extends HTMLElement {
       ${flow.error ? `<div class="provider-error">${esc(flow.error.message)}</div>` : ""}
     </div>`;
   }
-  render() {
+  appearancePage() {
+    return `<section class="settings-section">
+        <div class="settings-card settings-card-spaced"><div class="settings-row">
+          <div class="sr-main"><div class="sr-title">Theme</div><div class="sr-sub">Stored in this browser.</div></div>
+          <div class="segmented" role="group" aria-label="Theme">${[["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) => `<button data-theme-choice="${value}" aria-pressed="${(document.documentElement.dataset.theme || "system") === value}">${label}</button>`).join("")}</div>
+        </div></div>
+      </section>`;
+  }
+  providersPage() {
     const providers = store.state.providers || [];
-    const settings = store.state.settings || {};
-    const syncState = store.state.sync || {};
-    const syncSettings = settings.sync || {};
-    const syncServerUrl = syncSettings.serverUrl?.value || "";
-    const syncServerEditable = syncSettings.serverUrl?.editable !== false;
-    const syncAll = !!syncSettings.allConversations?.value;
-    const syncAllEditable = syncSettings.allConversations?.editable !== false;
-    const syncLabel = !syncState.configured
-      ? "Not configured"
-      : syncState.connection === "available"
-        ? "Connected"
-        : syncState.connection === "disabled"
-          ? "Disabled"
-          : "Sync client unavailable";
-    const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "github";
-    const sourceEditable = settings.defaultRepositorySource?.editable !== false;
-    const owner = settings.githubOwner?.value || "";
-    const ownerEditable = settings.githubOwner?.editable !== false;
-    const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
+    return `<section class="settings-section">
+        <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
+      </section>
+      ${this.authFlowCard()}`;
+  }
+  piPage() {
     const piState = store.state.piConfiguration || {};
     const piConfig = piState.config || { profile: null, packages: [], extensions: [] };
     const profileInputValue = piConfig.profile || "";
@@ -412,10 +497,10 @@ class PiSettings extends HTMLElement {
       ? `<ul>${items.map(item => `<li><strong>${esc(item.name || "Unnamed resource")}</strong><span>${esc(item.path || "")}</span><small>${esc([item.source, item.scope, item.origin].filter(Boolean).join(" · "))}</small></li>`).join("")}</ul>`
       : `<div class="pi-resource-empty">${esc(empty)}</div>`;
     const extensionList = piState.runtime
-      ? `<details class="pi-loaded-list" data-settings-details="extensions"><summary>Loaded extensions (${loadedExtensions.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedExtensions, "No extensions loaded.")}</div></details>`
+      ? `<details class="pi-loaded-list" data-settings-details="extensions"><summary>Extensions (${loadedExtensions.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedExtensions, "No extensions loaded.")}</div></details>`
       : "";
     const skillList = piState.runtime
-      ? `<details class="pi-loaded-list" data-settings-details="skills"><summary>Loaded skills (${loadedSkills.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedSkills, "No skills loaded.")}</div></details>`
+      ? `<details class="pi-loaded-list" data-settings-details="skills"><summary>Skills (${loadedSkills.length})</summary><div class="pi-resource-scroll">${resourceRows(loadedSkills, "No skills loaded.")}</div></details>`
       : "";
     const skillCount = Array.isArray(piState.runtime?.skills) ? loadedSkills.length : (piState.runtime?.skills || 0);
     const packageStatus = piState.runtime?.packageStatus;
@@ -430,64 +515,100 @@ class PiSettings extends HTMLElement {
       ...(piState.runtime?.errors || []).map(error => `${error.path}: ${error.error}`),
       ...(piState.runtime?.skillDiagnostics || []).map(error => `${error.path || "skill"}: ${error.message}`),
     ];
-    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-    const defaultThinkingLevel = store.state.defaultThinkingLevel || "medium";
-    const feedback = this.feedback
-      ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
-      : "";
     const piOperation = operationFeedback("pi-profile", "Applying Pi resources…");
-    const githubSummary = githubStatus?.authenticated
-      ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
-      : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
-    const preserveInteraction = !this.resettingInteraction;
-    this.resettingInteraction = false;
-    if (preserveInteraction) this.captureDrafts();
-    const active = preserveInteraction ? this.ownerDocument.activeElement : null;
-    const focusKey = this.contains(active) ? this.settingKey(active) : null;
-    const selection = focusKey && typeof active.selectionStart === "number"
-      ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
-      : null;
-    if (preserveInteraction) {
-      for (const details of this.querySelectorAll("details[data-settings-details]")) {
-        this.detailsOpen.set(details.dataset.settingsDetails, details.open);
-      }
-    }
-    const html = `<div class="col-pad">
-      <div class="screen-title-row"><div class="screen-title">Settings</div><div class="settings-title-actions"><button class="ghost-btn settings-close" data-act="close-settings" title="Close settings" aria-label="Close settings">×</button></div></div>
-      ${feedback}
-      <section class="settings-section">
-        <div class="settings-section-title">Appearance</div>
-        <div class="settings-card settings-card-spaced"><div class="settings-row">
-          <div class="sr-main"><div class="sr-title">Theme</div><div class="sr-sub">Stored in this browser.</div></div>
-          <div class="segmented" role="group" aria-label="Theme">${[["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) => `<button data-theme-choice="${value}" aria-pressed="${(document.documentElement.dataset.theme || "system") === value}">${label}</button>`).join("")}</div>
-        </div></div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-section-title">AI providers</div>
-        <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
-      </section>
-      ${this.authFlowCard()}
-      <section class="settings-section">
-        <div class="settings-section-title">Pi profile & extensions</div>
+    return `<section class="settings-section">
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Pi profile</div><div class="sr-sub">Optional: enter a local path or HTTPS URL. Leave blank to use only the deployment's Pi settings. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
+            <div class="sr-main"><div class="sr-title">Dotfiles profile</div><div class="sr-sub">Optional: enter a local path or HTTPS URL. Leave blank to use only the deployment's Pi settings. GitHub profiles read <span class="settings-mono">.pi/agent/settings.json</span> and supported resources.</div></div>
             <input class="settings-inline-input pi-profile-input" data-setting="piProfile" value="${esc(profileInputValue)}" placeholder="https://github.com/owner/dotfiles">
           </div>
           <div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Additional packages</div><div class="sr-sub">Optional packages added on top of the profile. Enter one Pi npm/git package source per line; missing packages install on Apply.</div></div>
+            <div class="sr-main"><div class="sr-title">Extra packages to load</div><div class="sr-sub">Optional packages added on top of the profile. Enter one Pi npm/git package source per line; missing packages install on Save &amp; reload.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piPackages" rows="4" placeholder="npm:context-mode&#10;git:github.com/owner/pi-extension">${esc((piConfig.packages || []).join("\n"))}</textarea>
           </div>
           <details class="settings-advanced" data-settings-details="advanced" ${(piConfig.extensions || []).length ? "open" : ""}><summary>Advanced</summary><div class="settings-row settings-path-row">
-            <div class="sr-main"><div class="sr-title">Local extension paths</div><div class="sr-sub">Optional server-local extension files or directories, one path per line. These are not package names; relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
+            <div class="sr-main"><div class="sr-title">Local extension paths (advanced)</div><div class="sr-sub">Optional server-local extension files or directories, one path per line. These are not package names; relative paths resolve from <span class="settings-mono">PI_WEB_HOME</span>.</div></div>
             <textarea class="settings-inline-input pi-resource-list" data-setting="piExtensions" rows="4" placeholder="/data/extensions/my-extension.ts">${esc((piConfig.extensions || []).join("\n"))}</textarea>
           </div></details>
-          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>${extensionList}${skillList}${piProblems.length ? `<div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
-          <div class="settings-row settings-actions-row"><span class="settings-mono">Apply fetches the profile, installs missing packages, and reloads idle sessions. Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-save" data-act="save-pi-configuration">Apply</button>${piOperation}</div></div>
+          <div class="settings-row pi-resource-status"><div class="sr-main"><div class="sr-title">${esc(profileStatus)}</div><div class="sr-sub">${esc(runtimeSummary)}</div>
+            ${piState.runtime ? `<div class="settings-subhead">What's loaded</div>` : ""}${extensionList}${skillList}
+            ${piProblems.length ? `<div class="settings-subhead">Problems</div><div class="provider-error">${piProblems.map(esc).join(" · ")}</div>` : ""}</div></div>
+          <div class="settings-row settings-actions-row"><span class="settings-mono">Save &amp; reload fetches the profile, installs missing packages, and reloads idle sessions. It is refused while a session is running; stop it first. Remote extensions execute with the server user's full permissions.</span><div class="settings-actions"><button class="settings-save" data-act="save-pi-configuration">Save &amp; reload</button>${piOperation}</div></div>
         </div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-section-title">Conversation synchronization</div>
+      </section>`;
+  }
+  workersPage() {
+    const inventory = store.state.workers;
+    const workers = inventory?.workspaces || [];
+    const awake = workers.some(worker => worker.state === "running");
+    const results = this.workerResults
+      ? `<div class="worker-results" role="status">${this.workerResults.map(result => `<div class="${result.ok ? "" : "error"}">${esc(result.name)}: ${result.ok ? "reloaded" : esc(workerErrorMessage({ error: result.error }))}</div>`).join("")}</div>`
+      : "";
+    const list = inventory
+      ? workers.length ? workers.map(worker => this.workerCard(worker, inventory.usageAvailable)).join("") : `<div class="modal-empty">No workers yet. Adding a project starts one.</div>`
+      : store.state.workersError ? "" : `<div class="modal-empty">Loading workers…</div>`;
+    return `<section class="settings-section">
+        <div class="settings-card settings-card-spaced"><div class="settings-row">
+          <div class="sr-main"><div class="sr-title">Reload</div><div class="sr-sub">Re-reads the dotfiles profile and extensions in each awake worker. Sleeping workers are not woken.</div></div>
+          <button class="settings-save" data-act="reload-all-workers" ${awake ? "" : "disabled"}>Reload all awake workers</button>
+        </div>${results}</div>
+        ${store.state.workersError ? `<div class="provider-error">${esc(store.state.workersError)}</div>` : ""}
+        ${list}
+      </section>`;
+  }
+  workerCard(worker, usageAvailable) {
+    const name = esc(worker.name);
+    const state = workerStateLabel(worker.state);
+    const asleep = worker.state === "sleeping";
+    const usage = usageAvailable && worker.usage
+      ? `${worker.usage.cpuMillicores}m CPU · ${Math.round(worker.usage.memoryBytes / 1048576)} MiB memory`
+      : "n/a";
+    const grant = worker.grant;
+    const grantFacts = grant ? `
+        <div class="worker-fact"><dt>Grant</dt><dd>${esc(grant.name)}${grant.description ? `<small>${esc(grant.description)}</small>` : ""}</dd></div>
+        <div class="worker-fact"><dt>Service account</dt><dd>${esc(grant.serviceAccount || "default")} in ${esc(grant.namespace || "default")}</dd></div>
+        <div class="worker-fact"><dt>Egress · runtime</dt><dd>${esc(grant.egress || "default")} · ${esc(grant.runtimeClass || "default")}</dd></div>
+        <div class="worker-fact"><dt>Env variables</dt><dd>${grant.env?.length ? grant.env.map(esc).join(", ") : "none"}<small>Names only. Values are not shown.</small></dd></div>`
+      : `<div class="worker-fact"><dt>Grant</dt><dd>default</dd></div>`;
+    return `<div class="settings-card settings-card-spaced worker-card" data-worker="${name}">
+        <div class="settings-row">
+          <div class="sr-main"><div class="sr-title">${name}<span class="worker-state ${state}">${esc(state)}</span>${worker.busy ? `<span class="worker-state busy">busy</span>` : ""}</div><div class="sr-sub">${esc(worker.repository || "")}</div></div>
+        </div>
+        <div class="settings-row">
+          <div class="sr-main"><div class="sr-title">Keep awake</div><div class="sr-sub">Never put to sleep automatically.</div></div>
+          <button class="settings-action${worker.keepAwake ? " active" : ""}" data-act="keep-awake-worker" data-name="${name}" data-pinned="${worker.keepAwake ? 1 : 0}" aria-pressed="${!!worker.keepAwake}">${worker.keepAwake ? "On" : "Off"}</button>
+        </div>
+        <dl class="worker-facts">
+          <div class="worker-fact"><dt>Last used</dt><dd>${worker.lastUsed ? esc(new Date(worker.lastUsed).toLocaleString()) : "never"}</dd></div>
+          <div class="worker-fact"><dt>Requests</dt><dd>${esc(amounts(worker.resources?.requests))}</dd></div>
+          <div class="worker-fact"><dt>Limits</dt><dd>${esc(amounts(worker.resources?.limits))}</dd></div>
+          <div class="worker-fact"><dt>Usage now</dt><dd>${esc(usage)}</dd></div>
+          ${grantFacts}
+        </dl>
+        <div class="settings-row settings-actions-row"><span class="settings-mono">${asleep ? "Asleep. Opening one of its projects wakes it." : ""}</span>
+          <div class="settings-actions">
+            <button class="settings-action" data-act="reload-worker" data-name="${name}" ${asleep ? "disabled" : ""}>Reload</button>
+            <button class="settings-action" data-act="restart-worker" data-name="${name}">Restart</button>
+            <button class="settings-action danger" data-act="reset-worker" data-name="${name}">Reset</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  syncPage() {
+    const syncState = store.state.sync || {};
+    const syncSettings = store.state.settings?.sync || {};
+    const syncServerUrl = syncSettings.serverUrl?.value || "";
+    const syncServerEditable = syncSettings.serverUrl?.editable !== false;
+    const syncAll = !!syncSettings.allConversations?.value;
+    const syncAllEditable = syncSettings.allConversations?.editable !== false;
+    const syncLabel = !syncState.configured
+      ? "Not configured"
+      : syncState.connection === "available"
+        ? "Connected"
+        : syncState.connection === "disabled"
+          ? "Disabled"
+          : "Sync client unavailable";
+    return `<section class="settings-section">
         <div class="settings-card settings-card-spaced">
           ${syncServerEditable ? `<div class="settings-row settings-path-row">
             <div class="sr-main"><div class="sr-title">Sync server</div><div class="sr-sub">Canonical enrolled conversations live in the configured pi-sync service. Leave this empty to keep local-only behavior.</div></div>
@@ -500,9 +621,19 @@ class PiSettings extends HTMLElement {
           <div class="settings-row"><div class="sr-main"><div class="sr-title">${esc(syncLabel)}</div><div class="sr-sub">${syncState.implementation === "fake" ? "Using the development coordinator; no network calls are made." : esc(syncState.error?.message || syncServerUrl)}</div></div><span class="status-dot ${syncState.connection === "available" ? "" : "off"}"></span></div>
           ${syncServerEditable || syncAllEditable ? `<div class="settings-row settings-actions-row"><span></span><button class="settings-save" data-act="save-sync-settings">Save</button></div>` : ""}
         </div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-section-title">Repository sources</div>
+      </section>`;
+  }
+  repositoriesPage() {
+    const settings = store.state.settings || {};
+    const source = settings.defaultRepositorySource?.value || store.state.repositorySources?.default || "github";
+    const sourceEditable = settings.defaultRepositorySource?.editable !== false;
+    const owner = settings.githubOwner?.value || "";
+    const ownerEditable = settings.githubOwner?.editable !== false;
+    const githubStatus = store.state.repositorySources?.sources?.find(source => source.id === "github");
+    const githubSummary = githubStatus?.authenticated
+      ? `Connected${githubStatus.account?.login ? ` as ${githubStatus.account.login}` : ""}`
+      : githubStatus?.configured ? "Not connected" : "Sign-in requires server GitHub app setup";
+    return `<section class="settings-section">
         <div class="settings-card settings-card-spaced">
           <div class="settings-row settings-path-row">
             <div class="sr-main"><div class="sr-title">Default source</div><div class="sr-sub">Choose where the project picker opens first.</div></div>
@@ -517,9 +648,12 @@ class PiSettings extends HTMLElement {
           <div class="settings-row"><div class="sr-main"><div class="sr-title">GitHub account</div><div class="sr-sub">${esc(githubSummary)}. Use the project picker to sign in or choose a repository.</div><div class="provider-actions"><button class="settings-action" data-act="open-github-picker">${githubStatus?.authenticated ? "Manage repositories" : "Sign in with GitHub"}</button>${githubStatus?.authenticated && githubStatus.credentialSource === "stored" ? `<button class="settings-action quiet" data-github-logout>Sign out</button>` : ""}</div></div></div>
           <div class="settings-row settings-actions-row"><span class="settings-mono">${sourceEditable && ownerEditable ? "Stored in config.json" : "One or more values are environment-controlled"}</span><div class="settings-actions"><button class="settings-save" data-act="save-repository-settings" ${sourceEditable || ownerEditable ? "" : "disabled"}>Save</button></div></div>
         </div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-section-title">Defaults</div>
+      </section>`;
+  }
+  defaultsPage() {
+    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const defaultThinkingLevel = store.state.defaultThinkingLevel || "medium";
+    return `<section class="settings-section">
       <div class="settings-card settings-card-spaced">
         <div class="settings-row">
           <div class="sr-main"><div class="sr-title">Default model</div><div class="sr-sub">Automatic uses the first available authenticated model.${store.state.defaultModelStatus === "unavailable" ? " The configured model is currently unavailable." : ""}</div></div>
@@ -539,11 +673,52 @@ class PiSettings extends HTMLElement {
           </div>
         </div>`}
       </div>
-      </section>
-      <section class="settings-section">
-        <div class="settings-section-title">Diagnostics</div>
+      </section>`;
+  }
+  diagnosticsPage() {
+    return `<section class="settings-section">
         <div class="settings-card settings-card-spaced"><div class="settings-row"><div class="sr-main"><div class="sr-title">Server logs</div><div class="sr-sub">Recent operations and server output.</div></div><button class="settings-action" data-act="open-logs">Open logs</button></div></div>
-      </section>
+      </section>`;
+  }
+  render() {
+    const category = store.state.settingsCategory || DEFAULT_CATEGORY;
+    const label = CATEGORIES.find(([id]) => id === category)[1];
+    const pages = {
+      providers: () => this.providersPage(),
+      pi: () => this.piPage(),
+      workers: () => this.workersPage(),
+      sync: () => this.syncPage(),
+      repositories: () => this.repositoriesPage(),
+      defaults: () => this.defaultsPage(),
+      appearance: () => this.appearancePage(),
+      diagnostics: () => this.diagnosticsPage(),
+    };
+    const feedback = this.feedback
+      ? `<div class="settings-feedback ${this.feedback.kind === "error" ? "error" : ""}" role="status">${esc(this.feedback.message)}</div>`
+      : "";
+    const preserveInteraction = !this.resettingInteraction;
+    this.resettingInteraction = false;
+    if (preserveInteraction) this.captureDrafts();
+    const active = preserveInteraction ? this.ownerDocument.activeElement : null;
+    const focusKey = this.contains(active) ? this.settingKey(active) : null;
+    const selection = focusKey && typeof active.selectionStart === "number"
+      ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
+      : null;
+    if (preserveInteraction) {
+      for (const details of this.querySelectorAll("details[data-settings-details]")) {
+        this.detailsOpen.set(details.dataset.settingsDetails, details.open);
+      }
+    }
+    const html = `<div class="settings-layout" data-view="${store.state.settingsCategory ? "category" : "list"}">
+      <nav class="settings-nav" aria-label="Settings categories">
+        <div class="settings-nav-head"><button class="ghost-btn settings-close" data-act="close-settings" title="Back to chat" aria-label="Back to chat">${icon("chevronLeft")}</button><div class="settings-nav-title">Settings</div></div>
+        <ul class="settings-nav-list">${CATEGORIES.map(([id, name]) => `<li><button class="settings-nav-item${id === category ? " active" : ""}" data-settings-category="${id}"${id === category ? ` aria-current="page"` : ""}>${name}</button></li>`).join("")}</ul>
+      </nav>
+      <div class="settings-pane">
+        <div class="settings-pane-head"><button class="ghost-btn settings-close settings-pane-back" data-act="settings-list" title="All settings" aria-label="All settings">${icon("chevronLeft")}</button><div class="screen-title">${label}</div></div>
+        ${feedback}
+        ${pages[category]()}
+      </div>
     </div>`;
     setHTML(this, html);
     for (const [key, value] of this.drafts) {
@@ -565,6 +740,7 @@ class PiSettings extends HTMLElement {
         }
       }
     }
+    this.syncWorkers();
   }
 }
 

@@ -71,6 +71,8 @@ async function boot() {
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
+    location: dom.window.location,
+    history: dom.window.history,
     HTMLElement: dom.window.HTMLElement,
     customElements: dom.window.customElements,
     Node: dom.window.Node,
@@ -204,6 +206,13 @@ async function boot() {
         dom.window.__settingsPatches = [...(dom.window.__settingsPatches || []), patch];
         if (patch.githubOwner !== undefined) state.settings.githubOwner.value = patch.githubOwner;
         return json({ ok: true });
+      }
+      if (url === "/api/remote-workspaces" && !options.method) return json(dom.window.__workers);
+      if (url === "/api/remote-workspaces/reload" && options.method === "POST") return json({ results: [{ name: "app", ok: true, status: 200, error: null }, { name: "scratch", ok: false, status: 409, error: "workspace_busy" }] });
+      const workerCall = url.match(/^\/api\/remote-workspaces\/([^/]+)\/(restart|reset|reload)$/);
+      if (workerCall && options.method === "POST") {
+        dom.window.__workerCalls = [...(dom.window.__workerCalls || []), { name: workerCall[1], action: workerCall[2], body: JSON.parse(options.body || "{}") }];
+        return dom.window.__workerError ? json({ error: dom.window.__workerError }, false, 409) : json({ ok: true });
       }
       if (url === "/api/sessions/s1/model") return json({ ok: true });
       if (url === "/api/chats") return json({ id: "c1" });
@@ -730,13 +739,17 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-repo-picker [data-act='close']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
 
-  store.set({ view: "settings" });
+  store.set({ view: "settings", settingsCategory: "defaults" });
   assert.match(root.querySelector("pi-settings").textContent, /Default model/);
   assert.match(root.querySelector("pi-settings").textContent, /Default thinking mode/);
   assert.equal(root.querySelector("pi-settings [data-setting='defaultThinkingLevel']").value, "xhigh");
-  assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
+  store.set({ settingsCategory: "providers" });
   assert.match(root.querySelector("pi-settings").textContent, /Anthropic/);
-  assert.match(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Default model/, "only the active category renders");
+  store.set({ settingsCategory: "pi" });
+  assert.match(root.querySelector("pi-settings").textContent, /todo-discipline/);
+  assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Pi profile & extensions/);
+  assert.match(root.querySelector("pi-settings").textContent, /Dotfiles profile/);
   assert.match(root.querySelector("pi-settings").textContent, /Optional: enter a local path or HTTPS URL/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /configured GitHub user's|Automatic GitHub dotfiles profile/);
   const settingsText = root.querySelector("pi-settings").textContent;
@@ -750,12 +763,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.match(root.querySelector("[data-setting='piPackages']").value, /npm:context-mode/);
   const applyProfile = root.querySelector("pi-settings [data-act='save-pi-configuration']");
   assert.ok(applyProfile);
-  assert.equal(applyProfile.textContent, "Apply");
+  assert.equal(applyProfile.textContent, "Save & reload");
   assert.equal(root.querySelector("pi-settings [data-act='refresh-pi-configuration']"), null);
   applyProfile.click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-settings").textContent, /Pi profile applied/);
+  store.set({ settingsCategory: "providers" });
   assert.match(root.querySelector("pi-settings").textContent, /OpenAI API key/);
+  store.set({ settingsCategory: "pi" });
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /GitHub OAuth client ID/);
   assert.doesNotMatch(root.querySelector("pi-settings").textContent, /Agent endpoint|Streaming over SSE|Mode/);
 
@@ -765,7 +780,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     warnings: [],
     runtime: null,
   };
-  store.set({ piConfiguration: state.piConfiguration, view: "settings" });
+  store.set({ piConfiguration: state.piConfiguration, view: "settings", settingsCategory: "pi" });
   assert.equal(root.querySelector("[data-setting='piProfile']").value, "");
   root.querySelector("pi-settings [data-act='save-pi-configuration']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -776,6 +791,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     extensions: ["./kept.ts"],
   });
 
+  store.set({ settingsCategory: "repositories" });
   root.querySelector("pi-settings [data-act='save-repository-settings']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(root.querySelector("pi-settings").textContent, /Repository settings saved/);
@@ -816,6 +832,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.operations.filter(operation => operation.kind === "pi-profile").length, piOperationsBeforeLogin);
   await root.querySelector("pi-repo-picker").dismiss();
   dom.window.__githubLoginComplete = false;
+  store.set({ settingsCategory: "defaults" });
   const defaultToggle = root.querySelector("pi-settings pi-model-picker[data-mode='default'] [data-model-toggle]");
   defaultToggle.focus();
   defaultToggle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -827,6 +844,54 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.set({ view: "settings" });
   dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   assert.equal(store.state.view, "chat", "Escape closes Settings");
+
+  // Settings pages open at their hash; Workers lists and acts on live workers.
+  dom.window.__workers = {
+    usageAvailable: false,
+    workspaces: [
+      { name: "app", repository: "bry-guy/app", state: "running", keepAwake: true, busy: false, lastUsed: Date.now() - 60_000, resources: { requests: { cpu: "250m", memory: "512Mi" }, limits: { cpu: null, memory: "4Gi" } }, usage: null, grant: { name: "operator", description: "", namespace: "ops", serviceAccount: "op", egress: "open", runtimeClass: null, env: ["OP_TOKEN"] } },
+      { name: "scratch", repository: "bry-guy/scratch", state: "sleeping", keepAwake: false, busy: false, lastUsed: null, resources: null, usage: null, grant: null },
+    ],
+  };
+  store.set({ view: "settings", settingsCategory: "workers" });
+  assert.equal(dom.window.location.hash, "#settings/workers");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const workersPage = () => root.querySelector("pi-settings").textContent;
+  assert.match(workersPage(), /Never put to sleep automatically/);
+  assert.match(workersPage(), /OP_TOKEN/, "grants show env variable names");
+  assert.match(workersPage(), /n\/a/, "usage is n/a without live metrics");
+  assert.equal(root.querySelector("[data-act='reload-worker'][data-name='scratch']").disabled, true, "a sleeping worker cannot reload");
+  root.querySelector("[data-act='restart-worker'][data-name='app']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.confirm?.type, "restartWorker");
+  root.querySelector("pi-confirm [data-act='go']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(dom.window.__workerCalls.at(-1), { name: "app", action: "restart", body: {} });
+  assert.equal(store.state.confirm, null, "a finished restart closes its dialog");
+
+  dom.window.__workerError = "workspace_busy";
+  root.querySelector("[data-act='reset-worker'][data-name='app']").click();
+  const resetGo = () => root.querySelector("pi-confirm [data-act='go']");
+  assert.equal(resetGo().disabled, true, "reset waits for the worker name");
+  const typed = root.querySelector("pi-confirm [data-confirm-typed]");
+  typed.value = "app";
+  typed.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(resetGo().disabled, false);
+  resetGo().click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(dom.window.__workerCalls.at(-1), { name: "app", action: "reset", body: { confirm: "app" } });
+  assert.match(root.querySelector("pi-confirm .confirm-error").textContent, /This worker is busy/, "a refused reset explains why");
+  dom.window.__workerError = null;
+  store.set({ confirm: null });
+
+  root.querySelector("[data-act='reload-all-workers']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(workersPage(), /scratch: This worker is busy/, "reload all reports each worker");
+
+  dom.window.history.replaceState(null, "", "#settings/sync");
+  dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+  assert.equal(store.state.settingsCategory, "sync", "Back and forward move between category hashes");
+  store.set({ settingsCategory: null });
 
   store.set({
     model: "mock/fast",
@@ -1177,6 +1242,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(store.state.confirm, null, "Closing a session does not open a warning modal");
   assert.equal(root.querySelector(".confirm-modal"), null);
   assert.equal(root.querySelector(".operation-modal"), null, "closing a session does not open a terminal modal");
+  store.set({ settingsCategory: "diagnostics" });
   root.querySelector("pi-settings [data-act='open-logs']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(root.querySelector(".logs-modal").textContent, /Session closed/);

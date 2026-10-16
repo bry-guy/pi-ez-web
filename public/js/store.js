@@ -125,6 +125,9 @@ export const store = {
     sync: null,
     uiConfig: null,
     settings: null,
+    settingsCategory: null,  // Settings page; null = category list (mobile) or the default page (desktop)
+    workers: null,           // workspaced inventory for the Settings → Workers page
+    workersError: null,
     repos: [],
     reposRoot: null,     // configured directory scanned by /api/repos
     reposRootSource: "default", // default | config | environment

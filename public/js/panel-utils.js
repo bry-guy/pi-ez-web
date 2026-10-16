@@ -29,6 +29,14 @@ export const gitErrorMessage = error => ({
   merge_cleanup_failed: "The merge landed, but the source branch could not be removed.",
 }[error?.error] || error?.detail || error?.message || error?.error || "Git operation failed.");
 
+export const workerErrorMessage = error => ({
+  workspace_busy: "This worker is busy. Wait until it is idle, then try again.",
+  asleep: "This worker is asleep. Open one of its projects to wake it first.",
+  confirm_required: "Type the worker's name to confirm.",
+  workspace_unavailable: "The worker is not responding.",
+  workspaced_unavailable: "The worker service is unavailable.",
+}[error?.error] || error?.message || error?.error || "The worker action failed.");
+
 export function operationFeedback(kinds, fallback = "Working…") {
   const operation = operationFor(kinds);
   if (!operation) return "";

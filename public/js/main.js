@@ -2,7 +2,7 @@ import "./shell.js";
 import "./thread.js";
 import "./dialogs.js";
 import "./session-picker.js";
-import "./settings.js";
+import { settingsRoute } from "./settings.js";
 import "./files.js";
 import "./repo-picker.js";
 import "./app.js";
@@ -78,6 +78,9 @@ if (!s.fatalError && store.activeKey() && store.activeKey() !== earlyId) {
   store.set({ chatId: null, sessionId: null, projectId: null, model: s.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
   if (s.chats[0]) selectChat(s.chats[0].id);
 } else if (!s.fatalError && !restoreLastSelection() && s.chats[0]) selectChat(s.chats[0].id);
+// A deep link such as #settings/workers opens after the startup selection above.
+const route = settingsRoute(location.hash);
+if (route) store.set(route);
 else if (!s.fatalError && !store.activeKey()) {
   const p = s.projects[0];
   if (p?.sessions[0]) { store.state.openTree[p.id] = true; selectSession(p.id, p.sessions[0].id); }

@@ -46,6 +46,7 @@ import { register as registerLifecycle } from "./routes/lifecycle.js";
 import { register as registerBranches } from "./routes/branches.js";
 import { register as registerSettings } from "./routes/settings.js";
 import { registerRemoteRoutes, remoteWorkspacesFromEnv } from "./remote-workspaces.js";
+import { registerMockWorkers } from "./supervisor/mock.js";
 
 export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {}) {
   const api = new Hono();
@@ -95,6 +96,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     primaryBranch, ensureBranchContext, sessionBelongsToProject,
   };
   if (remote) registerRemoteRoutes(api, remote);
+  else if (process.env.PI_WEB_MODE === "mock") registerMockWorkers(api);
   registerState(api, deps);
   registerGithub(api, deps);
   registerProviders(api, deps);

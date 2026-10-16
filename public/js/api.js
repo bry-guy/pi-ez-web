@@ -54,6 +54,11 @@ export const api = {
   workspaceGrants: () => fetch("/api/remote-workspaces/grants").then(j),
   wakeWorkspace: name => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/wake`, { method: "POST", headers: JH, body: "{}" }).catch(() => {}),
   pinWorkspace: (name, pinned) => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/pin`, { method: "PUT", headers: JH, body: JSON.stringify({ pinned }) }).then(j),
+  workspaceInventory: () => fetch("/api/remote-workspaces").then(j),
+  reloadWorkspace: name => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/reload`, { method: "POST", headers: JH, body: "{}" }).then(j),
+  reloadWorkspaces: () => fetch("/api/remote-workspaces/reload", { method: "POST", headers: JH, body: "{}" }).then(j),
+  restartWorkspace: name => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/restart`, { method: "POST", headers: JH, body: "{}" }).then(j),
+  resetWorkspace: (name, confirm) => fetch(`/api/remote-workspaces/${encodeURIComponent(name)}/reset`, { method: "POST", headers: JH, body: JSON.stringify({ confirm }) }).then(j),
   health: () => fetch(`/api/health?probe=${Date.now()}`, { cache: "no-store" }).then(j),
   logs: (limit = 500) => fetch(`/api/logs?limit=${encodeURIComponent(limit)}`, { cache: "no-store" }).then(j),
   models: () => fetch("/api/models").then(j),
@@ -146,6 +151,15 @@ export function paintCachedState() {
 }
 
 let stateRefreshPromise = null;
+// Workers page data. A 404 means this server runs without workspaced.
+export async function refreshWorkers() {
+  try {
+    store.set({ workers: await api.workspaceInventory(), workersError: null });
+  } catch (err) {
+    store.set({ workersError: err.status === 404 ? "Workers are not enabled on this server." : `Could not load workers: ${err.message || err}` });
+  }
+}
+
 export function refreshState() {
   if (stateRefreshPromise) return stateRefreshPromise;
   const request = (async () => {

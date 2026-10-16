@@ -488,3 +488,49 @@ export class MockSupervisor {
     else settleSync(this.syncCoordinator, id);
   }
 }
+
+// Settings → Workers in mock mode: fixed workers that answer like workspaced's routes.
+export function registerMockWorkers(api) {
+  const resources = { requests: { cpu: "250m", memory: "512Mi" }, limits: { cpu: null, memory: "4Gi" } };
+  const grant = { name: "default", description: "", namespace: "pi", serviceAccount: "default", egress: "open", runtimeClass: null, env: ["GITHUB_TOKEN"] };
+  const workers = [
+    { name: "pi-ez-web", repository: "bry-guy/pi-ez-web", state: "running", keepAwake: true, busy: false, lastUsed: Date.now() - 4_000, resources, usage: { cpuMillicores: 120, memoryBytes: 734_003_200 }, grant },
+    { name: "scratch", repository: "bry-guy/scratch", state: "running", keepAwake: false, busy: true, lastUsed: Date.now() - 90_000, resources, usage: { cpuMillicores: 15, memoryBytes: 104_857_600 }, grant },
+    { name: "dotfiles", repository: "bry-guy/dotfiles", state: "sleeping", keepAwake: false, busy: false, lastUsed: Date.now() - 3_600_000, resources, usage: null, grant: { ...grant, name: "operator", namespace: "ops", env: [] } },
+  ];
+  const find = c => workers.find(w => w.name === c.req.param("name"));
+  const refusal = (c, w, force) => w.state === "sleeping"
+    ? c.json({ error: "asleep", name: w.name, message: "This project is asleep. Wake it first." }, 409)
+    : !force && w.busy ? c.json({ error: "workspace_busy", name: w.name, message: "This project is busy. Try again when it is idle, or force it." }, 409) : null;
+  api.get("/remote-workspaces", c => c.json({ usageAvailable: true, workspaces: workers }));
+  api.put("/remote-workspaces/:name/pin", async c => {
+    const w = find(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    w.keepAwake = !!(await c.req.json().catch(() => ({}))).pinned;
+    return c.json({ ok: true, pinned: w.keepAwake });
+  });
+  api.post("/remote-workspaces/reload", c => c.json({ results: workers.filter(w => w.state === "running").map(w => ({ name: w.name, ok: true, status: 200, error: null })) }));
+  api.post("/remote-workspaces/:name/reload", c => {
+    const w = find(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    return refusal(c, w, false) || c.json({ ok: true });
+  });
+  api.post("/remote-workspaces/:name/restart", c => {
+    const w = find(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const no = refusal(c, w, c.req.query("force") === "1");
+    if (no) return no;
+    Object.assign(w, { state: "running", lastUsed: Date.now() });
+    return c.json({ ok: true });
+  });
+  api.post("/remote-workspaces/:name/reset", async c => {
+    const w = find(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    if (body?.confirm !== w.name) return c.json({ error: "confirm_required", message: `Send {"confirm": "${w.name}"} to wipe this project's data.` }, 400);
+    const no = refusal(c, w, c.req.query("force") === "1");
+    if (no) return no;
+    Object.assign(w, { state: "running", lastUsed: Date.now() });
+    return c.json({ ok: true });
+  });
+}
