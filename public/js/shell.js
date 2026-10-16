@@ -431,6 +431,8 @@ class PiHeader extends HTMLElement {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
       void refreshState().catch(() => {});
+    } else if (act === "sync-detail") {
+      store.set({ commandNotice: { sessionId: store.activeKey(), title: "Sync", message: t.dataset.detail } });
     } else if (act === "files") {
       this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
     }
@@ -465,27 +467,20 @@ class PiHeader extends HTMLElement {
     const title = s.view === "settings" ? "Settings"
       : chat ? chat.title : node ? node.title : (s.chatId ? "New chat" : (p ? p.name : "Chat"));
     const activeSession = node || chat;
-    const syncStatus = activeSession?.synchronized && activeSession.syncState === "in_use"
-      ? `<span class="sync-badge" title="In use by ${esc(activeSession.leaseHolder || "another client")}">IN USE</span>`
-      : activeSession?.synchronized && activeSession.syncState !== "error"
-        ? `<span class="sync-badge" title="This conversation is synchronized">SYNCED</span>`
-        : "";
-    const extensionStatus = activeSession?.id && store.state.extensionStatuses[activeSession.id]?.["pi-sync"]
-      ? `<span class="extension-status" title="Pi extension status">${esc(store.state.extensionStatuses[activeSession.id]["pi-sync"])}</span>`
-      : "";
-    const statusArea = syncStatus || extensionStatus ? `<div class="bar-status">${syncStatus}${extensionStatus}</div>` : "";
+    const syncInfo = syncSummary(activeSession, activeSession?.id && store.state.extensionStatuses[activeSession.id]?.["pi-sync"]);
+    const syncLine = syncInfo ? `<button class="sync-label ${syncInfo.tone}" data-act="sync-detail" data-detail="${esc(syncInfo.full)}" title="${esc(syncInfo.full)}" aria-label="${esc(syncInfo.full)}">${esc(`${syncInfo.state}: ${syncInfo.message}`)}</button>` : "";
     const workspace = inProject ? this.sessionContext() : null;
     const branch = workspace ? this.contextLabel(workspace) : null;
     const commit = workspace?.head ? String(workspace.head) : "";
     const commitLabel = commit
       ? `<span class="workspace-divider">·</span><span class="workspace-commit" title="Current commit ${esc(commit)}">${esc(commit.slice(0, 8))}</span>`
       : "";
-    const workspaceArea = inProject && workspace ? `
-      <div class="bar-sub">
+    const workspaceTrigger = inProject && workspace ? `
         <button class="workspace-trigger" data-act="workspace-settings" title="Show Git context" aria-label="Show Git context for ${esc(p.name)} ${esc(branch)}">
           <span class="workspace-branch">${esc(branch)}</span>${commitLabel}<span class="workspace-divider">·</span><span class="workspace-state">${esc(gitStatusText(workspace))}</span>
-        </button>
-      </div>` : "";
+        </button>` : "";
+    // Git and sync share one line; sync is the only label for sync state.
+    const subArea = workspaceTrigger || syncLine ? `<div class="bar-sub">${workspaceTrigger}${syncLine}</div>` : "";
     const operationScope = {
       sessionId: s.sessionId || s.chatId, projectId: s.projectId,
       contextId: node?.contextId, workspacePath: node?.workspacePath,
@@ -511,11 +506,28 @@ class PiHeader extends HTMLElement {
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
     setHTML(this, `<header class="bar">
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
-      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${workspaceArea}${statusArea}${operationArea}</div>
+      <div class="bar-main"><div class="bar-title">${esc(title)}</div>${subArea}${operationArea}</div>
       ${filesBtn}
     </header>`);
   }
 
+}
+
+// The header's one sync label: "<state>: <message>", with everything known in `full`.
+export function syncSummary(session, extension = "") {
+  if (!session) return null;
+  const detail = String(extension || "").replace(/^sync:\s*/, "");
+  const withDetail = base => [base, detail && `Pi extension: ${detail}`].filter(Boolean).join(". ");
+  if (session.syncState === "error") {
+    const error = session.syncError?.message;
+    return error || detail ? { tone: "error", state: "Sync error", message: error || detail, full: withDetail(error || "Sync failed") } : null;
+  }
+  if (session.syncState === "in_use") {
+    const holder = session.leaseHolder || "another device";
+    return { tone: "busy", state: "In use", message: holder, full: withDetail(`In use by ${holder}${session.leaseExpiresAt ? ` until ${session.leaseExpiresAt}` : ""}`) };
+  }
+  if (session.synchronized) return { tone: "ok", state: "Synced", message: detail || "available", full: withDetail("This conversation is synchronized") };
+  return detail ? { tone: "", state: "Sync", message: detail, full: detail } : null;
 }
 
 // Plain-words Git state shared by the header and the Files panel.

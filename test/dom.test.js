@@ -433,8 +433,24 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     ["Sync ID", "sync-1"],
     ["Upstream", "main@01234567"],
   ]);
-  assert.ok(root.querySelector("pi-header .bar-main .sync-badge"));
-  assert.equal(root.querySelector("header.bar > .sync-badge"), null, "Sync status stays in the title group");
+  const syncLabel = root.querySelector("pi-header .bar-sub .sync-label");
+  assert.equal(syncLabel.textContent, "Synced: available", "one compact sync label, on the git line");
+  assert.equal(root.querySelectorAll("pi-header .sync-label").length, 1);
+  assert.equal(root.querySelector("pi-header .bar-status"), null, "no separate sync line");
+  assert.match(syncLabel.title, /This conversation is synchronized/);
+  store.state.extensionStatuses.s1 = { "pi-sync": "sync: up to date" };
+  store.notify("state");
+  assert.equal(root.querySelector("pi-header .sync-label").textContent, "Synced: up to date", "extension detail is the message");
+  root.querySelector("pi-header .sync-label").click();
+  assert.equal(store.state.commandNotice?.title, "Sync", "tap shows the full sync detail");
+  assert.match(store.state.commandNotice.message, /This conversation is synchronized\. Pi extension: up to date/);
+  delete store.state.extensionStatuses.s1;
+  Object.assign(store.state.projects[0].sessions.find(item => item.id === "s1"), { syncState: "in_use", leaseHolder: "Laptop" });
+  store.notify("state");
+  assert.equal(root.querySelector("pi-header .sync-label").textContent, "In use: Laptop");
+  assert.ok(root.querySelector("pi-header .sync-label.busy"));
+  Object.assign(store.state.projects[0].sessions.find(item => item.id === "s1"), { syncState: "available", leaseHolder: null });
+  store.notify("state");
   root.querySelector("[data-act='close-session-picker']").click();
   assert.equal(root.querySelector("pi-header [data-act='refresh-sync']"), null, "Sync refresh is available through slash commands only");
   dom.window.__transcriptResponse = { ...transcript, snapshotToken: "snapshot-1" };

@@ -274,10 +274,17 @@ header.bar {
 .bar-main { min-width: 0; flex: 1; }
 .bar-title { font-size: 14px; font-weight: 500; letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-sub {
-  display: flex; align-items: center; min-width: 0; margin-top: 1px;
+  display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 1px;
   font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
-.bar-status { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; margin-top: 3px; }
+.sync-label {
+  flex: 0 1 auto; min-width: 0; max-width: 45%; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sync-label:hover, .sync-label:focus-visible { background: var(--surface-2); outline: 0; }
+.sync-label.ok { color: var(--green); }
+.sync-label.busy { color: var(--orange); }
+.sync-label.error { color: var(--red); }
 .workspace-commit { color: var(--faint); font: 10px var(--mono); white-space: nowrap; cursor: default; }
 .bar-operation-hint {
   display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px;
@@ -287,11 +294,12 @@ header.bar {
 .bar-operation-hint.success { color: var(--green); }
 .bar-operation-hint.error { color: var(--red); }
 .workspace-trigger {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; margin: -2px -4px; padding: 2px 4px;
+  display: flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; margin: -2px -4px; padding: 2px 4px;
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; text-align: left;
 }
 .workspace-trigger:hover, .workspace-trigger:focus-visible { border-color: var(--orange); background: var(--orange-soft); outline: 0; }
 .workspace-divider { color: var(--faint); }
+.workspace-state, .workspace-commit { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-branch { max-width: 32ch; overflow: hidden; color: var(--orange); text-overflow: ellipsis; white-space: nowrap; }
 .hamburger {
   border: 0; background: var(--surface-2); border-radius: 8px; width: 32px; height: 32px;
@@ -650,7 +658,6 @@ pi-context-meter { display: flex; min-width: 0; }
 .settings-save:disabled, .settings-action:disabled, .confirm-cta:disabled { opacity: .55; cursor: not-allowed; }
 .sync-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 11.5px var(--mono); }
 .sync-toggle input { accent-color: var(--accent); }
-.sync-badge { flex: 0 0 auto; padding: 3px 6px; border-radius: 6px; color: var(--green); font: 10px var(--mono); letter-spacing: .04em; }
 .danger-outline { border-color: var(--red) !important; background: var(--del-bg) !important; color: var(--red) !important; }
 .danger-outline:not(:disabled):hover, .danger-outline:not(:disabled):focus-visible { background: color-mix(in oklch, var(--red) 18%, var(--surface-2)) !important; }
 .settings-chip {
@@ -823,7 +830,6 @@ aside.files.file-viewer .file-code, aside.files.file-viewer .file-diff-body { ma
 .extension-ui-field input, .extension-ui-field textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 8px; background: var(--surface); color: var(--text); font: 12px/1.45 var(--mono); outline: 0; resize: vertical; }
 .extension-ui-field input:focus, .extension-ui-field textarea:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
 .extension-ui-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 16px 16px; background: var(--surface-2); }
-.extension-status { max-width: 28ch; overflow: hidden; color: var(--faint); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- modal ---------- */
 .scrim {
@@ -899,7 +905,6 @@ aside.files.file-viewer .file-code, aside.files.file-viewer .file-diff-body { ma
   }
   .hamburger { position: relative; z-index: 41; }
   .bar-main { min-width: 0; }
-  .bar-sub { flex-wrap: wrap; width: 100%; }
   .composer textarea { font-size: 16px; }
   .msg-user-row { min-width: 0; }
   .bubble { max-width: calc(100% - 42px); }
@@ -1102,7 +1107,7 @@ body.modal-open .scrollable { overflow: hidden; }
 .connect-btn { font-size: 13.5px; }
 
 @media (max-width: 760px) {
-  .workspace-trigger { width: 100%; }
+  .workspace-trigger { flex-basis: 0; }
 }
 
 /* ================= design system polish layer ================= */
@@ -1253,8 +1258,7 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
   .block-head .bh-meta { flex-basis: 100%; margin-left: 22px; }
   /* Project header: one title line, then scrollable status chips. */
   .bar-main { min-width: 0; }
-  .bar-sub, .bar-status { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .bar-sub::-webkit-scrollbar, .bar-status::-webkit-scrollbar { display: none; }
+  .bar-sub { flex-wrap: nowrap; overflow: hidden; }
   aside.rail { width: min(86vw, 320px); }
 }
 @media (prefers-reduced-motion: reduce) {
