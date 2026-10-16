@@ -126,10 +126,7 @@ class PiFiles extends HTMLElement {
 
   availableTargets() {
     const targets = store.state.fileTargets;
-    const primary = store.project()?.defaultBranch || store.project()?.primaryBranch || "main";
-    return Array.isArray(targets) && targets.length
-      ? targets
-      : ["none", "HEAD", ...((store.project()?.branches || []).includes(primary) ? [primary] : [])];
+    return Array.isArray(targets) && targets.length ? targets : ["origin", "primary"];
   }
 
   // Main checkout vs worktree is shown here, not in the header.
@@ -142,7 +139,9 @@ class PiFiles extends HTMLElement {
   }
 
   targetLabel(target) {
-    return target === "none" ? "Working tree" : target;
+    if (target === "origin") return "vs origin";
+    const project = store.project();
+    return `vs ${project?.defaultBranch || project?.primaryBranch || "main"}`;
   }
 
   targetOptions(selected = store.state.fileTarget) {
@@ -155,12 +154,12 @@ class PiFiles extends HTMLElement {
     store.set({ fileTarget: target, files: [], filesLoadedKey: null, filePath: null, fileView: null, fileLoading: false, filesLoading: true, fileError: null });
   }
 
-  async openFile(filePath, target = store.state.fileTarget || "none") {
+  async openFile(filePath, target = store.state.fileTarget || "origin") {
     const projectId = store.state.projectId;
     this.focusReturnPath = filePath;
     const contextId = this.currentContextId();
     if (!projectId || !contextId || !filePath) return;
-    if (!this.availableTargets().includes(target)) target = "none";
+    if (!this.availableTargets().includes(target)) target = "origin";
     const requestId = ++this.requestId;
     store.set({ filePath, fileView: null, fileTarget: target, fileLoading: true, fileError: null });
     try {
@@ -209,15 +208,14 @@ class PiFiles extends HTMLElement {
     return globalThis.DOMPurify?.sanitize(value) || esc(value);
   }
 
-  renderDiff(diff, target) {
-    if (diff?.binary) return `<div class="file-empty">Binary diff preview unavailable.</div>`;
-    if (!diff?.changed) return `<div class="file-empty">No changes against ${esc(target)}.</div>`;
+  renderDiff(diff) {
+    if (diff.binary) return `<div class="file-empty">Binary diff preview unavailable.</div>`;
     const lines = (diff.lines || []).map(line => {
       const cls = line.hunk ? "hunk" : line.sign === "+" ? "add" : line.sign === "-" ? "del" : "";
       return `<div class="diff-line ${cls}"><span class="sign">${esc(line.sign || "")}</span>${esc(line.text)}</div>`;
     }).join("");
     const stats = `${diff.adds ? `+${diff.adds}` : ""}${diff.dels ? ` −${diff.dels}` : ""}`;
-    return `<div class="file-diff-meta">${esc(target)} ${stats ? `· ${esc(stats)}` : "· textual metadata change"}</div>
+    return `<div class="file-diff-meta">${esc(diff.label)} ${stats ? `· ${esc(stats)}` : "· textual metadata change"}</div>
       <div class="diff-body file-diff-body">${lines || `<div class="file-empty">No textual changes.</div>`}</div>`;
   }
 
@@ -229,9 +227,8 @@ class PiFiles extends HTMLElement {
       : view
         ? `<pre class="file-code"><code class="hljs${view.language ? ` language-${esc(view.language)}` : ""}">${view.highlighted ? this.safeHighlighted(view.highlighted) : esc(view.content || "")}</code></pre>`
         : `<div class="file-empty">${s.fileLoading ? "Loading file…" : "Select a file to preview it."}</div>`;
-    const target = view?.target || s.fileTarget;
-    const diffMode = !!view && target !== "none";
-    const body = diffMode ? this.renderDiff(view.diff, target) : content;
+    const diffMode = !!view?.diff?.changed;
+    const body = diffMode ? this.renderDiff(view.diff) : content;
     const title = diffMode ? "Diff" : "Current file";
     const meta = !diffMode && view ? `<span>${esc(view.language || "text")} · ${esc(view.size)} bytes</span>` : "";
     this.innerHTML = `<div class="file-viewer-scrim" data-file-viewer-scrim>

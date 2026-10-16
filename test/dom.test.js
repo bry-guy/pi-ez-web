@@ -214,21 +214,21 @@ async function boot() {
       if (url === "/api/projects") return json({ id: "p2", sessionId: "s2", setupNeeded: true });
       if (url.includes("/api/projects/") && url.includes("/file?")) {
         const params = new URL(url, "http://pi-web.test").searchParams;
-        const target = params.get("target") || "none";
-        const targets = ["none", "HEAD", "main"];
+        const target = params.get("target") || "origin";
+        const targets = ["origin", "primary"];
         return json({
           path: "src/app.js", size: 18, binary: false, content: "const answer = 42;\n",
           highlighted: '<span class="hljs-keyword">const</span> answer = <span class="hljs-number">42</span>;\n',
           language: "javascript", target, targets,
-          diff: target === "none" ? null : { target, targets, adds: target === "main" ? 2 : 1, dels: 0, changed: true, binary: false,
+          diff: target === "origin" ? { target, targets, label: "vs origin", changed: false, binary: false, lines: [] } : { target, targets, label: "vs main", adds: 2, dels: 0, changed: true, binary: false,
             lines: [{ sign: "", hunk: true, text: "@@ -1 +1,2 @@" }, { sign: "+", text: "const answer = 42;" }] },
         });
       }
       if (url.includes("/api/projects/") && (url.endsWith("/files") || url.includes("/files?"))) {
         dom.window.__fileListCalls = (dom.window.__fileListCalls || 0) + 1;
-        const target = new URL(url, "http://pi-web.test").searchParams.get("target") || "none";
-        const targets = ["none", "HEAD", "main"];
-        const tree = target === "none" ? [
+        const target = new URL(url, "http://pi-web.test").searchParams.get("target") || "origin";
+        const targets = ["origin", "primary"];
+        const tree = target === "origin" ? [
           { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }] },
           { n: "README.md", p: "README.md" },
           { n: "new.js", p: "new.js", s: "new" },
@@ -865,8 +865,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   let fileTarget = root.querySelector(".file-target");
   assert.ok(root.querySelector(".file-tree-target"));
   assert.equal(fileTarget.getAttribute("aria-label"), "Diff target");
-  assert.equal(fileTarget.value, "none");
-  assert.match(fileTarget.selectedOptions[0].textContent, /Working tree/);
+  assert.equal(fileTarget.value, "origin");
+  assert.match(fileTarget.selectedOptions[0].textContent, /vs origin/);
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));
   assert.ok(root.querySelector("pi-files .file-row.status-new[data-file='new.js']"));
   const initialFileRow = root.querySelector("pi-files [data-file='README.md']");
@@ -878,10 +878,10 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(dom.window.__fileListCalls, initialFileCalls + 1, "explicit file revalidation still runs");
   assert.equal(root.querySelector("pi-files [data-file='README.md']"), initialFileRow, "unchanged file data does not replace the tree DOM");
   fileTarget = root.querySelector(".file-target");
-  fileTarget.value = "HEAD";
+  fileTarget.value = "primary";
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(store.state.fileTarget, "HEAD");
+  assert.equal(store.state.fileTarget, "primary");
   const readmeRow = root.querySelector("pi-files [data-file='README.md']");
   assert.ok(readmeRow);
   assert.equal(readmeRow.classList.contains("status-modified"), false);
@@ -905,14 +905,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".file-code"), null);
   assert.equal(root.querySelector(".file-section-head")?.textContent, "Diff");
   assert.match(root.querySelector(".file-diff-body")?.textContent || "", /const answer/);
-  assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /HEAD/);
+  assert.match(root.querySelector(".file-diff-meta")?.textContent || "", /vs main/);
   root.querySelector("pi-files .file-viewer [data-act='close']").click();
   assert.equal(store.state.filePath, null);
   assert.equal(dom.window.document.activeElement?.dataset.file, "src/app.js", "closing restores focus to the selected file");
   assert.ok(root.querySelector("pi-files .files:not(.file-viewer)"));
   assert.equal(root.querySelector(".files-scroll").scrollTop, 37);
   fileTarget = root.querySelector(".file-target");
-  fileTarget.value = "none";
+  fileTarget.value = "origin";
   fileTarget.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector("pi-files [data-file='README.md']"));

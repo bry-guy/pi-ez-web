@@ -109,8 +109,11 @@ version 5 and includes capability markers for workspace and branch features.
   closed from the confirmation dialog. Ordinary session close archives one
   conversation only.
 - Branch, checkout/worktree kind, clean/dirty state, ahead/behind, and sharing
-  sessions are observed live. The file tree always displays working-tree impact
-  relative to `HEAD`; an explicit diff target controls file comparison separately.
+  sessions are observed live. The file tree marks changes against the selected
+  diff target: `vs origin` (default) compares the working tree with `@{upstream}`
+  and falls back to the merge-base with the primary branch when no upstream is
+  set; `vs main` compares with the merge-base of `HEAD` and `origin/<primary>`
+  (or local `<primary>`). Untracked files are included in both.
   Added subtrees are green, deleted subtrees red, and mixed/modified paths orange.
 
 ## Verification

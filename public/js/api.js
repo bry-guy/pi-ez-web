@@ -96,12 +96,12 @@ export const api = {
   githubFlow: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`).then(j),
   githubCancel: id => fetch(`/api/github/device-login/${encodeURIComponent(id)}`, { method: "DELETE" }).then(j),
   githubLogout: () => fetch("/api/github/logout", { method: "POST" }).then(j),
-  files: (projectId, contextId, target = "none") => {
+  files: (projectId, contextId, target = "origin") => {
     const params = new URLSearchParams({ target });
     if (contextId) params.set("contextId", contextId);
     return fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params}`).then(j);
   },
-  file: (projectId, contextId, filePath, target = "none") => {
+  file: (projectId, contextId, filePath, target = "origin") => {
     const params = new URLSearchParams({ path: filePath, target });
     if (contextId) params.set("contextId", contextId);
     return fetch(`/api/projects/${encodeURIComponent(projectId)}/file?${params}`).then(j);
@@ -685,7 +685,7 @@ function applyTranscriptEvent(evt, t, replay) {
       const wasChat = store.state.chatId === evt.sessionId;
       const wasSession = store.state.sessionId === evt.sessionId;
       const selection = [store.state.chatId, store.state.sessionId, store.state.projectId];
-      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "none", fileTargets: ["none", "HEAD"], fileLoading: false, filesLoading: false, filesLoadedKey: null };
+      const fileReset = { files: [], fileError: null, filePath: null, fileView: null, fileTarget: "origin", fileTargets: ["origin", "primary"], fileLoading: false, filesLoading: false, filesLoadedKey: null };
       refreshState().then(() => {
         const s = store.state;
         if (s.chatId !== selection[0] || s.sessionId !== selection[1] || s.projectId !== selection[2]) return;

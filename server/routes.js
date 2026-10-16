@@ -13,7 +13,7 @@ import * as ws from "./workspaces.js";
 import { AuthFlowManager } from "./auth-flows.js";
 import { GitHubClient, GitHubDeviceFlowManager, normalizeGitHubOwner } from "./github.js";
 import { cloneRepository } from "./repositories.js";
-import { NO_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
+import { DEFAULT_DIFF_TARGET, readFileTree, readFileView } from "./file-explorer.js";
 import { hookResult, projectHooks, runHook } from "./hooks.js";
 import { resolveProjectEnvironment } from "./project-environment.js";
 import { gitCredentialEnvironment } from "./git-credentials.js";
@@ -86,7 +86,7 @@ export function buildApi(sup, { syncCoordinator = null, syncAdapter = null } = {
     saveBindings, saveConfig, slug, syncConfig, worktreeRoot,
     chatsState, projectState, sessionWorkspace, sessionsUsingWorkspaceAsync,
     closeSession, findProjectByWorkspace, findProjectByWorkspaceAsync, returnSessionToMain,
-    normalizeGitHubOwner, cloneRepository, NO_DIFF_TARGET, readFileTree, readFileView,
+    normalizeGitHubOwner, cloneRepository, DEFAULT_DIFF_TARGET, readFileTree, readFileView,
     hookResult, projectHooks, runHook, resolveProjectEnvironment, gitCredentialEnvironment,
     markSyncPending, createOperationReporter, operationRequestId, readLogs, logFileName, assertRepositoryIdentity,
     err, safe, withRepositoryAdmission, formatDuration, SYNC_ERROR_STATUS, repositorySourceState, settingsState,

@@ -1,5 +1,5 @@
 export function register(api, deps) {
-  const { path, loadConfig, NO_DIFF_TARGET, readFileTree, readFileView, err, requestedContext } = deps;
+  const { path, loadConfig, DEFAULT_DIFF_TARGET, readFileTree, readFileView, err, requestedContext } = deps;
 
 
   api.get("/projects/:id/files", c => {
@@ -12,7 +12,7 @@ export function register(api, deps) {
         ...readFileTree({
           workspace: context.path,
           repoPath: p.repoPath,
-          target: c.req.query("target") || NO_DIFF_TARGET,
+          target: c.req.query("target") || DEFAULT_DIFF_TARGET,
         }),
         contextId: context.id,
         branch: context.branch,
@@ -34,7 +34,7 @@ export function register(api, deps) {
           workspace: context.path,
           repoPath: p.repoPath,
           path: c.req.query("path"),
-          target: c.req.query("target") || NO_DIFF_TARGET,
+          target: c.req.query("target") || DEFAULT_DIFF_TARGET,
         }),
         contextId: context.id,
         branch: context.branch,
