@@ -466,13 +466,12 @@ class PiHeader extends HTMLElement {
     const branch = workspace ? this.contextLabel(workspace) : null;
     const commit = workspace?.head ? String(workspace.head) : "";
     const commitLabel = commit
-      ? `<span class="workspace-commit" title="Current commit ${esc(commit)}">${esc(commit.slice(0, 8))}</span>`
+      ? `<span class="workspace-divider">·</span><span class="workspace-commit" title="Current commit ${esc(commit)}">${esc(commit.slice(0, 8))}</span>`
       : "";
     const workspaceArea = inProject && workspace ? `
       <div class="bar-sub">
         <button class="workspace-trigger" data-act="workspace-settings" title="Show Git context" aria-label="Show Git context for ${esc(p.name)} ${esc(branch)}">
-          <span class="workspace-repo">${esc(p.name)}</span><span class="workspace-divider">·</span>
-          <span class="workspace-branch">${esc(branch)}</span>${commitLabel}${this.workspaceLabels(workspace)}
+          <span class="workspace-branch">${esc(branch)}</span>${commitLabel}<span class="workspace-divider">·</span><span class="workspace-state">${esc(gitStatusText(workspace))}</span>
         </button>
       </div>` : "";
     const operationScope = {
@@ -505,20 +504,12 @@ class PiHeader extends HTMLElement {
     </header>`);
   }
 
-  statusBits(status) {
-    const cleanliness = status.status === "unavailable" ? "unavailable" : status.status === "unknown" || status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean";
-    return [cleanliness, status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""].filter(Boolean).join(" · ");
-  }
+}
 
-  workspaceLabels(status) {
-    const kind = status.kind === "checkout" ? "CHECKOUT" : status.kind === "unavailable" ? "UNAVAILABLE" : "WORKTREE";
-    const cleanliness = status.status === "unavailable" ? "unavailable" : status.status === "unknown" || status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean";
-    return [kind, cleanliness, status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""]
-      .filter(Boolean)
-      .map((label, index) => `<span class="workspace-badge ${index === 0 ? "kind" : "state"}">${esc(label)}</span>`)
-      .join("");
-  }
-
+// Plain-words Git state shared by the header and the Files panel.
+export function gitStatusText(status) {
+  const cleanliness = status.status === "unavailable" ? "unavailable" : status.status === "unknown" || status.dirty == null ? "unknown" : status.dirty ? "dirty" : "clean";
+  return [cleanliness, status.ahead ? `↑${status.ahead}` : "", status.behind ? `↓${status.behind}` : ""].filter(Boolean).join(" · ");
 }
 
 customElements.define("pi-sidebar", PiSidebar);

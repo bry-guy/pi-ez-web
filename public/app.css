@@ -289,15 +289,8 @@ header.bar {
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; text-align: left;
 }
 .workspace-trigger:hover, .workspace-trigger:focus-visible { border-color: var(--orange); background: var(--orange-soft); outline: 0; }
-.workspace-repo { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-divider { color: var(--faint); }
 .workspace-branch { max-width: 32ch; overflow: hidden; color: var(--orange); text-overflow: ellipsis; white-space: nowrap; }
-.workspace-badge {
-  display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px;
-  background: var(--surface-2); color: var(--faint); font-size: 9px; letter-spacing: .03em; line-height: 1.35; text-transform: uppercase;
-}
-.workspace-badge.kind { color: var(--text); }
-.workspace-badge.state { color: var(--orange); }
 .hamburger {
   border: 0; background: var(--surface-2); border-radius: 8px; width: 32px; height: 32px;
   cursor: pointer; color: var(--muted); display: grid; place-items: center; flex: 0 0 auto;
@@ -685,6 +678,7 @@ aside.files {
 .file-row.file.status-removed { cursor: default; }
 .file-row:hover, .file-row:focus-visible { background: var(--surface-2); }
 .file-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.file-git { padding: 0 12px 8px; color: var(--faint); font-family: var(--mono); font-size: 11px; }
 .file-error { padding: 9px 12px; color: var(--red); font-family: var(--mono); font-size: 11px; }
 .file-row .fcaret { flex: 0 0 11px; color: var(--faint); font-size: 9px; }
 .file-row .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1154,7 +1148,6 @@ header.bar { background: color-mix(in oklch, var(--bg) 82%, transparent); backdr
 .bar-title { font-size: 15px; font-weight: 550; }
 .hamburger { background: transparent; border-radius: 10px; }
 .hamburger:hover { background: var(--surface-2); }
-.workspace-badge { border-radius: 999px; padding: 1px 7px; background: var(--surface-2); text-transform: none; letter-spacing: 0; font-size: 10.5px; }
 .workspace-trigger:hover, .workspace-trigger:focus-visible { background: var(--surface-2); }
 
 /* transcript: centered reading column */

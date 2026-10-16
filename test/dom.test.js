@@ -607,6 +607,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
   assert.equal(store.findSession("s1", store.state.projects[0].sessions).branch, "develop");
   assert.match(root.querySelector("pi-header .workspace-branch").textContent, /develop/);
+  assert.doesNotMatch(root.querySelector("pi-header .workspace-trigger").textContent, /CHECKOUT|WORKTREE|demo/, "the header shows branch, commit and state only");
   assert.match(store.state.operations.find(operation => operation.kind === "switch-session").events.at(-1).message, /Switched session s1 to develop/);
   store.state.transcripts.sibling.streaming = false;
   store.notify("transcript");

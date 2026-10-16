@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { store } from "./store.js";
-import { esc } from "./shell.js";
+import { esc, gitStatusText } from "./shell.js";
 
 
 /* ---------------- file panel ---------------- */
@@ -130,6 +130,15 @@ class PiFiles extends HTMLElement {
     return Array.isArray(targets) && targets.length
       ? targets
       : ["none", "HEAD", ...((store.project()?.branches || []).includes(primary) ? [primary] : [])];
+  }
+
+  // Main checkout vs worktree is shown here, not in the header.
+  workspaceSummary() {
+    const project = store.project();
+    const context = project?.contexts?.find(item => item.id === this.currentContextId());
+    if (!context) return "";
+    const place = context.kind === "checkout" ? "Main checkout" : `Worktree of ${project.name}`;
+    return [place, context.branch, context.head?.slice(0, 8), gitStatusText(context)].filter(Boolean).join(" · ");
   }
 
   targetLabel(target) {
@@ -265,11 +274,13 @@ class PiFiles extends HTMLElement {
     const targets = this.availableTargets();
     const selectedTarget = targets.includes(store.state.fileTarget) ? store.state.fileTarget : targets[0];
     if (store.state.fileTarget !== selectedTarget) store.state.fileTarget = selectedTarget;
+    const summary = this.workspaceSummary();
     this.innerHTML = `<aside class="files">
       <div class="files-head">
         <div class="sec-label">Files</div>
         <button class="ghost-btn" data-act="close" title="Collapse">×</button>
       </div>
+      ${summary ? `<div class="file-git">${esc(summary)}</div>` : ""}
       <div class="file-target-row file-tree-target" role="group" aria-label="Diff target"><label for="file-target">Diff target</label><select id="file-target" class="file-target" aria-label="Diff target">${this.targetOptions(selectedTarget)}</select></div>
       ${store.state.fileError ? `<div class="file-error">${esc(store.state.fileError)}</div>` : ""}
       <div class="files-scroll">${out.length ? out.join("") : `<div class="file-empty">${store.state.filesLoading ? "Loading files…" : "No files found."}</div>`}</div>
