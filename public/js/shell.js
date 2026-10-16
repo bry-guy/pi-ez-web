@@ -4,6 +4,8 @@ import { setHTML, store } from "./store.js";
 
 export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const mobile = () => matchMedia("(max-width: 760px)").matches;
+// workspaced reports running | sleeping | starting; the UI says awake | asleep | starting.
+export const workerStateLabel = state => ({ running: "awake", sleeping: "asleep", starting: "starting" })[state] || state || "awake";
 const ACTIVE_SESSION_STORAGE_KEY = "pi-ez-web:active-session";
 function saveActiveSession(value) {
   try { globalThis.localStorage?.setItem(ACTIVE_SESSION_STORAGE_KEY, JSON.stringify(value)); } catch { /* storage is optional */ }
@@ -278,9 +280,9 @@ class PiSidebar extends HTMLElement {
   // Project workers sleep when idle and wake on use; pinning keeps one awake
   // (e.g. a dev server you want left running).
   workspaceToggle(p) {
-    const label = p.workspacePinned ? "pinned" : p.workspaceState === "sleeping" ? "asleep" : p.workspaceState === "starting" ? "starting" : "awake";
+    const label = workerStateLabel(p.workspaceState);
     const title = `Grant: ${p.workspaceGrant || "default"}. ${p.workspacePinned ? "Kept awake. Click to let it sleep when idle." : "Sleeps when idle and wakes on use. Click to keep awake."}`;
-    return `<button class="row-ws ${label}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}. ${title}`)}">${label}</button>`;
+    return `<button class="row-ws ${label}" data-act="toggle-pin" data-ws="${esc(p.workspace)}" data-pinned="${p.workspacePinned ? 1 : 0}" title="${esc(title)}" aria-label="${esc(`${p.name}: ${label}${p.workspacePinned ? ", kept awake" : ""}. ${title}`)}">${label}${p.workspacePinned ? `<i class="row-ws-keep" aria-hidden="true"></i>` : ""}</button>`;
   }
 
   sessionRows(p, nodes, depth, q, out, forceAll = false) {

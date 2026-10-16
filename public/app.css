@@ -234,7 +234,7 @@ aside.rail {
 .row .count, .row .when { font-family: var(--mono); font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .row .when { font-size: 10.5px; }
 .row-ws { border: 0; background: transparent; font-family: var(--mono); font-size: 10.5px; color: var(--faint); padding: 1px 4px; cursor: pointer; flex: 0 0 auto; }
-.row-ws.pinned { color: var(--accent, inherit); }
+.row-ws-keep { display: inline-block; width: 5px; height: 5px; margin-left: 4px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
 .rail-foot { padding: 10px 12px; display: flex; align-items: center; gap: 9px; }
 .avatar {
   width: 24px; height: 24px; border-radius: 50%; background: var(--surface-3);
