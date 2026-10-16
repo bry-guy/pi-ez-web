@@ -253,10 +253,7 @@ class PiSidebar extends HTMLElement {
       requestAnimationFrame(() => this.querySelector(".rail-search")?.focus());
     }
     else if (act === "new-chat") newChat().catch(err => store.setError(`Could not create chat: ${err.message || err}`));
-    else if (act === "new-project-session") {
-      e.stopPropagation();
-      newProjectSession(t.dataset.id).catch(err => store.setError(`Could not create session: ${err.error || err.message || err}`));
-    } else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
+    else if (act === "repo-picker") store.set({ repoPickerOpen: true, drawerOpen: false });
     else if (act === "settings") store.set({ view: "settings", drawerOpen: false });
     else if (act === "toggle-tree") {
       e.stopPropagation();
@@ -270,13 +267,8 @@ class PiSidebar extends HTMLElement {
       api.pinWorkspace(t.dataset.ws, t.dataset.pinned !== "1")
         .then(() => refreshState())
         .catch(err => store.setError(`Keep-awake failed: ${err.error || err.message || err}`));
-    } else if (act === "project-row") {
-      const p = store.state.projects.find(x => x.id === t.dataset.id);
-      if (!p) return;
-      const first = p.sessions[0];
-      if (first) selectSession(p.id, first.id, { showOperation: true });
-      else store.set({ view: "chat", projectId: p.id, sessionId: null, chatId: null, filesOpen: false, model: store.state.effectiveDefaultModel || null, requestedModel: null, modelFallback: false, modelUnavailable: false });
-    } else if (act === "session-row") {
+    } else if (act === "project-row") newProjectSession(t.dataset.id);
+    else if (act === "session-row") {
       selectSession(t.dataset.pid, t.dataset.id, { showOperation: true });
     } else if (act === "chat-row") selectChat(t.dataset.id);
   }
@@ -375,7 +367,6 @@ class PiSidebar extends HTMLElement {
           <span class="caret" data-act="toggle-tree" data-tree-id="${esc(p.id)}" role="button" tabindex="0" aria-label="${open ? "Collapse" : "Expand"} ${esc(p.name)}">${open ? "▾" : "▸"}</span>
           <span class="lbl">${esc(p.name)}</span>
           ${p.workspace ? this.workspaceToggle(p) : ""}<span class="count">${this.count(p.sessions)}</span>
-          <button class="row-add cta-plus" data-act="new-project-session" data-id="${esc(p.id)}" title="New session in ${esc(p.name)}" aria-label="New session in ${esc(p.name)}">+</button>
         </div></div>`);
       if (open) this.sessionRows(p, p.sessions, 0, nameMatch ? "" : q, projRows, !!q && nameMatch);
     }

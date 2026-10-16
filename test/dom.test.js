@@ -614,8 +614,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.state.openTree.p1 = false;
   store.notify("state");
   root.querySelector("[data-act='project-row']").click();
-  assert.equal(store.state.sessionId, "s1");
+  assert.ok(root.querySelector(".session-picker"), "clicking a project opens the new-session modal");
   assert.equal(store.state.openTree.p1, false);
+  store.set({ sessionPicker: null });
   root.querySelector("[data-act='toggle-tree'][data-tree-id='p1']").click();
   assert.equal(store.state.openTree.p1, true);
   root.querySelector("[data-act='session-row'][data-id='sibling']").click();
@@ -643,9 +644,9 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(store.state.chatId, "c1");
 
-  const projectPlus = root.querySelector("[data-act='new-project-session']");
-  assert.ok(projectPlus);
-  projectPlus.click();
+  const projectRow = root.querySelector("[data-act='project-row']");
+  assert.ok(projectRow);
+  projectRow.click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelectorAll(".session-history-row").length, 2);
