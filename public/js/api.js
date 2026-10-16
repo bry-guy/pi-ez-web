@@ -315,7 +315,8 @@ async function recoverConnection() {
       location.reload();
       return;
     }
-    await refreshState();
+    // Same guard as the 3.5s refresh timer: don't rewrite state under an open picker or confirm.
+    if (!store.state.sessionPicker && !store.state.confirm) await refreshState();
     stopRecovery();
     void checkActiveSync();
   } catch {

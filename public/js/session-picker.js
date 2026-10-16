@@ -1,6 +1,6 @@
 import { api, refreshState } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
-import { store } from "./store.js";
+import { setHTML, store } from "./store.js";
 import { esc, selectSession } from "./shell.js";
 import { gitErrorMessage, runningPickerOperation, pickerError, launchSetup, pickerOperationFeed, featureBranchForName } from "./panel-utils.js";
 
@@ -352,9 +352,9 @@ class PiSessionPicker extends HTMLElement {
 
   render() {
     const picker = this.picker();
-    if (!picker) { this.innerHTML = ""; return; }
+    if (!picker) { setHTML(this, ""); return; }
     const project = this.project();
-    if (!project) { this.innerHTML = ""; return; }
+    if (!project) { setHTML(this, ""); return; }
     const focused = document.activeElement;
     const focusSelector = focused && this.contains(focused) && focused.matches("[data-session-name], [data-session-new-branch], [data-session-base-branch]")
       ? (focused.matches("[data-session-name]") ? "[data-session-name]" : focused.matches("[data-session-new-branch]") ? "[data-session-new-branch]" : "[data-session-base-branch]")
@@ -419,7 +419,7 @@ class PiSessionPicker extends HTMLElement {
     const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
     const operationProgress = pickerOperationFeed(picker);
     const subtitle = existing ? `${esc(project.name)} · choose a branch or fork this conversation` : `${esc(project.name)} · choose a branch for this conversation`;
-    this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${sessionDetails}${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${syncedSection}${historySection}${progress}${error}${branchActions}${sessionActions}${operationProgress}</div></section></div>`;
+    setHTML(this, `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}"><label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>${sessionDetails}${isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : ""}${syncedSection}${historySection}${progress}${error}${branchActions}${sessionActions}${operationProgress}</div></section></div>`);
     const feed = this.querySelector(".session-operation-feed");
     if (feed) feed.scrollTop = feed.scrollHeight;
     if (focusSelector) {

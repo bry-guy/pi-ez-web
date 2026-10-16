@@ -356,6 +356,11 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
   assert.equal(root.querySelector("[data-session-name]").value, "New session");
+  const nameInput = root.querySelector("[data-session-name]");
+  nameInput.focus();
+  store.notify("state");
+  assert.equal(root.querySelector("[data-session-name]"), nameInput, "an unchanged picker keeps its input node");
+  assert.equal(root.ownerDocument.activeElement, nameInput, "an unchanged picker keeps focus");
   const sessionDetails = root.querySelector(".session-details");
   assert.ok(sessionDetails);
   assert.deepEqual([...sessionDetails.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
