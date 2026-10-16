@@ -536,3 +536,23 @@ test("the detailed list adds activity, last use and usage; usage is null without
   assert.deepEqual(detail, { workspaces: [{ name: "app", state: "running", pinned: false, lastUsed: detail.workspaces[0].lastUsed, busy: false, usage: null }], usageAvailable: false });
   assert.equal(typeof detail.workspaces[0].lastUsed, "number");
 });
+
+test("sleep refuses a busy worker unless forced", async () => {
+  let busy = true;
+  const worker = await listen((_req, res) => res.end(JSON.stringify({ ok: true, busy })));
+  const provider = fakeLifecycleProvider(worker.address().port);
+  provider.ws.state = "running";
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: 0, log: () => {} });
+  const app = createWorkspaced({ provider, token: TOKEN, lifecycle });
+  const sleep = q => app.request(`/v1/workspaces/app/sleep${q}`, { method: "POST", headers: auth });
+  try {
+    const refused = await sleep("");
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json()).error, "workspace_busy");
+    assert.deepEqual(provider.calls, [], "nothing slept");
+    assert.equal((await sleep("?force=1")).status, 200);
+    assert.deepEqual(provider.calls, [["scale", 0]]);
+    provider.ws.state = "running"; busy = false;
+    assert.equal((await sleep("")).status, 200, "idle workers sleep without force");
+  } finally { worker.close(); }
+});

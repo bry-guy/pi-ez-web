@@ -73,7 +73,13 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
     lifecycle.touch(name);
     return await lifecycle.ensureAwake(name) ? c.json({ ok: true }) : starting(c, name);
   }));
+  // Busy workers refuse disruptive actions (sleep, restart, reset) unless ?force=1.
+  const refuseBusy = async (c, name) => c.req.query("force") !== "1" && await lifecycle.busy(name)
+    ? c.json({ error: "workspace_busy", name, message: "This project is busy. Try again when it is idle, or force it." }, 409)
+    : null;
   app.post("/v1/workspaces/:name/sleep", named(async (c, name) => {
+    const busy = await refuseBusy(c, name);
+    if (busy) return busy;
     await lifecycle.sleep(name, "requested");
     return c.json({ ok: true });
   }));
