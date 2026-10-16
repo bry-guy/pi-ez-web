@@ -30,6 +30,8 @@ The control plane. It creates, wakes, sleeps and deletes one worker per project 
 
 workspaced's own ServiceAccount needs, in each worker namespace: create/get/list/patch/delete on Deployments, Services and PVCs, plus create/update on the two auth Secrets `pi-ez-github-auth` and `pi-ez-model-auth`. It does not need to create ServiceAccounts, Roles or other Secrets.
 
+For live CPU and memory in the sidebar, grant one more read: `get` and `list` on `pods` in apiGroup `metrics.k8s.io`, in each worker namespace (a namespaced Role and RoleBinding). Without it, or without metrics-server, usage shows as unavailable and nothing else changes. This repository ships no RBAC manifests; add the rule to your deployment's Role.
+
 ## Grants
 
 A grant says what a project's worker may hold. The deployer defines grants; a user picks one when adding a repository, and the sidebar shows it read-only. A repository-locked grant refuses other repositories, also when a worker wakes.
@@ -62,4 +64,4 @@ How Secrets get filled (kubectl, External Secrets, a CI job) is your choice. Wor
 
 ## API
 
-All routes need `Authorization: Bearer $WORKSPACED_TOKEN`. `GET /v1/workspaces`, `POST /v1/workspaces`, `DELETE /v1/workspaces/:name`, `POST …/:name/wake|sleep`, `PUT …/:name/pin`, `PUT …/:name/grant`, `GET /v1/grants`, `PUT /v1/github-auth`, `PUT /v1/model-auth`, and `/w/:name/*`, which proxies to the worker. Requests to a sleeping worker wake it and wait about 45 s, or return `503 workspace_starting` with `Retry-After`.
+All routes need `Authorization: Bearer $WORKSPACED_TOKEN`. `GET /v1/workspaces` (add `?detail=1` for `busy`, `lastUsed`, `usage` per workspace and `usageAvailable`; usage is `{cpuMillicores, memoryBytes}` from metrics-server, or from `ps` for the local provider, which reports one process and its CPU averaged over its life), `POST /v1/workspaces`, `DELETE /v1/workspaces/:name`, `POST …/:name/wake|sleep`, `PUT …/:name/pin`, `PUT …/:name/grant`, `GET /v1/grants`, `PUT /v1/github-auth`, `PUT /v1/model-auth`, and `/w/:name/*`, which proxies to the worker. Requests to a sleeping worker wake it and wait about 45 s, or return `503 workspace_starting` with `Retry-After`.

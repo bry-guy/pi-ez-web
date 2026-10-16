@@ -25,6 +25,9 @@ export function createLifecycle({
     return cache.byName.get(name) || null;
   }
   const touch = name => lastUsed.set(name, now());
+  const lastUsedAt = name => lastUsed.get(name) ?? null;
+  // A request in flight, or the worker reporting an agent turn.
+  const busy = async name => !!inflight.get(name) || !!(await health(name))?.busy;
 
   async function health(name) {
     const base = provider.upstream(name);
@@ -117,7 +120,7 @@ export function createLifecycle({
   if (timer) setTimeout(() => sweep().catch(() => {}), 0).unref?.();
 
   return {
-    info, touch, ensureAwake, sleep, sweep, refresh, makeRoom,
+    info, touch, lastUsedAt, busy, ensureAwake, sleep, sweep, refresh, makeRoom,
     begin(name) { inflight.set(name, (inflight.get(name) || 0) + 1); touch(name); },
     end(name) { inflight.set(name, Math.max(0, (inflight.get(name) || 1) - 1)); touch(name); },
     stop() { clearInterval(timer); },

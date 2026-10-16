@@ -32,7 +32,15 @@ export function createWorkspaced({ provider, grants = parseGrants(""), token, au
     await next();
   });
 
-  app.get("/v1/workspaces", async c => c.json({ workspaces: await provider.list() }));
+  app.get("/v1/workspaces", async c => {
+    const list = await provider.list();
+    if (c.req.query("detail") !== "1") return c.json({ workspaces: list });
+    const usage = await provider.usage?.() ?? null;
+    const workspaces = await Promise.all(list.map(async w => ({
+      ...w, lastUsed: lifecycle.lastUsedAt(w.name), busy: await lifecycle.busy(w.name), usage: usage?.[w.name] ?? null,
+    })));
+    return c.json({ workspaces, usageAvailable: usage !== null });
+  });
 
   // Grant shapes, optionally only those a repository may use (the add-project picker).
   app.get("/v1/grants", c => {

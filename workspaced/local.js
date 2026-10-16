@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -60,6 +60,15 @@ export function localProvider({ root, spawnImpl = spawn, server = SERVER } = {})
       writeAtomic(registry, JSON.stringify(all, null, 2));
       if (replicas === 0) { procs.get(name)?.kill("SIGTERM"); procs.delete(name); }
       else await start(name, all[name]);
+    },
+    // ps reports this process only (not its children) and %cpu averaged over its life.
+    async usage() {
+      const live = [...procs].filter(([, c]) => c.pid && c.exitCode === null);
+      if (!live.length) return {};
+      const out = await new Promise(resolve => execFile("ps", ["-o", "pid=,rss=,pcpu=", "-p", live.map(([, c]) => c.pid).join(",")], { timeout: 2_000 }, (err, stdout) => resolve(err && err.code !== 1 ? null : stdout)));
+      if (out === null) return null;
+      const byPid = new Map(out.trim().split("\n").map(line => line.trim().split(/\s+/)).map(([pid, rss, pcpu]) => [Number(pid), { cpuMillicores: Math.round(Number(pcpu) * 10), memoryBytes: Number(rss) * 1024 }]));
+      return Object.fromEntries(live.filter(([, c]) => byPid.has(c.pid)).map(([name, c]) => [name, byPid.get(c.pid)]));
     },
     async setPinned(name, pinned) {
       const all = read();

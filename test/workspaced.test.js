@@ -12,7 +12,7 @@ import { deploymentState, kubernetesConfig, kubernetesProvider } from "../worksp
 import { createLifecycle } from "../workspaced/lifecycle.js";
 import { parseGrants, repoKey, withGrantCheck } from "../workspaced/grants.js";
 import { localProvider } from "../workspaced/local.js";
-import { deploymentManifest, slugFromRepository } from "../workspaced/manifests.js";
+import { deploymentManifest, quantity, slugFromRepository } from "../workspaced/manifests.js";
 import { createRemoteWorkspaces, registerRemoteRoutes } from "../server/remote-workspaces.js";
 import { EventHub } from "../server/events.js";
 
@@ -490,4 +490,49 @@ test("a slow worker does not hold up the project list; its snapshot shows instea
   assert.ok(Date.now() - t0 < 1000);
   assert.equal(projects[0].pending, true);
   remote.close?.();
+});
+
+test("usage: quantities parse, metrics-server pods sum per worker, and missing metrics read as unavailable", async () => {
+  assert.deepEqual([quantity("250m"), quantity("512Mi"), quantity("1"), quantity("bogus")], [0.25, 512 * 2 ** 20, 1, null]);
+  assert.ok(Math.abs(quantity("123456789n") - 0.123456789) < 1e-12);
+  let calls = 0;
+  const metrics = { status: 200, body: { items: [
+    { metadata: { labels: { "pi-ez.dev/workspace": "app" } }, containers: [{ usage: { cpu: "120m", memory: "100Mi" } }, { usage: { cpu: "30m", memory: "1Mi" } }] },
+    { metadata: { labels: {} }, containers: [{ usage: { cpu: "9m", memory: "9Mi" } }] },
+  ] } };
+  const kube = { request: async (method, p) => { calls++; assert.match(p, /^\/apis\/metrics\.k8s\.io\/v1beta1\/namespaces\/pi-ez-workspaces\/pods\?labelSelector=/); return metrics; } };
+  const provider = kubernetesProvider({ kube, config: kubernetesConfig({}) });
+  assert.deepEqual(await provider.usage(), { app: { cpuMillicores: 150, memoryBytes: 101 * 2 ** 20 } });
+  assert.deepEqual(await provider.usage(), { app: { cpuMillicores: 150, memoryBytes: 101 * 2 ** 20 } });
+  assert.equal(calls, 1, "cached briefly");
+  const forbidden = kubernetesProvider({ kube: { request: async () => ({ status: 403, body: {} }) }, config: kubernetesConfig({}) });
+  assert.equal(await forbidden.usage(), null);
+  const hung = kubernetesProvider({ kube: { request: () => new Promise(() => {}) }, config: kubernetesConfig({}) });
+  assert.equal(await hung.usage(), null, "a stalled metrics API gives up quickly");
+});
+
+test("usage: local workers report their child's memory and CPU from ps", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "workspaced-usage-"));
+  const { spawn } = await import("node:child_process");
+  const provider = localProvider({ root, spawnImpl: () => spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]) });
+  try {
+    await provider.create({ name: "app", repository: "o/app" });
+    // A child is near-empty for a moment after fork; wait for node to load.
+    let usage;
+    for (let i = 0; i < 100 && !(usage?.app?.memoryBytes > 1024 * 1024); i++) { await new Promise(r => setTimeout(r, 50)); usage = await provider.usage(); }
+    assert.ok(usage.app.memoryBytes > 1024 * 1024, JSON.stringify(usage));
+    assert.equal(typeof usage.app.cpuMillicores, "number");
+  } finally { provider.stop(); }
+});
+
+test("the detailed list adds activity, last use and usage; usage is null without metrics", async () => {
+  const provider = { list: async () => [{ name: "app", state: "running", pinned: false }], usage: async () => null, upstream: () => "http://127.0.0.1:1" };
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: 0, log: () => {} });
+  lifecycle.touch("app");
+  const app = createWorkspaced({ provider, token: TOKEN, lifecycle });
+  const plain = await (await app.request("/v1/workspaces", { headers: auth })).json();
+  assert.equal(plain.workspaces[0].busy, undefined);
+  const detail = await (await app.request("/v1/workspaces?detail=1", { headers: auth })).json();
+  assert.deepEqual(detail, { workspaces: [{ name: "app", state: "running", pinned: false, lastUsed: detail.workspaces[0].lastUsed, busy: false, usage: null }], usageAvailable: false });
+  assert.equal(typeof detail.workspaces[0].lastUsed, "number");
 });

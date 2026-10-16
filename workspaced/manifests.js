@@ -13,6 +13,13 @@ const DATA = "/data";
 const HOME = `${DATA}/pi-ez-operator-home`;
 const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 
+// Kubernetes quantities ("250m", "512Mi", "123456789n") as base units: cores, bytes.
+const SUFFIX = { n: 1e-9, u: 1e-6, m: 1e-3, k: 1e3, M: 1e6, G: 1e9, T: 1e12, Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40 };
+export function quantity(text) {
+  const m = /^(\d+(?:\.\d+)?)([a-zA-Z]*)$/.exec(String(text ?? ""));
+  return m && (m[2] === "" || m[2] in SUFFIX) ? Number(m[1]) * (SUFFIX[m[2]] ?? 1) : null;
+}
+
 export function validName(name) {
   return typeof name === "string" && NAME_RE.test(name);
 }

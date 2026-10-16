@@ -1,7 +1,9 @@
 import { DEFAULT_GRANT } from "./grants.js";
-import { deploymentManifest, GITHUB_SECRET, GRANT_ANNOTATION, MODEL_SECRET, pvcManifest, serviceManifest, MANAGED_BY, NAME_LABEL, PIN_ANNOTATION, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
+import { deploymentManifest, GITHUB_SECRET, GRANT_ANNOTATION, MODEL_SECRET, pvcManifest, quantity, serviceManifest, MANAGED_BY, NAME_LABEL, PIN_ANNOTATION, REPO_ANNOTATION, WORKSPACE_PORT } from "./manifests.js";
 
 const MERGE_PATCH = "application/merge-patch+json";
+const USAGE_TTL_MS = 5_000;
+const USAGE_TIMEOUT_MS = 2_000;
 // Merges containers by name instead of replacing the list.
 const STRATEGIC_PATCH = "application/strategic-merge-patch+json";
 
@@ -46,6 +48,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
   const core = (kind, ns = home) => `/api/v1/namespaces/${ns}/${kind}`;
   const selector = encodeURIComponent(`app.kubernetes.io/managed-by=${MANAGED_BY}`);
   const located = new Map(); // workspace name → namespace, refreshed by list/locate
+  let usageCache = { at: -Infinity, value: null };
 
   // Workers mount these Secrets read-only; kubelet refreshes them after updates.
   // They live in every worker namespace.
@@ -93,7 +96,33 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
     if (res.status >= 300) throw httpError(`kubernetes ${res.status}`, 502, "kubernetes_error");
   }
 
+  // metrics-server's pod metrics for the workers; null when the API is missing or forbidden.
+  async function readUsage() {
+    const out = {};
+    for (const ns of namespaces) {
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("metrics timeout")), USAGE_TIMEOUT_MS).unref());
+      const res = await Promise.race([kube.request("GET", `/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods?labelSelector=${selector}`), timeout]);
+      if (res.status !== 200) return null;
+      for (const pod of res.body?.items || []) {
+        const name = pod.metadata?.labels?.[NAME_LABEL];
+        if (!name) continue;
+        const sum = out[name] ??= { cpuMillicores: 0, memoryBytes: 0 };
+        for (const c of pod.containers || []) {
+          sum.cpuMillicores += Math.round((quantity(c.usage?.cpu) || 0) * 1000);
+          sum.memoryBytes += quantity(c.usage?.memory) || 0;
+        }
+      }
+    }
+    return out;
+  }
+
   return {
+    async usage() {
+      if (Date.now() - usageCache.at < USAGE_TTL_MS) return usageCache.value;
+      const value = await readUsage().catch(() => null);
+      usageCache = { at: Date.now(), value };
+      return value;
+    },
     async list() {
       const out = [];
       for (const ns of namespaces) {
