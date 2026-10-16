@@ -651,3 +651,43 @@ test("local restart respawns the worker; reset also wipes its data", async () =>
   assert.equal(existsSync(dataFile), false, "data wiped");
   assert.equal(await provider.list().then(l => l[0].state), "running");
 });
+
+test("web lists workspaces with activity, usage and grant names, and forwards restart, reset and reload", async () => {
+  const seen = [];
+  const worker = await listen((req, res) => { seen.push(req.url); res.end(JSON.stringify({ ok: true })); });
+  const ws = { name: "app", repository: "o/app", grant: "operator", state: "running", ready: true, pinned: true, containers: false, resources: { requests: { cpu: "250m" } } };
+  const calls = [];
+  const provider = {
+    list: async () => [{ ...ws }],
+    usage: async () => ({ app: { cpuMillicores: 5, memoryBytes: 1024 } }),
+    upstream: () => `http://127.0.0.1:${worker.address().port}`,
+    restart: async n => calls.push(["restart", n]),
+    reset: async n => calls.push(["reset", n]),
+  };
+  const grants = parseGrants(JSON.stringify({ default: { anyProject: true }, operator: { repos: ["o/app"], namespace: "ops", serviceAccount: "op", env: ["op-env"], egress: "open" } }));
+  const lifecycle = createLifecycle({ provider, sweepMs: 0, cacheMs: 0, log: () => {} });
+  const daemon = createWorkspaced({ provider, grants, token: TOKEN, lifecycle });
+  const remote = createRemoteWorkspaces({ url: "http://workspaced", token: TOKEN, hub: { emit() {} }, fetchImpl: (u, i) => daemon.fetch(new Request(u, i)), modelAuthSyncMs: 0 });
+  const api = new Hono();
+  registerRemoteRoutes(api, remote);
+  try {
+    const listed = await (await api.request("/remote-workspaces")).json();
+    assert.equal(listed.usageAvailable, true);
+    assert.deepEqual(listed.workspaces, [{
+      name: "app", repository: "o/app", state: "running", ready: true, keepAwake: true, busy: false, lastUsed: listed.workspaces[0].lastUsed,
+      resources: { requests: { cpu: "250m" } }, usage: { cpuMillicores: 5, memoryBytes: 1024 },
+      grant: { name: "operator", description: "", namespace: "ops", serviceAccount: "op", egress: "open", runtimeClass: null, env: ["op-env"] },
+    }]);
+    assert.equal((await api.request("/remote-workspaces/app/reset", json({ confirm: "nope" }))).status, 400);
+    assert.deepEqual(await (await api.request("/remote-workspaces/app/reset", json({ confirm: "app" }))).json(), { ok: true });
+    assert.equal((await api.request("/remote-workspaces/app/restart", json({}))).status, 200);
+    assert.equal((await api.request("/remote-workspaces/app/reload", json({}))).status, 200);
+    assert.deepEqual(await (await api.request("/remote-workspaces/reload", json({}))).json(), { results: [{ name: "app", ok: true, status: 200, error: null }] });
+    assert.deepEqual(calls, [["reset", "app"], ["restart", "app"]]);
+    assert.deepEqual(seen.filter(u => u === "/api/pi/reload"), ["/api/pi/reload", "/api/pi/reload"]);
+  } finally {
+    remote.stop();
+    lifecycle.stop();
+    worker.close();
+  }
+});

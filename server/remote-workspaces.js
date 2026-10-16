@@ -102,6 +102,38 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
     if (!res.ok) throw Object.assign(new Error("could not change keep-awake"), { code: "workspaced_unavailable", status: 502 });
   }
 
+  // Restart, reset and reload: workspaced's answer (status and body) passes through.
+  async function workspaceAction(name, action, { force = false, body } = {}) {
+    const res = await call(`/workspaces/${encodeURIComponent(name)}/${action}${force ? "?force=1" : ""}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
+  // Settings view: activity and usage from workspaced; grant details without env values (Secret names only).
+  async function inventory() {
+    const [res, allGrants] = await Promise.all([call("/workspaces?detail=1"), grants("")]);
+    if (!res.ok) throw Object.assign(new Error("workspaced unavailable"), { code: "workspaced_unavailable", status: 502 });
+    const body = await res.json();
+    const byName = new Map(allGrants.map(g => [g.name, g]));
+    const grantView = g => g && { name: g.name, description: g.description || "", namespace: g.namespace, serviceAccount: g.serviceAccount, egress: g.egress, runtimeClass: g.runtimeClass, env: g.env || [] };
+    return {
+      usageAvailable: !!body.usageAvailable,
+      workspaces: (body.workspaces || []).map(w => ({
+        name: w.name, repository: w.repository, state: w.state || (w.ready ? "running" : "starting"), ready: !!w.ready,
+        keepAwake: !!w.pinned, busy: !!w.busy, lastUsed: w.lastUsed ?? null, resources: w.resources ?? null, usage: w.usage ?? null,
+        grant: grantView(byName.get(w.grant || "default")) || null,
+      })),
+    };
+  }
+
+  // Reloads every awake worker; one that fails doesn't stop the others.
+  async function reloadAwake() {
+    const awake = (await list()).filter(w => (w.state || (w.ready ? "running" : "starting")) === "running");
+    return Promise.all(awake.map(async w => {
+      const { status, body } = await workspaceAction(w.name, "reload").catch(() => ({ status: 502, body: { error: "workspace_unavailable" } }));
+      return { name: w.name, ok: status < 300, status, error: status < 300 ? null : body.error || "workspace_unavailable" };
+    }));
+  }
+
   // Fire and forget: workspaced holds the request until the worker is ready.
   function wake(name) {
     call(`/workspaces/${encodeURIComponent(name)}/wake`, { method: "POST" }).catch(() => {});
@@ -260,7 +292,7 @@ export function createRemoteWorkspaces({ url, token, hub, github, sup = null, mo
 
   return {
     wake,
-    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned, grants, setGrant,
+    projects, owner, forward, createProject, pushGitHubAuth, pushModelAuth, setPinned, grants, setGrant, inventory, workspaceAction, reloadAwake,
     stop() { stopped = true; clearInterval(modelAuthTimer); for (const c of streams.values()) c.abort(); },
   };
 }
@@ -279,6 +311,15 @@ export function registerRemoteRoutes(api, remote) {
     return c.json({ ok: true, pinned: !!body.pinned });
   });
   api.post("/remote-workspaces/:name/wake", c => { remote.wake(c.req.param("name")); return c.json({ ok: true }, 202); });
+  api.get("/remote-workspaces", async c => c.json(await remote.inventory()));
+  api.post("/remote-workspaces/reload", async c => c.json({ results: await remote.reloadAwake() }));
+  for (const action of ["restart", "reset", "reload"]) {
+    api.post(`/remote-workspaces/:name/${action}`, async c => {
+      const body = await c.req.json().catch(() => ({}));
+      const { status, body: out } = await remote.workspaceAction(c.req.param("name"), action, { force: c.req.query("force") === "1", body });
+      return c.json(out, status);
+    });
+  }
   api.get("/remote-workspaces/grants", async c => c.json({ grants: await remote.grants(c.req.query("repository") || "") }));
   api.put("/remote-workspaces/:name/grant", async c => {
     const body = await c.req.json().catch(() => ({}));
