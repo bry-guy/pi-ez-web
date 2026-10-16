@@ -318,7 +318,21 @@ test("kubernetes scale and pin are merge patches on the Deployment", async () =>
   await provider.upgrade("app");
   const up = seen.at(-1);
   assert.equal(up[3], "application/strategic-merge-patch+json", "merge by container name, keep env and probes");
-  assert.deepEqual(up[2].spec.template.spec.containers, [{ name: d.spec.template.spec.containers[0].name, image: "ghcr.io/bry-guy/pi-ez-web:latest" }]);
+  assert.deepEqual(up[2].spec.template.spec.containers, [{ name: d.spec.template.spec.containers[0].name, image: "ghcr.io/bry-guy/pi-ez-web:latest", resources: kubernetesConfig({}).resources }]);
+});
+
+test("workers get CPU/memory requests and a memory limit by default; empty env unsets", async () => {
+  const defaults = kubernetesConfig({});
+  assert.deepEqual(defaults.resources, { requests: { cpu: "250m", memory: "512Mi" }, limits: { memory: "4Gi" } });
+  const unset = kubernetesConfig({ WORKSPACE_MEMORY_LIMIT: "", WORKSPACE_CPU_REQUEST: "1", WORKSPACE_CPU_LIMIT: "2" });
+  assert.deepEqual(unset.resources, { requests: { cpu: "1", memory: "512Mi" }, limits: { cpu: "2" } });
+  const posts = [];
+  const kube = { request: async (method, p, body) => { if (method === "POST") posts.push(body); return { status: method === "POST" ? 201 : 404, body: {} }; } };
+  await kubernetesProvider({ kube, config: defaults }).create({ name: "app", repository: "o/app" });
+  const deployment = posts.find(b => b.kind === "Deployment");
+  assert.deepEqual(deployment.spec.template.spec.containers[0].resources, defaults.resources);
+  const kubeWithItems = { request: async () => ({ status: 200, body: { items: [{ metadata: { labels: { "pi-ez.dev/workspace": "app" }, annotations: {} }, spec: { replicas: 1, template: { spec: { containers: [{ image: "x", resources: defaults.resources }] } } }, status: {} }] } }) };
+  assert.deepEqual((await kubernetesProvider({ kube: kubeWithItems, config: defaults }).list())[0].resources, defaults.resources);
 });
 
 test("web keeps sleeping projects in the sidebar from a persisted snapshot", async () => {

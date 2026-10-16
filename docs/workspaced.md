@@ -25,6 +25,8 @@ The control plane. It creates, wakes, sleeps and deletes one worker per project 
 | `WORKSPACE_IMAGE_PULL_SECRET` | unset | kubernetes: pull Secret name |
 | `WORKSPACE_STORAGE` / `WORKSPACE_STORAGE_CLASS` | `20Gi` / cluster default | kubernetes: each worker's PVC |
 | `WORKSPACE_ENV_CONFIGMAP` | unset | kubernetes: ConfigMap loaded into every worker's environment, e.g. `PI_WEB_PRESTART_COMMAND` |
+| `WORKSPACE_CPU_REQUEST` / `WORKSPACE_MEMORY_REQUEST` | `250m` / `512Mi` | kubernetes: each worker's requests. Empty unsets |
+| `WORKSPACE_CPU_LIMIT` / `WORKSPACE_MEMORY_LIMIT` | unset / `4Gi` | kubernetes: each worker's limits. Empty unsets. Existing workers pick up changes when they next move to a new image |
 
 workspaced's own ServiceAccount needs, in each worker namespace: create/get/list/patch/delete on Deployments, Services and PVCs, plus create/update on the two auth Secrets `pi-ez-github-auth` and `pi-ez-model-auth`. It does not need to create ServiceAccounts, Roles or other Secrets.
 

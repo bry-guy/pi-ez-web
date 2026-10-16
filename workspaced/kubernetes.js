@@ -12,8 +12,11 @@ export function deploymentState(d) {
 
 // Workspaces as ws-<name> PVC + Service + Deployment. The cluster's labels and
 // annotations are the record of what exists; workspaced keeps no database.
+// Requests keep a worker's share of a shared node; the memory limit stops one
+// worker from taking the node. No CPU limit by default. An empty value unsets one.
 export function kubernetesConfig(env = process.env) {
   const namespace = env.WORKSPACED_NAMESPACE || "pi-ez-workspaces";
+  const set = values => Object.fromEntries(Object.entries(values).filter(([, v]) => v));
   return {
     namespace,
     image: env.WORKSPACE_IMAGE || "ghcr.io/bry-guy/pi-ez-web:latest",
@@ -21,6 +24,10 @@ export function kubernetesConfig(env = process.env) {
     storageClassName: env.WORKSPACE_STORAGE_CLASS || null,
     envConfigMap: env.WORKSPACE_ENV_CONFIGMAP || null,
     imagePullSecret: env.WORKSPACE_IMAGE_PULL_SECRET || null,
+    resources: {
+      requests: set({ cpu: env.WORKSPACE_CPU_REQUEST ?? "250m", memory: env.WORKSPACE_MEMORY_REQUEST ?? "512Mi" }),
+      limits: set({ cpu: env.WORKSPACE_CPU_LIMIT ?? null, memory: env.WORKSPACE_MEMORY_LIMIT ?? "4Gi" }),
+    },
   };
 }
 
@@ -103,6 +110,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
             state: deploymentState(d),
             pinned: d.metadata.annotations?.[PIN_ANNOTATION] === "true",
             containers: !!d.spec?.template?.spec?.runtimeClassName,
+            resources: d.spec?.template?.spec?.containers?.[0]?.resources ?? null,
             outdated: d.spec?.template?.spec?.containers?.[0]?.image !== config.image,
           });
         }
@@ -111,7 +119,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
     },
     scale: (name, replicas) => patch(name, { spec: { replicas } }),
     // Restarts an awake worker; a sleeping one just starts on it next wake.
-    upgrade: name => patch(name, { spec: { template: { spec: { containers: [{ name: "workspace", image: config.image }] } } } }, STRATEGIC_PATCH),
+    upgrade: name => patch(name, { spec: { template: { spec: { containers: [{ name: "workspace", image: config.image, resources: config.resources }] } } } }, STRATEGIC_PATCH),
     // The annotation is the record; workspaced keeps no database.
     setPinned: (name, pinned) => patch(name, { metadata: { annotations: { [PIN_ANNOTATION]: pinned ? "true" : null } } }),
     async create({ name, repository, grant, runtimeClassName = null }) {
@@ -124,7 +132,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
       await create(core("persistentvolumeclaims", ns), pvcManifest({ name, repository, storage: config.storage, storageClassName: config.storageClassName }));
       await create(core("services", ns), serviceManifest({ name, repository }));
       await create(apps(ns), deploymentManifest({ name, repository, image: config.image, grant, runtimeClassName,
-        envConfigMap: config.envConfigMap, imagePullSecret: config.imagePullSecret }));
+        envConfigMap: config.envConfigMap, imagePullSecret: config.imagePullSecret, resources: config.resources }));
       located.set(name, ns);
     },
     // Re-grant in place. The PVC can't move namespaces, so a grant with another
@@ -134,7 +142,7 @@ export function kubernetesProvider({ kube, config = kubernetesConfig(), grants =
       if (ns !== nsOf(grant)) throw httpError("that grant runs in another namespace; remove the project and add it again with it", 409, "grant_namespace_mismatch");
       const repository = deployment.metadata.annotations?.[REPO_ANNOTATION];
       const fresh = deploymentManifest({ name, repository, image: deployment.spec.template.spec.containers[0].image, grant,
-        runtimeClassName: deployment.spec.template.spec.runtimeClassName || null, envConfigMap: config.envConfigMap, imagePullSecret: config.imagePullSecret });
+        runtimeClassName: deployment.spec.template.spec.runtimeClassName || null, envConfigMap: config.envConfigMap, imagePullSecret: config.imagePullSecret, resources: config.resources });
       // Merge patch replaces arrays (containers, envFrom) wholesale and keeps replicas.
       await patch(name, { metadata: { annotations: { [GRANT_ANNOTATION]: grant.name } }, spec: { template: fresh.spec.template } });
     },

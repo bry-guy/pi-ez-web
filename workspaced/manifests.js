@@ -47,7 +47,7 @@ export function serviceManifest({ name, repository }) {
 
 // The grant (see grants.js) supplies the ServiceAccount, env Secrets, egress
 // label and runtime class; nothing else may give a worker credentials.
-export function deploymentManifest({ name, repository, image, grant = { name: "default", env: [] }, runtimeClassName = null, envConfigMap = null, imagePullSecret = null, dindImage = "docker:28-dind" }) {
+export function deploymentManifest({ name, repository, image, grant = { name: "default", env: [] }, runtimeClassName = null, envConfigMap = null, imagePullSecret = null, resources = {}, dindImage = "docker:28-dind" }) {
   if (!validName(name)) throw new Error("invalid workspace name");
   runtimeClassName = grant.runtimeClass || runtimeClassName;
   const serviceAccountName = grant.serviceAccount || null;
@@ -65,7 +65,7 @@ export function deploymentManifest({ name, repository, image, grant = { name: "d
     ...(grant.env || []).map(secret => ({ secretRef: { name: secret, optional: true } })),
   ];
   const containers = [{
-    name: "workspace", image, env, ...(envFrom.length ? { envFrom } : {}),
+    name: "workspace", image, env, resources, ...(envFrom.length ? { envFrom } : {}),
     ports: [{ name: "http", containerPort: WORKSPACE_PORT }],
     readinessProbe: { httpGet: { path: "/api/health", port: WORKSPACE_PORT }, periodSeconds: 1 },
     volumeMounts: [{ name: "data", mountPath: DATA }, { name: "github", mountPath: GITHUB_DIR, readOnly: true }, { name: "model", mountPath: MODEL_DIR, readOnly: true }],
