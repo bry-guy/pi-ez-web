@@ -64,7 +64,8 @@ jobs:
           tag="sha-${source_sha}"
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$tag" >> "$GITHUB_OUTPUT"
+          # The package keeps its pre-rename name; renaming it would mean a new GHCR package.
+          echo "image=ghcr.io/${{ github.repository_owner }}/pi-ez-web:$tag" >> "$GITHUB_OUTPUT"
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
           echo "Building $source_ref at $source_sha as $tag"
 
