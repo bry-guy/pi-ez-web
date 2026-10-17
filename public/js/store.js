@@ -101,6 +101,7 @@ export const store = {
     models: [],              // registry-backed { id, provider, label }
     error: null,             // transient composer/action error
     commandNotice: null,     // last web-adapted Pi slash-command result
+    toasts: [],              // short results of async actions, newest last
     extensionUi: null,
     extensionStatuses: {},
     fatalError: null,        // unrecoverable wire-contract error
@@ -313,3 +314,10 @@ export const store = {
     return this.state.view === "chat" && !this.state.chatId && !!this.state.sessionId;
   },
 };
+
+// Short, non-blocking result of an async action; dismisses itself.
+export function toast(message, tone = "info") {
+  const id = Math.random().toString(36).slice(2);
+  store.set({ toasts: [...store.state.toasts, { id, message, tone }].slice(-3) });
+  setTimeout(() => store.set({ toasts: store.state.toasts.filter(item => item.id !== id) }), 3500);
+}

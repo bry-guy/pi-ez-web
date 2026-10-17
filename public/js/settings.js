@@ -478,6 +478,7 @@ class PiSettings extends HTMLElement {
   providersPage() {
     const providers = store.state.providers || [];
     return `<section class="settings-section">
+        <p class="settings-intro">Model providers Pi can use. Sign in with OAuth or add an API key; signing out removes that login from this server only.</p>
         <div class="provider-list">${providers.map(provider => this.providerCard(provider)).join("") || `<div class="modal-empty">No provider status available.</div>`}</div>
       </section>
       ${this.authFlowCard()}`;
@@ -676,8 +677,19 @@ class PiSettings extends HTMLElement {
       </section>`;
   }
   diagnosticsPage() {
+    const s = store.state;
+    const runtime = s.piConfiguration?.runtime || {};
+    const facts = [
+      ["Build", s.buildId || "unknown", "The running server build. Reload the page after an update."],
+      ["Mode", s.mode || "unknown", "mock serves sample data without Pi or Git; real runs Pi sessions and Git."],
+      ["Pi extensions", `${(runtime.extensions || []).length} loaded`, "Extensions Pi loaded from its profile and local paths."],
+      ["Pi skills", `${(runtime.skills || []).length} loaded`, "Skills agents in this server can use."],
+      ["Pi load errors", `${(runtime.errors || []).length}`, "Problems Pi reported while loading. Fix them under Pi."],
+    ];
     return `<section class="settings-section">
-        <div class="settings-card settings-card-spaced"><div class="settings-row"><div class="sr-main"><div class="sr-title">Server logs</div><div class="sr-sub">Recent operations and server output.</div></div><button class="settings-action" data-act="open-logs">Open logs</button></div></div>
+        <p class="settings-intro">What this server is running and what Pi loaded. Share the build and any load errors when reporting a problem.</p>
+        <div class="settings-card settings-card-spaced">${facts.map(([title, value, sub]) => `<div class="settings-row"><div class="sr-main"><div class="sr-title">${esc(title)}</div><div class="sr-sub">${esc(sub)}</div></div><span class="settings-mono">${esc(value)}</span></div>`).join("")}</div>
+        <div class="settings-card settings-card-spaced"><div class="settings-row"><div class="sr-main"><div class="sr-title">Server logs</div><div class="sr-sub">Recent operations and server output, newest first. Use them to see why a hook, push or merge failed.</div></div><button class="settings-action" data-act="open-logs">Open logs</button></div></div>
       </section>`;
   }
   render() {

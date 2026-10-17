@@ -1,6 +1,6 @@
 import { api, refreshState } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
-import { setHTML, store } from "./store.js";
+import { setHTML, store, toast } from "./store.js";
 import { esc, selectSession } from "./shell.js";
 import { gitErrorMessage, runningPickerOperation, pickerError, launchSetup, pickerOperationFeed, featureBranchForName } from "./panel-utils.js";
 
@@ -140,6 +140,7 @@ class PiSessionPicker extends HTMLElement {
       result = await api.fetchProject(project.id, operation.id);
       await refreshState();
       completeOperation(operation, result);
+      toast("Fetched Git branches.");
     } catch (err) {
       completeOperation(operation, result || {}, err);
       pickerError(`Could not fetch branches: ${gitErrorMessage(err)}`, picker);
@@ -330,6 +331,7 @@ class PiSessionPicker extends HTMLElement {
     try {
       result = await api.pullBranch(id);
       completeOperation(operation, result);
+      toast("Pulled the latest commits.");
       void refreshState().catch(err => store.setError(`Could not refresh branch state: ${err.message || err}`));
     } catch (err) {
       completeOperation(operation, result || {}, err);
@@ -365,6 +367,7 @@ class PiSessionPicker extends HTMLElement {
     try {
       result = await api.hook(id, name, operation.id);
       completeOperation(operation, result);
+      toast(`${title} finished.`);
       void refreshState().catch(err => pickerError(`Could not refresh hook state: ${err.message || err}`, picker));
     } catch (err) {
       completeOperation(operation, result || {}, err);

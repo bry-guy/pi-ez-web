@@ -357,9 +357,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.doesNotMatch(root.querySelector(".composer textarea").placeholder, /Another session/);
   assert.equal(root.querySelector("[data-id='sibling']").classList.contains("streaming"), true);
   assert.equal(root.querySelector("pi-header [data-act='settings']"), null);
-  root.querySelector("pi-sidebar [data-act='settings']").click();
+  assert.equal(root.querySelector("pi-sidebar .rail-foot").tagName, "BUTTON", "the whole sidebar footer row is the settings button");
+  root.querySelector("pi-sidebar .rail-foot").click();
   assert.equal(store.state.view, "settings");
   assert.ok(root.querySelector("pi-settings"));
+  assert.equal(root.querySelector("main.col").classList.contains("settings-open"), true);
+  assert.equal(root.querySelectorAll("pi-settings .settings-nav-head .settings-close").length, 1, "the list header has one back control");
+  store.set({ view: "chat" });
+  assert.equal(root.querySelector("main.col").classList.contains("settings-open"), false);
   store.set({ view: "chat" });
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.ok(root.querySelector(".session-picker"));
@@ -391,6 +396,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(dom.window.__fetchCalls, 1);
   assert.match(root.querySelector("[data-operation-hint='fetch']").textContent, /Fetched Git branches/);
+  assert.match(root.querySelector(".app-toast").textContent, /Fetched Git branches/, "an async result is announced as a toast");
   assert.equal(root.querySelector(".session-branch-actions [data-act='run-hook']"), null);
   const sessionButtons = root.querySelector(".session-picker-session-buttons");
   const checkButton = root.querySelector(".session-picker-actions [data-act='run-hook']");

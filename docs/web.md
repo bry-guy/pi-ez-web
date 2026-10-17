@@ -21,6 +21,12 @@ Everything else (default model, Pi profile and packages, repository source) is i
 
 ## Chat header
 
+The whole header of a conversation opens the session panel (below); its Git line and sync label keep their own taps. The header's left button toggles the sidebar (a panel glyph; a hamburger on a phone) and the right button toggles the file tree (a folder glyph). The sidebar's footer row is the settings button.
+
+Async results (fetch, pull, a hook finishing) are announced as a short toast at the bottom of the screen, and disappear after a few seconds.
+
+Visual tokens live at the top of `public/app.css`: radius (`--radius-sm` … `--radius-pill`), space (`--space-1` … `--space-6`), type (`--text-xs` … `--text-xl`) and one motion duration (`--duration`, 150 ms). New components use them rather than literal values. Buttons: `.btn-primary` (one per view), `.btn-secondary`, `.btn-caution` (destructive; always confirms), `.btn-ghost`.
+
 The header's second line shows the project's Git context (branch · commit · clean, dirty or unknown, with ↑ahead and ↓behind) and, on the same line, the conversation's sync state as one label, `<state>: <message>`: `Synced: up to date`, `In use: <device>`, `Sync error: <reason>`, or `Sync: <status>` when it is not synchronized. Tap the label, or hover it, for the full detail. On a phone the line stays one line and ends in an ellipsis.
 
 ## Files
@@ -39,7 +45,7 @@ Starting a new session still uses the same panel without the Git and History sec
 
 ## Settings
 
-**Settings** lists its categories on the left (on a phone, first): Providers, Pi, Workers, Sync, Repositories, Defaults, Appearance, Diagnostics. Each category has its own address (`#settings/workers`, `#settings/pi`, …), so reloading or using Back returns to it. `<` returns to the chat, and on a phone `<` on a category returns to the list.
+**Settings** lists its categories on the left (on a phone, first): Providers, Pi, Workers, Sync, Repositories, Defaults, Appearance, Diagnostics. Each category has its own address (`#settings/workers`, `#settings/pi`, …), so reloading or using Back returns to it. `<` returns to the chat, and on a phone `<` on a category returns to the list. Settings has one header: while it is open the chat header steps aside, so there is a single `<` and a single title. Providers and Diagnostics explain what each card shows; Diagnostics lists the build, the mode, what Pi loaded and any load errors, then the server logs.
 
 - **Pi**: the dotfiles profile, extra packages to load, and local extension paths (advanced), with what Pi loaded and any problems. **Save & reload** fetches the profile, installs missing packages, and reloads idle sessions. It is refused while a session is running; stop it first.
 - **Workers** (needs workspaced; otherwise the page says workers are not enabled): each worker's state (asleep, starting, awake, busy), keep-awake, last use, resource requests and limits, live usage (`n/a` when workspaced reports none), and its grant: name, service account, namespace, egress, runtime class, and environment variable names (never values). **Reload** re-reads one worker's profile and extensions; **Reload all awake workers** does every awake worker and lists each result. **Restart** starts a fresh pod and reruns startup; the disk is kept. **Reset** wipes the worker's disk and needs its name typed; add the project again afterwards. A busy or asleep worker refuses restart and reset, and the page says why. The page refreshes every 5 seconds while it is visible.
