@@ -1,3 +1,4 @@
+import { readHistory } from "../workspace-history.js";
 export function register(api, deps) {
   const { path, loadBindings, loadConfig, saveBindings, slug, worktreeRoot, sessionWorkspace, sessionsUsingWorkspaceAsync, findProjectByWorkspace, findProjectByWorkspaceAsync, returnSessionToMain, hub, ws, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, suggestedWorktreeBranch, hasSynchronizedSibling, bindSessionToContext, bindRehomedSession, primaryBranch, sync, guardedWorkspaceSessions, mutate, sup } = deps;
 
@@ -182,11 +183,21 @@ export function register(api, deps) {
     });
   });
 
+  // The workspace's own record of what ran here (hooks, git operations, fork and switch).
+  api.get("/sessions/:id/history", async c => {
+    const cwd = await sessionWorkspace(c.req.param("id"), sup);
+    if (!cwd) return err(c, 404, "no_workspace");
+    return c.json({ entries: readHistory(cwd) });
+  });
+
   api.post("/sessions/:id/pull", async c => {
     const id = c.req.param("id");
+    const reporter = createOperationReporter({ id: operationRequestId(c), sessionId: id, kind: "pull", title: "Pull branch" });
+    reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/pull` });
     const initialCwd = await sessionWorkspace(id, sup);
     const initialFound = initialCwd && await findProjectByWorkspaceAsync(initialCwd);
     if (!initialFound) return err(c, 404, "no_project_for_session");
+    reporter.bind(initialCwd);
     return withRepositoryAdmission(c, initialFound.project.repoPath, async identity => {
       return mutate(id, async () => {
     const cwd = await sessionWorkspace(id, sup);
@@ -198,9 +209,12 @@ export function register(api, deps) {
       const result = await ws.pullWorkspaceAsync(cwd);
       const branch = await ws.currentBranchAsync(cwd);
       hub.emit(id, "session_meta", { branch });
-      return c.json({ ok: true, branch, workspacePath: cwd, ...result });
+      const operation = reporter.finish({ status: "success", httpStatus: 200, message: "Pull completed." });
+      return c.json({ ok: true, branch, workspacePath: cwd, ...result, operation });
     } catch (e) {
-      if (e.code === "git_pull_failed") return err(c, 409, e.code, { detail: e.detail });
+      reporter.log({ type: "error", message: String(e.detail || e.message || e.code) });
+      const operation = reporter.finish({ status: "error", httpStatus: e.code === "git_pull_failed" ? 409 : 500, message: "Pull failed." });
+      if (e.code === "git_pull_failed") return err(c, 409, e.code, { detail: e.detail, operation });
       throw e;
     }
       });
@@ -226,6 +240,7 @@ export function register(api, deps) {
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: "push", title: "Push branch" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/push` });
     const initialCwd = await sessionWorkspace(id, sup);
+    reporter.bind(initialCwd);
     const initialFound = initialCwd && await findProjectByWorkspaceAsync(initialCwd);
     if (!initialFound) return err(c, 404, "no_project_for_session");
     return withRepositoryAdmission(c, initialFound.project.repoPath, async identity => {
@@ -270,6 +285,7 @@ export function register(api, deps) {
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: "merge", title: "Merge branch" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/merge-local` });
     const initialCwd = await sessionWorkspace(id, sup);
+    reporter.bind(initialCwd);
     const initialFound = initialCwd && await findProjectByWorkspaceAsync(initialCwd);
     if (!initialFound) {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The session is not attached to a project." });
