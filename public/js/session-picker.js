@@ -485,7 +485,11 @@ class PiSessionPicker extends HTMLElement {
     const body = existing
       ? `${sessionSection}${gitSection}${historySection}`
       : `${nameAndBranch}${newBranchFields}${gitSection}${syncedSection}${sessionsSection}${createSection}`;
+    // Re-rendering replaces the body; keep the reader's place (e.g. after expanding a history entry).
+    const scrolled = this.querySelector(".session-picker-body")?.scrollTop ?? 0;
     setHTML(this, `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}">${progress}${error}${body}${operationProgress}</div></section></div>`);
+    const scroller = this.querySelector(".session-picker-body");
+    if (scroller) scroller.scrollTop = scrolled;
     const feed = this.querySelector(".session-operation-feed");
     if (feed) feed.scrollTop = feed.scrollHeight;
     if (focusKey) {
