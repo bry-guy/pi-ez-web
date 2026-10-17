@@ -1,4 +1,4 @@
-# pi-web holds no Kubernetes credentials: projects run in pi-ez-workspaces
+# pi-web holds no Kubernetes credentials: projects run in pi-workspaced
 # workers, and releases run from the laptop or the infra worker.
 apiVersion: v1
 kind: ServiceAccount

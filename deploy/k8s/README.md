@@ -5,7 +5,7 @@ Argo CD syncs these directories from `main`:
 | Directory | Argo CD app | Serves |
 |---|---|---|
 | `web/` | `pi-ez-web` | `pi.bry-guy.net` |
-| `workspaced/` | `pi-workspaced` | workspace gateway in `pi-ez-workspaces` |
+| `workspaced/` | `pi-workspaced` | workspace gateway in `pi-workspaced` |
 | `preview/` | `pi-ez-web-preview` | `pi.preview.bry-guy.net` (UI only; Caddy sends `/api` to production) |
 
 Namespaces, storage, RBAC, network policy, and routing are platform-owned in `bry-guy/infra`.

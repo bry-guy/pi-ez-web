@@ -191,7 +191,7 @@ spec:
               value: "false"
             # Projects run in per-project workers via workspaced; chats stay here.
             - name: PI_WEB_WORKSPACED_URL
-              value: http://pi-ez-workspaced.pi-ez-workspaces.svc:3150
+              value: http://pi-workspaced.pi-workspaced.svc:3150
           ports:
             - name: http
               containerPort: 3141

@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: pi-ez-workspace-env
   labels:
-    app.kubernetes.io/name: pi-ez-workspaces
+    app.kubernetes.io/name: pi-workspaced
     app.kubernetes.io/part-of: selfhost
 data:
   # Repositories may add mise.pi-ez.toml for workspace-only tools (e.g. docker-cli).

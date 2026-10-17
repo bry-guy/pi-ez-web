@@ -68,20 +68,20 @@ test("workspaced requires its token", async () => {
 });
 
 test("kubernetes create is idempotent, applies the SA convention, and refuses name collisions", async () => {
-  const ns = "/api/v1/namespaces/pi-ez-workspaces";
+  const ns = "/api/v1/namespaces/pi-workspaced";
   const kube = fakeKube({ [`GET ${ns}/serviceaccounts/ws-srvivor`]: { status: 200, body: {} } });
   const app = createWorkspaced({ provider: kubernetesProvider({ kube, config: kubernetesConfig({}) }), token: TOKEN });
   assert.equal((await app.request("/v1/workspaces", json({ repository: "bry-guy/srvivor", containers: true }))).status, 201);
   assert.deepEqual(kube.calls.filter(c => c[0] === "POST").map(c => c[2]), ["PersistentVolumeClaim", "Service", "Deployment"]);
 
-  const taken = fakeKube({ "GET /apis/apps/v1/namespaces/pi-ez-workspaces/deployments/ws-srvivor": { status: 200, body: { metadata: { annotations: { "pi-ez.dev/repository": "other/srvivor" } } } } });
+  const taken = fakeKube({ "GET /apis/apps/v1/namespaces/pi-workspaced/deployments/ws-srvivor": { status: 200, body: { metadata: { annotations: { "pi-ez.dev/repository": "other/srvivor" } } } } });
   const app2 = createWorkspaced({ provider: kubernetesProvider({ kube: taken, config: kubernetesConfig({}) }), token: TOKEN });
   assert.equal((await app2.request("/v1/workspaces", json({ repository: "bry-guy/srvivor" }))).status, 409);
   assert.equal((await app.request("/v1/workspaces", json({ repository: "a/b", name: "../etc" }))).status, 400);
 });
 
 test("kubernetes GitHub auth goes to the shared Secret", async () => {
-  const kube = fakeKube({ "PUT /api/v1/namespaces/pi-ez-workspaces/secrets/pi-ez-github-auth": { status: 200, body: {} } });
+  const kube = fakeKube({ "PUT /api/v1/namespaces/pi-workspaced/secrets/pi-ez-github-auth": { status: 200, body: {} } });
   const app = createWorkspaced({ provider: kubernetesProvider({ kube, config: kubernetesConfig({}) }), token: TOKEN });
   assert.equal((await app.request("/v1/github-auth", { ...json({ accessToken: "t" }), method: "PUT" })).status, 200);
   assert.ok(kube.calls.some(([m, p]) => m === "PUT" && p.endsWith("/pi-ez-github-auth")));
@@ -162,7 +162,7 @@ test("model logins go to a read-only Secret that workers link auth.json to", asy
   const env = Object.fromEntries(spec.containers[0].env.map(e => [e.name, e.value]));
   assert.equal(env.PI_WEB_MODEL_AUTH_FILE, "/run/secrets/pi-ez-model/auth.json");
 
-  const kube = fakeKube({ "PUT /api/v1/namespaces/pi-ez-workspaces/secrets/pi-ez-model-auth": { status: 200, body: {} } });
+  const kube = fakeKube({ "PUT /api/v1/namespaces/pi-workspaced/secrets/pi-ez-model-auth": { status: 200, body: {} } });
   const app = createWorkspaced({ provider: kubernetesProvider({ kube, config: kubernetesConfig({}) }), token: TOKEN });
   const put = body => app.request("/v1/model-auth", { method: "PUT", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body });
   assert.equal((await put("[]")).status, 400);
@@ -500,7 +500,7 @@ test("usage: quantities parse, metrics-server pods sum per worker, and missing m
     { metadata: { labels: { "pi-ez.dev/workspace": "app" } }, containers: [{ usage: { cpu: "120m", memory: "100Mi" } }, { usage: { cpu: "30m", memory: "1Mi" } }] },
     { metadata: { labels: {} }, containers: [{ usage: { cpu: "9m", memory: "9Mi" } }] },
   ] } };
-  const kube = { request: async (method, p) => { calls++; assert.match(p, /^\/apis\/metrics\.k8s\.io\/v1beta1\/namespaces\/pi-ez-workspaces\/pods\?labelSelector=/); return metrics; } };
+  const kube = { request: async (method, p) => { calls++; assert.match(p, /^\/apis\/metrics\.k8s\.io\/v1beta1\/namespaces\/pi-workspaced\/pods\?labelSelector=/); return metrics; } };
   const provider = kubernetesProvider({ kube, config: kubernetesConfig({}) });
   assert.deepEqual(await provider.usage(), { app: { cpuMillicores: 150, memoryBytes: 101 * 2 ** 20 } });
   assert.deepEqual(await provider.usage(), { app: { cpuMillicores: 150, memoryBytes: 101 * 2 ** 20 } });
