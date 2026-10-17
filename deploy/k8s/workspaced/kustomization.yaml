@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pi-ez-workspaces
+# RBAC, limits, and network policy are platform-owned in bry-guy/infra.
+resources:
+  - workspace-env.yaml
+  - workspaced.yaml
+# Grant shapes for project workers (workspaced/grants.js). The hash
+# suffix restarts workspaced when they change.
+configMapGenerator:
+  - name: pi-ez-workspaced-grants
+    files:
+      - grants.json
+images:
+  - name: ghcr.io/bry-guy/pi-ez-web
+    digest: sha256:3638e15f961f8477df2d156e34598cfc9234bedb0e955bee2545934105974a0b
+# Workers run the same image as this gateway: copy the images-pinned reference.
+replacements:
+  - source:
+      kind: Deployment
+      name: pi-ez-workspaced
+      fieldPath: spec.template.spec.containers.[name=gateway].image
+    targets:
+      - select:
+          kind: Deployment
+          name: pi-ez-workspaced
+        fieldPaths:
+          - spec.template.spec.containers.[name=gateway].env.[name=WORKSPACE_IMAGE].value

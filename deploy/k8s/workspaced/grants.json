@@ -1,0 +1,17 @@
+{
+  "default": {
+    "anyProject": true,
+    "description": "No secrets, no cluster access; internet, DNS and pi-sync only."
+  },
+  "operator": {
+    "repos": [
+      "bry-guy/infra"
+    ],
+    "serviceAccount": "infra-operator",
+    "env": [
+      "operator-env"
+    ],
+    "egress": "open",
+    "description": "Infra only: cluster-admin, ghcr + platform secrets via operator-env (mise run selfhost:platform:pi-ez-operator:env:apply), open egress."
+  }
+}

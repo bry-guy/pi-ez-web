@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-ez-web
+  labels:
+    app.kubernetes.io/name: pi-ez-web
+    app.kubernetes.io/part-of: selfhost
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pi-ez-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pi-ez-web
+        app.kubernetes.io/part-of: selfhost
+    spec:
+      # UI only: Caddy sends /api to production, so preview shows production data
+      # and has no state, credentials, or Kubernetes API access of its own.
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pi-ez-web
+          image: ghcr.io/bry-guy/pi-ez-web:preview-placeholder
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: PORT
+              value: "3141"
+            - name: PI_WEB_UI_ONLY
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 3141
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ui-health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ui-health
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
