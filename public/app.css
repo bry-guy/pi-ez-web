@@ -691,21 +691,23 @@ aside.files {
 .file-error { padding: 9px 12px; color: var(--red); font-family: var(--mono); font-size: 11px; }
 .file-row .fcaret { flex: 0 0 11px; color: var(--faint); font-size: 9px; }
 .file-row .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-viewer-scrim {
-  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
-  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
-  background: var(--scrim);
+.shell.file-open main.col > pi-header { display: none; }
+/* The file pane covers the chat (kept laid out, so its scroll survives); one dark surface in both themes. */
+main.col { position: relative; }
+.screen.covered { visibility: hidden; }
+.screen[data-screen="file"]:not(.hidden) { position: absolute; inset: 0; z-index: 5; }
+pi-file-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.file-screen {
+  --code-bg: oklch(0.17 0.015 258); --bg: var(--code-bg); --surface: var(--code-bg);
+  --text: #c9d1d9; --muted: #aab3bf; --faint: #8b949e;
+  --add-bg: oklch(0.7 0.14 150 / 0.2); --del-bg: oklch(0.65 0.18 25 / 0.2);
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--code-bg); color: var(--text);
 }
-aside.files.file-viewer {
-  width: min(1100px, calc(100vw - 48px)); height: min(88vh, 900px); max-height: calc(100vh - 48px);
-  height: min(88dvh, 900px); max-height: calc(100dvh - 48px);
-  min-width: 0; flex: 0 1 auto; overflow: hidden; border-radius: 12px;
-  background: var(--bg); box-shadow: var(--elevation-2);
-}
-.file-viewer-head { gap: 7px; }
+.file-screen-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 10px 8px; border-bottom: 1px solid oklch(1 0 0 / 0.08); }
 .file-title-wrap { flex: 1; min-width: 0; }
 .file-path { overflow: hidden; color: var(--text); font: 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.file-view-scroll { flex: 1; min-width: 0; overflow: auto; padding: 10px 12px 18px; }
+.file-view-scroll { flex: 1; min-width: 0; overflow: auto; padding-bottom: 18px; }
 .file-target-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 10px; color: var(--faint); font: 10.5px var(--mono); }
 .file-tree-target {
   position: sticky; top: 0; z-index: 1; flex: 0 0 auto; justify-content: space-between;
@@ -713,22 +715,29 @@ aside.files.file-viewer {
 }
 .file-target { min-width: 88px; padding: 5px 7px; border-radius: 6px; background: var(--surface-2); color: var(--text); font: 11px var(--mono); outline: none; }
 .file-target:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
-.file-section { margin-top: 10px; overflow: hidden; border-radius: 9px; background: var(--surface); box-shadow: var(--elevation-1); }
-.file-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 11px; color: var(--text); font: 500 11px var(--mono); }
+.file-section { overflow: hidden; background: var(--code-bg); }
+.file-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 14px; color: var(--text); font: 500 11px var(--mono); border-bottom: 1px solid oklch(1 0 0 / 0.06); }
 .file-section-head span:last-child { color: var(--faint); font-size: 10px; font-weight: 400; }
-.file-code { margin: 0; max-height: 55vh; overflow: auto; padding: 13px 14px; background: oklch(0.17 0.015 258); color: #c9d1d9; tab-size: 2; white-space: pre; }
-aside.files.file-viewer .file-code, aside.files.file-viewer .file-diff-body { max-height: none; }
+.file-code { margin: 0; overflow: auto; padding: 13px 14px; background: var(--code-bg); color: #c9d1d9; tab-size: 2; white-space: pre; }
 .file-code code { font: 12px/1.65 var(--mono); }
-.file-code .hljs-comment, .file-code .hljs-quote { color: #626a73; font-style: italic; }
-.file-code .hljs-keyword, .file-code .hljs-selector-tag, .file-code .hljs-literal, .file-code .hljs-type { color: #80a8ff; }
-.file-code .hljs-string, .file-code .hljs-attr, .file-code .hljs-symbol { color: #8cc85f; }
-.file-code .hljs-number, .file-code .hljs-built_in { color: #e3c78a; }
-.file-code .hljs-title, .file-code .hljs-section, .file-code .hljs-function { color: #79dac8; }
-.file-code .hljs-variable, .file-code .hljs-template-variable { color: #cf87e8; }
-.file-code .hljs-name, .file-code .hljs-tag { color: #ff8f8f; }
-.file-code .hljs-meta { color: #b2ceee; }
+/* Every token colour clears 4.5:1 on --code-bg; comments stay muted but readable. */
+.file-code .hljs-comment, .file-code .hljs-quote, .file-code .hljs-doctag { color: #8b949e; font-style: italic; }
+.file-code .hljs-keyword, .file-code .hljs-selector-tag, .file-code .hljs-literal { color: #ff7b72; }
+.file-code .hljs-type, .file-code .hljs-built_in, .file-code .hljs-title.class_ { color: #79c0ff; }
+.file-code .hljs-string, .file-code .hljs-symbol, .file-code .hljs-bullet, .file-code .hljs-regexp { color: #a5d6a7; }
+.file-code .hljs-attr, .file-code .hljs-attribute, .file-code .hljs-property, .file-code .hljs-selector-attr, .file-code .hljs-selector-id { color: #ffa657; }
+.file-code .hljs-number { color: #e3b341; }
+.file-code .hljs-title, .file-code .hljs-title.function_, .file-code .hljs-section, .file-code .hljs-function { color: #d2a8ff; }
+.file-code .hljs-variable, .file-code .hljs-template-variable, .file-code .hljs-params { color: #ff9bce; }
+.file-code .hljs-meta, .file-code .hljs-meta-keyword, .file-code .hljs-meta-string { color: #7ee6dd; }
+.file-code .hljs-name, .file-code .hljs-tag { color: #7ee787; }
+.file-code .hljs-addition { color: #7ee787; background: oklch(0.7 0.14 150 / 0.12); }
+.file-code .hljs-deletion { color: #ffa198; background: oklch(0.65 0.18 25 / 0.12); }
+.file-code .hljs-link { color: #79c0ff; text-decoration: underline; }
+.file-code .hljs-strong { font-weight: 700; }
+.file-code .hljs-emphasis { font-style: italic; }
 .file-diff-meta { padding: 0 11px 8px; color: var(--faint); font: 10px var(--mono); }
-.file-diff-body { max-height: 55vh; overflow: auto; min-width: 100%; }
+.file-diff-body { overflow: auto; min-width: 100%; }
 .file-diff-body .diff-line { min-width: 100%; width: max-content; padding-right: 24px; }
 .file-empty { padding: 22px 12px; color: var(--muted); font: 12px/1.5 var(--mono); text-align: center; }
 
@@ -921,17 +930,9 @@ aside.files.file-viewer .file-code, aside.files.file-viewer .file-diff-body { ma
     position: absolute; inset: var(--header-height, 54px) 0 0 auto; width: 302px; max-width: 86%; z-index: 12;
     box-shadow: var(--shadow);
   }
-  .file-viewer-scrim { align-items: stretch; width: 100vw; height: 100vh; height: 100dvh; padding: 0; }
-  aside.files.file-viewer {
-    position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: none; max-height: none;
-    min-width: 0; border-radius: 0;
-    height: 100dvh;
-  }
-  aside.files.file-viewer .files-head {
-    padding-top: max(12px, env(safe-area-inset-top));
-    padding-right: max(12px, env(safe-area-inset-right));
-    padding-left: max(12px, env(safe-area-inset-left));
-  }
+  /* A file is full screen: the tree is hidden behind it and the chat header is replaced by the file's own "<" bar. */
+  .shell.file-open aside.files { display: none; }
+  .file-screen-head { padding-top: max(10px, env(safe-area-inset-top)); padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
   .file-view-scroll { padding-bottom: max(18px, env(safe-area-inset-bottom)); }
 }
 .hidden { display: none !important; }
@@ -1224,11 +1225,11 @@ header.bar { background: color-mix(in oklch, var(--bg) 82%, transparent); backdr
 .segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--elevation-1); }
 
 /* modals */
-.scrim, .confirm-scrim, .session-picker-scrim, .logs-scrim, .extension-ui-scrim, .file-viewer-scrim, .drawer-scrim {
+.scrim, .confirm-scrim, .session-picker-scrim, .logs-scrim, .extension-ui-scrim, .drawer-scrim {
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: piFade .18s ease both;
 }
 @keyframes piFade { from { opacity: 0; } to { opacity: 1; } }
-.modal, .confirm-modal, .session-picker, .logs-modal, .extension-ui-modal, .reload-card, aside.files.file-viewer {
+.modal, .confirm-modal, .session-picker, .logs-modal, .extension-ui-modal, .reload-card {
   border-radius: 20px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline), var(--elevation-2);
   animation: piPop .22s var(--ease) both;
 }

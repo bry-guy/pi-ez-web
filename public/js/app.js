@@ -17,6 +17,7 @@ class PiApp extends HTMLElement {
             <div class="scrollable"><div class="col-pad"><pi-thread></pi-thread></div></div>
             <pi-composer></pi-composer>
           </div>
+          <div class="screen hidden" data-screen="file"><pi-file-view></pi-file-view></div>
           <div class="screen" data-screen="settings"><div class="scrollable"><pi-settings></pi-settings></div></div>
         </main>
         <pi-files></pi-files>
@@ -159,7 +160,7 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
-    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.extensionUi || store.state.filePath);
+    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.extensionUi);
     document.body?.classList.toggle("modal-open", modalOpen);
     const previewBanner = this.querySelector("[data-preview-banner]");
     const preview = store.state.uiConfig?.preview === true;
@@ -169,7 +170,14 @@ class PiApp extends HTMLElement {
     }
     const bar = this.querySelector("pi-header .bar");
     if (bar) this.style.setProperty("--header-height", `${bar.getBoundingClientRect().height}px`);
-    for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
+    // An open file covers the chat pane instead of replacing it, so the chat keeps its layout and scroll position.
+    const screen = store.state.filePath && v === "chat" ? "file" : v;
+    for (const el of this.querySelectorAll("[data-screen]")) {
+      const name = el.dataset.screen;
+      el.classList.toggle("hidden", name !== screen && !(screen === "file" && name === "chat"));
+      el.classList.toggle("covered", screen === "file" && name === "chat");
+    }
+    this.querySelector(".shell").classList.toggle("file-open", screen === "file");
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
     const connection = this.querySelector("[data-connection-status]");
     const offline = store.state.offline;

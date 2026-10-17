@@ -23,6 +23,10 @@ Everything else (default model, Pi profile and packages, repository source) is i
 
 The header's second line shows the project's Git context (branch · commit · clean, dirty or unknown, with ↑ahead and ↓behind) and, on the same line, the conversation's sync state as one label, `<state>: <message>`: `Synced: up to date`, `In use: <device>`, `Sync error: <reason>`, or `Sync: <status>` when it is not synchronized. Tap the label, or hover it, for the full detail. On a phone the line stays one line and ends in an ellipsis.
 
+## Files
+
+**Files** (the header's right chevron) lists the project's tree beside the chat; folders come first and dot-folders (`.github`, `.config`) after them. Tapping a file replaces the chat pane with the file, with a dark, highlighted view and a `<` that returns to the chat at the same scroll position; browser Back does the same (the address becomes `#file/<path>`). On a phone the file fills the screen and the tree is hidden until you return. Highlighting is server-side (highlight.js, including Dockerfiles). Escape also returns to the chat.
+
 ## Settings
 
 **Settings** lists its categories on the left (on a phone, first): Providers, Pi, Workers, Sync, Repositories, Defaults, Appearance, Diagnostics. Each category has its own address (`#settings/workers`, `#settings/pi`, …), so reloading or using Back returns to it. `<` returns to the chat, and on a phone `<` on a category returns to the list.
