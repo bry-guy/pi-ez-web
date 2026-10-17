@@ -149,6 +149,6 @@ test("deploy job pins the built digest and gates production on main", () => {
   assert.match(deployJob, /needs: publish/);
   assert.match(deployJob, /DIGEST: \$\{\{ needs\.publish\.outputs\.digest \}\}/);
   assert.match(deployJob, /cancel-in-progress: false/);
-  assert.match(deployJob, /run: scripts\/deploy\.sh preview/);
-  assert.match(deployJob, /if: github\.ref == 'refs\/heads\/main'\n        run: scripts\/deploy\.sh production/);
+  assert.match(deployJob, /run: \.\.\/src\/scripts\/deploy\.sh preview/);
+  assert.match(deployJob, /if: github\.ref == 'refs\/heads\/main'\n        working-directory: main\n        run: \.\.\/src\/scripts\/deploy\.sh production/);
 });
