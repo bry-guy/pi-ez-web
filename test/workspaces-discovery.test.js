@@ -109,7 +109,8 @@ test("fileTree sorts directories first and keeps full relative paths", () => {
   fs.writeFileSync(path.join(fixture.repo, ".config", "deep", "f.txt"), "");
   fs.writeFileSync(path.join(fixture.repo, "zdir", "f.txt"), "");
   const tree = ws.fileTree(fixture.repo);
-  assert.equal(tree[0].n, ".config");
+  assert.equal(tree[0].n, "zdir", "dot-folders sort after ordinary folders");
+  assert.equal(tree[1].n, ".config");
   assert.ok(tree.some(node => node.n === "a.txt" && !node.c));
   assert.ok(tree.some(node => node.p === ".config" && node.c?.some(child => child.p === ".config/deep")));
   assert.equal(tree.some(node => node.n === ".git"), false);

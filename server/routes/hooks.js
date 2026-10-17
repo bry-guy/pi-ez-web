@@ -15,6 +15,7 @@ export function register(api, deps) {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: "No workspace is bound to this session." });
       return err(c, 404, "no_workspace", { operation });
     }
+    reporter.bind(cwd);
     const found = findProjectByWorkspace(cwd);
     if (!found) {
       const operation = reporter.finish({ status: "error", httpStatus: 404, message: "The session is not bound to a project." });

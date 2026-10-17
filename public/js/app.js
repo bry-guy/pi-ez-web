@@ -1,6 +1,6 @@
 import { api, refreshState } from "./api.js";
-import { store } from "./store.js";
-import { mobile } from "./shell.js";
+import { setHTML, store } from "./store.js";
+import { esc, mobile } from "./shell.js";
 
 
 /* ---------------- app root ---------------- */
@@ -17,11 +17,13 @@ class PiApp extends HTMLElement {
             <div class="scrollable"><div class="col-pad"><pi-thread></pi-thread></div></div>
             <pi-composer></pi-composer>
           </div>
+          <div class="screen hidden" data-screen="file"><pi-file-view></pi-file-view></div>
           <div class="screen" data-screen="settings"><div class="scrollable"><pi-settings></pi-settings></div></div>
         </main>
         <pi-files></pi-files>
         <div class="drawer-scrim hidden"></div>
         <div class="connection-status hidden" data-connection-status></div>
+        <div class="app-toasts" data-toasts aria-live="polite"></div>
         <div class="update-prompt hidden" data-update-prompt>
           <span>New pi update ready.</span><button class="update-btn" data-act="update">Reload</button>
         </div>
@@ -159,7 +161,7 @@ class PiApp extends HTMLElement {
 
   sync() {
     const v = store.state.view;
-    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.extensionUi || store.state.filePath);
+    const modalOpen = !!(store.state.repoPickerOpen || store.state.sessionPicker || store.state.logsOpen || store.state.confirm || store.state.extensionUi);
     document.body?.classList.toggle("modal-open", modalOpen);
     const previewBanner = this.querySelector("[data-preview-banner]");
     const preview = store.state.uiConfig?.preview === true;
@@ -169,7 +171,17 @@ class PiApp extends HTMLElement {
     }
     const bar = this.querySelector("pi-header .bar");
     if (bar) this.style.setProperty("--header-height", `${bar.getBoundingClientRect().height}px`);
-    for (const el of this.querySelectorAll("[data-screen]")) el.classList.toggle("hidden", el.dataset.screen !== v);
+    // An open file covers the chat pane instead of replacing it, so the chat keeps its layout and scroll position.
+    const screen = store.state.filePath && v === "chat" ? "file" : v;
+    // Settings has the one header, so the chat header steps aside while it is open.
+    this.querySelector("main.col").classList.toggle("settings-open", v === "settings");
+    for (const el of this.querySelectorAll("[data-screen]")) {
+      const name = el.dataset.screen;
+      el.classList.toggle("hidden", name !== screen && !(screen === "file" && name === "chat"));
+      el.classList.toggle("covered", screen === "file" && name === "chat");
+    }
+    this.querySelector(".shell").classList.toggle("file-open", screen === "file");
+    setHTML(this.querySelector("[data-toasts]"), store.state.toasts.map(item => `<div class="app-toast ${esc(item.tone)}" role="status">${esc(item.message)}</div>`).join(""));
     this.scrim.classList.toggle("hidden", !(mobile() && store.state.drawerOpen));
     const connection = this.querySelector("[data-connection-status]");
     const offline = store.state.offline;
