@@ -86,7 +86,8 @@ const turnKey = turn => turn.user.id ?? turn.user.pendingId ?? "";
 function turnStats(turn) {
   const start = Number(turn.user.at) || 0;
   const end = Math.max(start, ...turn.records.map(record => Number(record.at) || 0));
-  return { steps: turn.records.filter(record => record.role === "tool").length, duration: start && end > start ? end - start : 0 };
+  const duration = start && end > start ? end - start : 0;
+  return { steps: turn.records.filter(record => record.role === "tool").length, duration: duration >= 1000 ? duration : 0 };
 }
 
 function syncFailureText(error) {
@@ -300,12 +301,16 @@ class PiThread extends HTMLElement {
     const openTurn = stepsId ? turnsOf(t.records).find(turn => turnKey(turn) === stepsId) : null;
     if (openTurn) {
       const entering = !this.inSteps;
-      if (entering) { this.chatScrollTop = this.scroller?.scrollTop ?? 0; this.inSteps = true; }
+      if (entering) { this.chatScrollTop = this.scroller?.scrollTop ?? 0; this.chatKey = activeKey; this.inSteps = true; }
       setHTML(this, this.renderSteps(openTurn));
       if (entering && this.scroller) this.scroller.scrollTop = 0;
       return;
     }
-    if (this.inSteps) { this.inSteps = false; this.pendingScroll = this.chatScrollTop; }
+    if (this.inSteps) {
+      // Return to the chat's old position only when it is the same conversation.
+      this.inSteps = false;
+      this.pendingScroll = this.chatKey === activeKey ? this.chatScrollTop : undefined;
+    }
     const visibleRecords = this.visibleRecords(t.records);
     const busy = t.streaming ? this.renderBusy(t.records, activeKey) : "";
     const activity = this.renderActivity(t.records);
