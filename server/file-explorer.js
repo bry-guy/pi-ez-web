@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import hljs from "highlight.js/lib/common";
-import { defaultBranch, fileTree } from "./workspaces.js";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import { compareTreeNodes, defaultBranch, fileTree } from "./workspaces.js";
+
+hljs.registerLanguage("dockerfile", dockerfile);
 
 const MAX_FILE_BYTES = 1 * 1024 * 1024;
 const MAX_HIGHLIGHT_BYTES = 512 * 1024;
@@ -67,9 +70,8 @@ function resolveFile(workspace, rawPath) {
 
 function languageFor(relative) {
   const name = path.posix.basename(relative).toLowerCase();
-  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
   const extension = path.posix.extname(name).slice(1);
-  const language = LANGUAGE_BY_EXTENSION[extension];
+  const language = name === "dockerfile" || name.startsWith("dockerfile.") ? "dockerfile" : LANGUAGE_BY_EXTENSION[extension];
   return language && hljs.getLanguage(language) ? language : null;
 }
 
@@ -172,7 +174,7 @@ function sortStatusTree(nodes) {
     const kinds = new Set(node.c.map(child => child.s));
     node.s = kinds.size === 1 ? [...kinds][0] : "modified";
   }
-  return nodes.sort((a, b) => (!!b.c - !!a.c) || a.n.localeCompare(b.n));
+  return nodes.sort(compareTreeNodes);
 }
 
 function statusTree(statuses, tree = []) {

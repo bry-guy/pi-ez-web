@@ -51,3 +51,22 @@ test("diff targets compare against the upstream or the merge-base with the prima
   assert.ok(view.diff.lines.some(line => line.sign === "+" && line.text === "two"));
   assert.throws(() => readFileTree({ workspace: repo, repoPath: repo, target: "none" }), error => error?.code === "invalid_diff_target");
 });
+
+test("Dockerfiles are highlighted and dot-folders sort after ordinary folders", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-highlight-"));
+  git(repo, "init", "-q", "-b", "main");
+  write(repo, "Dockerfile", "FROM node:22\nRUN npm ci\n");
+  write(repo, "app.js", "const a = 1;\n");
+  fs.mkdirSync(path.join(repo, ".github"));
+  write(repo, ".github/ci.yml", "a: 1\n");
+  fs.mkdirSync(path.join(repo, "src"));
+  write(repo, "src/index.js", "x\n");
+  commit(repo, "init");
+
+  const view = readFileView({ workspace: repo, repoPath: repo, path: "Dockerfile" });
+  assert.equal(view.language, "dockerfile");
+  assert.match(view.highlighted, /hljs-keyword/, "dockerfile keywords are tokenised");
+
+  const names = readFileTree({ workspace: repo, repoPath: repo }).tree.map(node => node.n);
+  assert.deepEqual(names, ["src", ".github", "app.js", "Dockerfile"]);
+});
