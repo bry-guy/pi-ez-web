@@ -168,6 +168,7 @@ export class MockSupervisor {
       parentSessionId: null, created: new Date().toISOString(), records: [],
     };
     this._save(s);
+    (this.opened ??= new Set()).add(s.id);
     void this.syncCoordinator?.sessionCreated?.(s.id);
     return { id: s.id };
   }
@@ -198,6 +199,7 @@ export class MockSupervisor {
     return s ? { id: s.id, cwd: s.cwd, name: s.name, model: s.model, parentSessionId: s.parentSessionId } : null;
   }
   isStreaming(id) { return !!this.live.get(id)?.streaming; }
+  isOpen(id) { return !!this.opened?.has(id) || this.live.has(id); }
   isCompacting(id) { return !!this.live.get(id)?.compacting; }
   async rehome(id, newCwd) {
     const s = this._load(id);

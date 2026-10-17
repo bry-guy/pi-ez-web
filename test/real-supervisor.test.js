@@ -538,7 +538,7 @@ test("completed live assistant records do not duplicate persisted messages after
 
   const transcript = await supervisor.transcript("session-1");
   assert.deepEqual(transcript.filter(record => record.role === "assistant"), [
-    { id: "a:t1", role: "assistant", text: "answer" },
+    { id: "a:t1", role: "assistant", text: "answer", toolIds: [], at: 0 },
   ]);
 });
 

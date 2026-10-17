@@ -132,6 +132,9 @@ export class RealSupervisor {
     }
   }
 
+  // Chats this process created or is running stay listed before their first prompt.
+  isOpen(id) { return this.live.has(id) || !!this.opened?.has(id); }
+
   async listSessions(cwd) {
     const { SessionManager } = await SDK();
     const infos = this._selectSessionInfos(await SessionManager.list(cwd));
@@ -440,12 +443,17 @@ export class RealSupervisor {
       case "entry_appended": {
         const entry = evt.entry;
         if (entry?.type === "message" && entry.message?.role === "user") {
-          const record = { id: entry.id, role: "user", text: contentText(entry.message.content), images: contentImages(entry.message.content) };
+          const record = { id: entry.id, role: "user", text: contentText(entry.message.content), images: contentImages(entry.message.content), at: entryTime(entry) || Date.now() };
           st.liveRecords.clear();
           st.liveRecords.set(record.id, record);
           st.assistantParent = entry.id;
           const pending = st.pendingMessages.shift();
           hub.emit(id, "user_record", { record, ...(pending?.clientMessageId ? { clientMessageId: pending.clientMessageId } : {}) });
+        }
+        if (entry?.type === "custom" && entry.customType === "pi-summarize") {
+          const record = summaryRecord(entry);
+          st.liveRecords.set(record.id, record);
+          hub.emit(id, "summary", { record });
         }
         const activity = activityFromEntry(entry);
         if (activity) {
@@ -483,7 +491,7 @@ export class RealSupervisor {
           const parentId = st.session.sessionManager.getLeafId?.() || st.assistantParent || st.turnId;
           st.assistantParent = parentId;
           st.msgId = assistantRecordId(parentId);
-          const record = { id: st.msgId, role: "assistant", text: "", streaming: true };
+          const record = { id: st.msgId, role: "assistant", text: "", streaming: true, at: Date.now() };
           st.liveRecords.set(st.msgId, record);
           hub.emit(id, "message_start", { messageId: st.msgId, role: "assistant" });
         }
@@ -492,6 +500,12 @@ export class RealSupervisor {
         const e = evt.assistantMessageEvent;
         if (e?.type === "error") {
           this._endTurnWithError(id, st, e.error);
+          break;
+        }
+        if (e?.type === "thinking_delta" && e.delta && st.msgId) {
+          const record = st.liveRecords.get(st.msgId);
+          if (record) record.thinking = (record.thinking || "") + e.delta;
+          hub.emit(id, "thinking_delta", { messageId: st.msgId, delta: e.delta });
           break;
         }
         if (e?.type === "text_delta" && e.delta && st.msgId) {
@@ -536,6 +550,7 @@ export class RealSupervisor {
         if (record) {
           record.out = output;
           record.meta = toolResultMeta(evt.isError, durationMs);
+          delete record.running;
         }
         hub.emit(id, "tool_end", {
           toolId: evt.toolCallId, ok: !evt.isError, output,
@@ -694,6 +709,7 @@ export class RealSupervisor {
     this.info.set(id, {
       id, path: file, cwd, name: name || null, parentSessionId: null,
     });
+    (this.opened ??= new Set()).add(id);
     void this.syncCoordinator?.sessionCreated?.(id);
     void this.syncAdapter?.sessionCreated?.(id);
     return { id };
@@ -1609,7 +1625,7 @@ function snapshotRecords(st) {
     const existing = records.find(r => r.id === record.id);
     if (!existing) records.push(cloneRecord(record));
     else if (record.role === "activity") Object.assign(existing, cloneRecord(record));
-    else if (record.streaming) Object.assign(existing, { text: record.text, streaming: true });
+    else if (record.streaming) Object.assign(existing, { text: record.text, ...(record.thinking ? { thinking: record.thinking } : {}), streaming: true });
   }
   return records;
 }
@@ -1636,6 +1652,10 @@ export function entriesToRecords(entries) {
       } else if (index >= 0) records[index] = activity;
       else records.push(activity);
     }
+    if (entry.type === "custom" && entry.customType === "pi-summarize") {
+      records.push(summaryRecord(entry));
+      continue;
+    }
     if (entry.type === "custom" || entry.type === "custom_message") continue;
     if (entry.type !== "message") continue;
     const message = entry.message || {};
@@ -1645,15 +1665,20 @@ export function entriesToRecords(entries) {
         role: "user",
         text: contentText(message.content),
         images: contentImages(message.content),
+        at: entryTime(entry),
       });
       continue;
     }
     if (message.role === "assistant") {
-      const text = contentText((Array.isArray(message.content) ? message.content : []).filter(c => c?.type === "text"));
-      if (text) records.push({ id: assistantRecordId(entry.parentId), role: "assistant", text });
-      for (const c of Array.isArray(message.content) ? message.content : []) {
+      const content = Array.isArray(message.content) ? message.content : [];
+      const text = contentText(content.filter(c => c?.type === "text"));
+      const thinking = content.filter(c => c?.type === "thinking" && c.thinking).map(c => c.thinking).join("\n\n");
+      const at = entryTime(entry);
+      const toolIds = content.filter(c => c?.type === "toolCall").map(c => c.id);
+      if (text || thinking) records.push({ id: assistantRecordId(entry.parentId), role: "assistant", text, ...(thinking ? { thinking } : {}), toolIds, at });
+      for (const c of content) {
         if (c?.type === "toolCall") {
-          const record = { id: c.id, role: "tool", tool: c.name, arg: summarizeArgs(c.name, c.arguments || c.args), meta: "", out: "" };
+          const record = { id: c.id, role: "tool", tool: c.name, arg: summarizeArgs(c.name, c.arguments || c.args), meta: "", out: "", at };
           records.push(record);
           tools.set(c.id, record);
         }
@@ -1694,8 +1719,28 @@ function compactionEndActivity(evt) {
 function toolStartRecord(evt) {
   return {
     id: evt.toolCallId, role: "tool", tool: evt.toolName,
-    arg: summarizeArgs(evt.toolName, evt.args), meta: "", out: "",
+    arg: summarizeArgs(evt.toolName, evt.args), meta: "", out: "", at: Date.now(), running: true,
   };
+}
+
+// pi-summarize writes a custom session entry that groups the tool calls it summarizes.
+function summaryRecord(entry) {
+  const data = entry.data || {};
+  return {
+    id: entry.id, role: "summary", text: String(data.text || ""),
+    at: timeOf(data.at) || entryTime(entry),
+    toolCallIds: Array.isArray(data.toolCallIds) ? data.toolCallIds.map(String) : [],
+  };
+}
+
+function entryTime(entry) {
+  return timeOf(entry?.timestamp ?? entry?.message?.timestamp);
+}
+
+function timeOf(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function toolResultMeta(isError, durationMs) {
