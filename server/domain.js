@@ -219,7 +219,9 @@ export async function chatsState(sup, sync = null) {
     catch { /* ignore an empty or malformed scratch directory */ }
   }
   const closed = loadClosed();
-  const list = discovered.filter(s => !closed.has(s.id));
+  // An unprompted, unnamed chat that nothing has open is an empty scratch file.
+  // Hide it from the sidebar without touching the file.
+  const list = discovered.filter(s => !closed.has(s.id) && (hasPrompt(s) || promptText(s.name) || sup.isStreaming(s.id) || sup.isOpen?.(s.id)));
   const syncStates = new Map(await Promise.all(list.map(async session => [session.id, await sessionSyncState(session.id, sync)])));
   return list
     .sort((a, b) => compareTimestamp(b.modified, a.modified))
@@ -238,8 +240,16 @@ export async function chatsState(sup, sync = null) {
     }));
 }
 
+// Pi reports "(no messages)" in place of a prompt for sessions that have none.
+const NO_MESSAGES = "(no messages)";
+function promptText(value) {
+  const text = String(value || "").trim();
+  return text === NO_MESSAGES ? "" : text;
+}
+function hasPrompt(s) { return !!promptText(s.firstMessage); }
+
 export function titleOf(s) {
-  return s.name || truncateSessionStart(s.firstMessage);
+  return promptText(s.name) || truncateSessionStart(promptText(s.firstMessage));
 }
 
 export function truncateSessionStart(value, max = 48) {

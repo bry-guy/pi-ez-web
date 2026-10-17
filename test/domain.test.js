@@ -16,3 +16,8 @@ test("unnamed sessions use a compact start-of-session fallback", () => {
   assert.equal(titleOf({ name: null, firstMessage: "" }), "New session");
   assert.equal(titleOf({ name: null, firstMessage: "Fix **the** `parser`" }), "Fix the parser");
 });
+
+test("Pi's no-messages sentinel is an empty title, so the first prompt shows instead", () => {
+  assert.equal(titleOf({ name: null, firstMessage: "(no messages)" }), "New session");
+  assert.equal(titleOf({ name: "(no messages)", firstMessage: "Ship the chat" }), "Ship the chat");
+});
