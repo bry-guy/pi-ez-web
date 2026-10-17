@@ -17,6 +17,7 @@ const MOCK_MODELS = [
 
 const THINK_MS = () => Number(process.env.PI_WEB_MOCK_THINK_MS ?? 900);
 const DELTA_MS = () => Number(process.env.PI_WEB_MOCK_DELTA_MS ?? 18);
+const TOOL_MS = () => Number(process.env.PI_WEB_MOCK_TOOL_MS ?? 350);
 
 const dir = () => path.join(appHome(), "mock-sessions");
 const fileOf = id => path.join(dir(), id + ".json");
@@ -311,10 +312,10 @@ export class MockSupervisor {
   _startTurn(id, userText, steered, clientMessageId = null) {
     const st = this.live.get(id);
     const s = this._load(id);
-    const userRec = { id: newId("m"), role: "user", text: userText };
+    const userRec = { id: newId("m"), role: "user", text: userText, at: Date.now() };
     s.records.push(userRec);
     const msgId = newId("m");
-    s.records.push({ id: msgId, role: "assistant", text: "", streaming: true });
+    s.records.push({ id: msgId, role: "assistant", text: "", streaming: true, at: Date.now() });
     this._save(s);
 
     st.streaming = true;
@@ -332,10 +333,10 @@ export class MockSupervisor {
       ? `Steering acknowledged — switching to: ${userText}`
       : `mock: I'd run that against ${path.basename(s.cwd)} — reading first, then proposing an edit. (${userText.slice(0, 60)})`;
 
-    const t0 = setTimeout(() => {
-      if (wantsTool) this._emitTool(id, s.cwd, wantsDiff);
-      if (wantsTodoActivity) this._emitActivity(id, "todo");
-      if (wantsAgentActivity) this._emitActivity(id, "agent");
+    // Prompts that mention a summary also exercise pi-summarize: a working line and a summary entry.
+    const summarize = /summar|working/i.test(userText);
+    const thought = "Checking how the session list is built before answering. ";
+    const startText = () => {
       let i = 0;
       const tick = () => {
         if (!st.streaming || st.msgId !== msgId) return;
@@ -353,6 +354,29 @@ export class MockSupervisor {
         else st.timers.push(setTimeout(tick, DELTA_MS()));
       };
       tick();
+    };
+    const afterThinking = () => {
+      if (wantsTool) this._emitTool(id, s.cwd, { withDiff: wantsDiff, summary: summarize, done: startText });
+      else startText();
+    };
+    const think = (i = 0) => {
+      if (!st.streaming || st.msgId !== msgId) return;
+      const piece = thought.slice(i, i + 4);
+      const cur = this._load(id);
+      const rec = cur.records.find(r => r.id === msgId);
+      if (!rec) return;
+      rec.thinking = (rec.thinking || "") + piece;
+      this._save(cur);
+      this.hub.emit(id, "thinking_delta", { messageId: msgId, delta: piece });
+      if (i + 4 < thought.length) st.timers.push(setTimeout(() => think(i + 4), DELTA_MS()));
+      else afterThinking();
+    };
+
+    const t0 = setTimeout(() => {
+      if (summarize) this.hub.emit(id, "extension_ui_working", { message: "Reading the session list…" });
+      if (wantsTodoActivity) this._emitActivity(id, "todo");
+      if (wantsAgentActivity) this._emitActivity(id, "agent");
+      think();
     }, THINK_MS());
     st.timers.push(t0);
   }
@@ -434,19 +458,29 @@ export class MockSupervisor {
     this.hub.emit(id, "activity", { record: { ...existing } });
   }
 
-  _emitTool(id, cwd, withDiff) {
+  _emitTool(id, cwd, { withDiff, summary, done }) {
     const toolId = newId("tc");
     const toolRec = {
       id: toolId, role: "tool", tool: "grep",
-      arg: `"sessions list" ${path.basename(cwd)}/src`, meta: "3 matches · 0.2s",
-      out: "src/commands/sessions.ts:42  export async function sessionsList(\nsrc/cli.ts:130  .command(\"sessions list\")",
+      arg: `"sessions list" ${path.basename(cwd)}/src`, meta: "", out: "", at: Date.now(), running: true,
     };
     const s = this._load(id);
-    // tool/diff records precede the assistant message record in the transcript
-    const ai = s.records.findIndex(r => r.id === this.live.get(id).msgId);
-    s.records.splice(ai, 0, toolRec);
+    // tool/diff/summary records precede the assistant message record in the transcript
+    s.records.splice(s.records.findIndex(r => r.id === this.live.get(id).msgId), 0, toolRec);
+    this._save(s);
     this.hub.emit(id, "tool_start", { toolId, name: toolRec.tool, argsSummary: toolRec.arg });
-    this.hub.emit(id, "tool_end", { toolId, ok: true, output: toolRec.out, meta: "3 matches", durationMs: 200 });
+    this.live.get(id).timers.push(setTimeout(() => this._finishTool(id, toolId, { withDiff, summary, done }), TOOL_MS()));
+  }
+
+  _finishTool(id, toolId, { withDiff, summary, done }) {
+    const toolOut = "src/commands/sessions.ts:42  export async function sessionsList(\nsrc/cli.ts:130  .command(\"sessions list\")";
+    const s = this._load(id);
+    const toolRec = s.records.find(r => r.id === toolId);
+    if (!toolRec) return;
+    Object.assign(toolRec, { meta: "3 matches · 0.2s", out: toolOut });
+    delete toolRec.running;
+    this.hub.emit(id, "tool_end", { toolId, ok: true, output: toolOut, meta: "3 matches", durationMs: TOOL_MS() });
+    const beforeAssistant = () => s.records.findIndex(r => r.id === this.live.get(id).msgId);
     if (withDiff) {
       const diffId = newId("df");
       const diffRec = {
@@ -459,13 +493,19 @@ export class MockSupervisor {
           { sign: "+", text: "  console.table(rows);" },
         ],
       };
-      s.records.splice(ai + 1, 0, diffRec);
+      s.records.splice(beforeAssistant(), 0, diffRec);
       this.hub.emit(id, "diff", {
         toolId: diffId, path: diffRec.file, adds: 3, dels: 1,
         hunks: [{ header: "@@ -40,4 +40,6 @@", lines: diffRec.lines.slice(1) }],
       });
     }
+    if (summary) {
+      const summaryRec = { id: newId("sum"), role: "summary", text: "Searched the session list before answering.", at: Date.now(), toolCallIds: [toolId] };
+      s.records.splice(beforeAssistant(), 0, summaryRec);
+      this.hub.emit(id, "summary", { record: summaryRec });
+    }
     this._save(s);
+    done?.();
   }
 
   _finishTurn(id, reason, suffix = "") {
