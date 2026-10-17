@@ -1323,8 +1323,8 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
 
 /* ---- chat activity: busy line, turn row, steps view (chat-activity) ---- */
 .busy-row { display: flex; align-items: center; gap: 10px; min-height: 22px; color: var(--muted); font-size: 13px; }
-.busy-dots { display: inline-grid; grid-template-columns: repeat(2, 4px); gap: 2px 3px; flex: 0 0 auto; }
-.busy-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--hairline); }
+.busy-dots { display: inline-grid; grid-template-columns: repeat(2, 5px); gap: 3px 4px; flex: 0 0 auto; }
+.busy-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--hairline); }
 .busy-dots i.on { background: var(--accent); }
 .busy-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-done { margin: -12px 0 22px; }
@@ -1345,7 +1345,7 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
 .step-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 10px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .step-summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .step-summary-text { flex: 1; min-width: 0; }
-.step-summary .bh-caret { color: var(--faint); font-size: 10px; width: 9px; }
+.step-summary .bh-caret { color: var(--faint); font-size: 11px; width: 10px; }
 .step-summary .bh-meta { color: var(--faint); font-size: 11px; white-space: nowrap; }
 .step-block .block-head { min-height: 40px; }
 .step-thinking { padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }

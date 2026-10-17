@@ -466,7 +466,9 @@ export class MockSupervisor {
     };
     const s = this._load(id);
     // tool/diff/summary records precede the assistant message record in the transcript
-    s.records.splice(s.records.findIndex(r => r.id === this.live.get(id).msgId), 0, toolRec);
+    const message = s.records.find(r => r.id === this.live.get(id).msgId);
+    message.toolIds = [...(message.toolIds || []), toolId];
+    s.records.splice(s.records.indexOf(message), 0, toolRec);
     this._save(s);
     this.hub.emit(id, "tool_start", { toolId, name: toolRec.tool, argsSummary: toolRec.arg });
     this.live.get(id).timers.push(setTimeout(() => this._finishTool(id, toolId, { withDiff, summary, done }), TOOL_MS()));
