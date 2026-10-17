@@ -33,6 +33,8 @@ The header's second line shows the project's Git context (branch · commit · cl
 
 While a turn runs, the chat shows a small dot spinner (a 2×3 grid of dots, every one of which lights in turn) and one live line: the extension's working message (for example from pi-summarize), else the current tool (`Reading files.js…`, `Running npm test…`), else `Thinking…`. Tool calls and thinking are not shown inline. When the turn ends, a quiet row reads `Worked 42s · 6 steps ›`. Tapping it opens **Steps** in place of the chat, with a `<` back button and a `#steps=…` address, so Back returns to the chat at the same scroll position. Steps lists pi-summarize summaries, each expandable to the thinking and tool calls behind it; a turn without summaries lists its tool calls and thinking in order. Thinking is kept with the message, so it is available after a reload.
 
+While a reply streams, the chat follows it only if you are at the bottom. Scroll up and it stops following, so you can read earlier messages while the reply grows off screen; scroll back to the bottom (or send a message) to follow again.
+
 Every finished reply has a copy button under it, and so does your own message: with a mouse it appears on hover, on a phone it is always shown under replies and appears when you tap your own message. It copies the message's text (markdown for replies) and shows a check for a moment.
 
 Untitled chats are named by their first prompt. A chat that was never prompted or named, and is not open, is left out of the sidebar; its file is kept.

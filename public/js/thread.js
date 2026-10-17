@@ -115,9 +115,16 @@ const EMPTY_STATE = `<div class="empty-pi"><div class="tile">π</div><h1 class="
 class PiThread extends HTMLElement {
   connectedCallback() {
     this.renderCache = new WeakMap();
+    // Follow streaming output only while the reader stays at the bottom; any upward scroll stops it.
+    this.follow = true;
+    this.onTouch = e => { this.touching = e.type === "touchstart"; };
     this.onScroll = () => {
       const scroller = this.scroller;
       if (!scroller) return;
+      const top = scroller.scrollTop;
+      if (top < (this.lastTop ?? top) - 1) this.follow = false;
+      else if (scroller.scrollHeight - top - scroller.clientHeight < 24) this.follow = true;
+      this.lastTop = top;
       if (this.inSteps) return;
       if (!this.scrollSaveFrame) this.scrollSaveFrame = requestAnimationFrame(() => { this.scrollSaveFrame = 0; this.saveScroll(); });
       if (scroller.scrollTop > 360) return;
@@ -142,15 +149,17 @@ class PiThread extends HTMLElement {
   disconnectedCallback() {
     this.unsub?.();
     window.removeEventListener("popstate", this.onPopState);
-    this.scroller?.removeEventListener("scroll", this.onScroll);
+    for (const type of ["scroll", "touchstart", "touchend", "touchcancel"]) this.scroller?.removeEventListener(type, type === "scroll" ? this.onScroll : this.onTouch);
   }
 
   bindScroller() {
     const scroller = this.closest(".scrollable");
     if (scroller === this.scroller) return;
-    this.scroller?.removeEventListener("scroll", this.onScroll);
+    for (const [type, fn] of [["scroll", this.onScroll], ["touchstart", this.onTouch], ["touchend", this.onTouch], ["touchcancel", this.onTouch]]) {
+      this.scroller?.removeEventListener(type, fn);
+      scroller?.addEventListener(type, fn, { passive: true });
+    }
     this.scroller = scroller;
-    this.scroller?.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
   async onClick(e) {
@@ -211,8 +220,10 @@ class PiThread extends HTMLElement {
 
   autoscroll(force = false) {
     const sc = this.closest(".scrollable") || this;
-    if (!force && sc.scrollHeight - sc.scrollTop - sc.clientHeight >= 160) return;
+    if (!force && (!this.follow || this.touching)) return;
+    this.follow = true;
     sc.scrollTop = sc.scrollHeight;
+    this.lastTop = sc.scrollTop;
     if (force) {
       const raf = globalThis.requestAnimationFrame || this.ownerDocument?.defaultView?.requestAnimationFrame?.bind(this.ownerDocument.defaultView);
       raf?.(() => { if (this.isConnected) sc.scrollTop = sc.scrollHeight; });
