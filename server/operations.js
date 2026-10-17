@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hub } from "./events.js";
 import { writeLog } from "./logging.js";
 import { redact } from "./redaction.js";
+import { appendHistory } from "./workspace-history.js";
 
 const MAX_EVENTS = 600;
 const MAX_TEXT = 12_000;
@@ -28,6 +29,7 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     status: "running",
     startedAt: Date.now(),
     events: [],
+    workspace: null,
   };
 
   const log = (entry = {}) => {
@@ -75,6 +77,9 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     events: operation.events.slice(),
   });
 
+  // Operations bound to a workspace are also kept in that workspace's history.
+  const bind = workspace => { operation.workspace = workspace || null; };
+
   const finish = ({ status = "success", httpStatus = null, exit = null, message = "" } = {}) => {
     operation.status = status;
     operation.finishedAt = Date.now();
@@ -82,6 +87,7 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     operation.exit = exit;
     if (message) log({ type: status === "success" ? "result" : "error", message });
     const result = snapshot();
+    if (operation.workspace) recordHistory(operation.workspace, result);
     publish(operation.sessionId, "operation_complete", { operationId: operation.id, operation: result });
     return result;
   };
@@ -90,9 +96,27 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     get id() { return operation.id; },
     get sessionId() { return operation.sessionId; },
     log,
+    bind,
     snapshot,
     finish,
   };
+}
+
+function recordHistory(workspace, result) {
+  try {
+    appendHistory(workspace, {
+      id: result.id,
+      kind: result.kind,
+      title: result.title,
+      status: result.status,
+      exit: result.exit ?? null,
+      startedAt: result.startedAt,
+      at: result.finishedAt,
+      output: result.events.map(event => [event.command && `$ ${event.command}`, event.output || event.message].filter(Boolean).join("\n")).join("\n"),
+    });
+  } catch {
+    // History is a record of the operation; failing to write it must not fail the operation.
+  }
 }
 
 export function operationRequestId(c, body = {}) {

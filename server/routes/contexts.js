@@ -41,6 +41,7 @@ export function register(api, deps) {
     const reporter = createOperationReporter({ id: operationRequestId(c, body), sessionId: id, kind: body.mode === "fork" ? "fork" : "switch", title: body.mode === "fork" ? "Fork session" : "Switch session" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/sessions/${id}/branch-context` });
     const initialCwd = await sessionWorkspace(id, sup);
+    reporter.bind(initialCwd);
     const initialProject = (initialCwd && await findProjectByWorkspaceAsync(initialCwd))?.project || boundProject(id);
     if (!initialProject) return err(c, 404, "no_project_for_session");
     return withRepositoryAdmission(c, initialProject.repoPath, async identity => {

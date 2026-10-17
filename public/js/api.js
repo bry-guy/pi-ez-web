@@ -127,6 +127,7 @@ export const api = {
   extensionUiResponse: (sessionId, requestId, body) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "POST", headers: JH, body: JSON.stringify(body || {}) }).then(j),
   extensionUiCancel: (sessionId, requestId) => fetch(`/api/sessions/${encodeURIComponent(sessionId)}/extension-ui/${encodeURIComponent(requestId)}`, { method: "DELETE" }).then(j),
   exportSession: (id, format = "html") => `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
+  sessionHistory: id => fetch(`/api/sessions/${encodeURIComponent(id)}/history`).then(j),
   hook: (id, name, operationId = null) => fetch(`/api/sessions/${encodeURIComponent(id)}/hooks/${encodeURIComponent(name)}`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
   settings: (defaultModel, reposRoot) => {
     const body = {};
