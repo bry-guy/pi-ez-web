@@ -129,18 +129,26 @@ test("image publication workflow publishes immutable GHCR images", () => {
   assert.match(testsJob, /run: npm ci[\s\S]*?run: npm test/);
   assert.match(workflow, /^  publish:\n    needs: tests$/m);
   assert.match(workflow, /permissions:\n  contents: read\n  packages: write\n/);
-  assert.doesNotMatch(workflow, /contents: write|id-token: write/);
+  const publishJob = workflow.match(/^  publish:\n([\s\S]*?)(?=^  deploy:)/m)?.[1];
+  assert.ok(publishJob);
+  assert.doesNotMatch(publishJob, /contents: write|id-token: write|git push/);
   assert.match(workflow, /group: pi-ez-web-image-\$\{\{ github\.ref \}\}/);
   assert.match(workflow, /cancel-in-progress: true/);
-  assert.doesNotMatch(workflow, /preview|startsWith\(github\.ref_name/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /docker\/login-action/);
   assert.match(workflow, /tag="sha-\$\{source_sha\}"/);
   assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ steps\.source\.outputs\.sha \}\}/);
   assert.match(workflow, /PI_WEB_BUILD_ID=\$\{\{ steps\.source\.outputs\.sha \}\}/);
-  assert.doesNotMatch(
-    workflow,
-    /Stage image in preview|deploy\/k8s(?:-preview)?\/kustomization\.yaml|preview\/pi|update-image-digest|tailscale\/github-action|git push|Verify preview artifact|Promote verified image/
-  );
-  assert.equal(workflow.match(/steps\.build\.outputs\.digest/g)?.length ?? 0, 0);
+  assert.match(publishJob, /digest: \$\{\{ steps\.build\.outputs\.digest \}\}/);
+});
+
+test("deploy job pins the built digest and gates production on main", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github/workflows/publish-image.yml"), "utf8");
+  const deployJob = workflow.match(/^  deploy:\n([\s\S]*)/m)?.[1];
+  assert.ok(deployJob);
+  assert.match(deployJob, /needs: publish/);
+  assert.match(deployJob, /DIGEST: \$\{\{ needs\.publish\.outputs\.digest \}\}/);
+  assert.match(deployJob, /cancel-in-progress: false/);
+  assert.match(deployJob, /run: \.\.\/src\/scripts\/deploy\.sh preview/);
+  assert.match(deployJob, /if: github\.ref == 'refs\/heads\/main'\n        working-directory: main\n        run: \.\.\/src\/scripts\/deploy\.sh production/);
 });

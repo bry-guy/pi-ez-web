@@ -52,7 +52,7 @@ export function podProblem(pod, now = Date.now()) {
 // Requests keep a worker's share of a shared node; the memory limit stops one
 // worker from taking the node. No CPU limit by default. An empty value unsets one.
 export function kubernetesConfig(env = process.env) {
-  const namespace = env.WORKSPACED_NAMESPACE || "pi-ez-workspaces";
+  const namespace = env.WORKSPACED_NAMESPACE || "pi-workspaced";
   const set = values => Object.fromEntries(Object.entries(values).filter(([, v]) => v));
   return {
     namespace,

@@ -1,0 +1,66 @@
+# Personal layer applied to every workspace (envFrom). Mirrors the pi-web
+# operator deployment's dotfiles prestart; keep the two in sync.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pi-ez-workspace-env
+  labels:
+    app.kubernetes.io/name: pi-workspaced
+    app.kubernetes.io/part-of: selfhost
+data:
+  # Repositories may add mise.pi-ez.toml for workspace-only tools (e.g. docker-cli).
+  MISE_ENV: pi-ez
+  DOTFILES_REPOSITORY: https://github.com/bry-guy/dotfiles.git
+  PI_WEB_PRESTART_TIMEOUT_MS: "120000"
+  PI_SYNC_SERVER_URL: http://pi-syncd.pi-sync.svc:8080
+  PI_WEB_SYNC_ALL_CONVERSATIONS: "false"
+  PI_WEB_PRESTART_COMMAND: |
+    set -eu
+    : "${DOTFILES_REPOSITORY:?DOTFILES_REPOSITORY is required}"
+    mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+    export GIT_TERMINAL_PROMPT=0
+    yadm_repo="$XDG_DATA_HOME/yadm/repo.git"
+    if [ -d "$yadm_repo" ]; then
+      if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm rev-parse --git-dir >/dev/null 2>&1; then
+        rm -rf "$yadm_repo"
+      elif ! origin="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm remote get-url origin 2>/dev/null)"; then
+        rm -rf "$yadm_repo"
+      elif [ "$origin" != "$DOTFILES_REPOSITORY" ]; then
+        printf '%s\n' 'The existing yadm origin does not match DOTFILES_REPOSITORY.' >&2
+        exit 2
+      fi
+    fi
+    # Always the latest dotfiles. A first start waits for them; later starts
+    # update in the background and new chats pick the update up.
+    if [ ! -d "$yadm_repo" ]; then
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm clone --no-bootstrap --no-checkout "$DOTFILES_REPOSITORY"
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm fetch --no-tags origin HEAD && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm reset --hard FETCH_HEAD && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm alt
+    else
+      ( GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm fetch --no-tags origin HEAD && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm reset --hard FETCH_HEAD && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 yadm alt ) >/dev/null 2>&1 &
+    fi
+    unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
+    # Tracked ~/.gitconfig is reset by the background dotfiles update; keep pod settings in its untracked include.
+    git config --file "$HOME/.gitconfig.identity.local" --replace-all user.name 'Bryan Smith'
+    git config --file "$HOME/.gitconfig.identity.local" --replace-all user.email 'bryan@bry-guy.net'
+    git config --file "$HOME/.gitconfig.identity.local" --replace-all credential.helper /usr/local/bin/pi-ez-web-git-credential-helper
+    # Default project setup hook; a project's own hooks in config.json win.
+    cfg="$PI_WEB_HOME/config.json"
+    mkdir -p "$PI_WEB_HOME"
+    [ -s "$cfg" ] || echo '{}' > "$cfg"
+    # Pi layers the pinned dotfiles' ~/.pi/agent (settings, packages, skills) like pi-web's profile.
+    # A grant's ServiceAccount becomes ~/.kube/config for kubectl and repo tasks.
+    sa=/var/run/secrets/kubernetes.io/serviceaccount
+    if [ -r "$sa/token" ]; then
+      mkdir -p "$HOME/.kube"
+      umask 077
+      cat > "$HOME/.kube/config" <<KUBE
+    apiVersion: v1
+    kind: Config
+    clusters: [{name: in-cluster, cluster: {server: "https://kubernetes.default.svc", certificate-authority: $sa/ca.crt}}]
+    users: [{name: grant, user: {tokenFile: $sa/token}}]
+    contexts: [{name: in-cluster, context: {cluster: in-cluster, user: grant, namespace: $(cat $sa/namespace)}}]
+    current-context: in-cluster
+    KUBE
+      umask 022
+    fi
+    jq '.projectHooks.setup //= "mise trust --yes && mise install" | .pi.profile //= "~/.pi/agent"' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"

@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-workspaced
+  labels:
+    app.kubernetes.io/name: pi-workspaced
+    app.kubernetes.io/part-of: selfhost
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pi-workspaced
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pi-workspaced
+        app.kubernetes.io/part-of: selfhost
+    spec:
+      serviceAccountName: pi-workspaced
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: gateway
+          image: ghcr.io/bry-guy/pi-ez-web:sha-placeholder
+          imagePullPolicy: IfNotPresent
+          command: [node, workspaced/index.js]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: PORT
+              value: "3150"
+            - name: WORKSPACED_NAMESPACE
+              value: pi-workspaced
+            # Filled from this container's image by replacements in kustomization.yaml.
+            - name: WORKSPACE_IMAGE
+              value: placeholder
+            - name: WORKSPACE_ENV_CONFIGMAP
+              value: pi-ez-workspace-env
+            - name: WORKSPACE_IMAGE_PULL_SECRET
+              value: ghcr-pull
+            - name: WORKSPACE_STORAGE
+              value: 20Gi
+            - name: WORKSPACED_PROVIDER
+              value: kubernetes
+            - name: WORKSPACED_GRANTS
+              valueFrom:
+                configMapKeyRef:
+                  name: pi-workspaced-grants
+                  key: grants.json
+            # pi-web carries no Secrets by contract; network-policy.yaml admits
+            # only the pi-ez-web pod, which is the authentication boundary.
+            - name: WORKSPACED_AUTH
+              value: network
+          ports:
+            - name: http
+              containerPort: 3150
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pi-workspaced
+  labels:
+    app.kubernetes.io/name: pi-workspaced
+    app.kubernetes.io/part-of: selfhost
+spec:
+  selector:
+    app.kubernetes.io/name: pi-workspaced
+  ports:
+    - name: http
+      port: 3150
+      targetPort: http

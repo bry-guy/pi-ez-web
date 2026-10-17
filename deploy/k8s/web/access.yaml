@@ -1,0 +1,10 @@
+# pi-web holds no Kubernetes credentials: projects run in pi-workspaced
+# workers, and releases run from the laptop or the infra worker.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pi-ez-web
+  labels:
+    app.kubernetes.io/name: pi-ez-web
+    app.kubernetes.io/part-of: selfhost
+automountServiceAccountToken: false
