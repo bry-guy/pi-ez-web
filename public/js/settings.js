@@ -734,7 +734,7 @@ class PiSettings extends HTMLElement {
     const html = `<div class="settings-layout" data-view="${store.state.settingsCategory ? "category" : "list"}">
       <nav class="settings-nav" aria-label="Settings categories">
         <div class="settings-nav-head"><button class="ghost-btn settings-close" data-act="close-settings" title="Back to chat" aria-label="Back to chat">${icon("chevronLeft")}</button><div class="settings-nav-title">Settings</div></div>
-        <ul class="settings-nav-list">${CATEGORIES.map(([id, name]) => `<li><button class="settings-nav-item${id === category ? " active" : ""}" data-settings-category="${id}"${id === category ? ` aria-current="page"` : ""}>${name}</button></li>`).join("")}</ul>
+        <ul class="settings-nav-list">${CATEGORIES.map(([id, name]) => `<li><button class="settings-nav-item${id === category ? " active" : ""}" data-settings-category="${id}"${id === category ? ` aria-current="page"` : ""}><span class="settings-nav-label">${name}</span><span class="settings-nav-chevron" aria-hidden="true">${icon("chevronRight")}</span></button></li>`).join("")}</ul>
       </nav>
       <div class="settings-pane">
         <div class="settings-pane-head"><button class="ghost-btn settings-close settings-pane-back" data-act="settings-list" title="All settings" aria-label="All settings">${icon("chevronLeft")}</button><div class="screen-title">${label}</div></div>
