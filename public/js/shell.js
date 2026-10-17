@@ -26,6 +26,8 @@ export const icon = name => {
   const paths = {
     settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
     chevronLeft: '<path d="m12.5 4-6 6 6 6"/>',
+    copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/>',
+    check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
     // Distinct glyphs: the sidebar is a panel, the files column is a code symbol (</>).
     sidebar: '<rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M8 4v12"/>',
     code: '<path d="m6.5 6-4 4 4 4"/><path d="m13.5 6 4 4-4 4"/><path d="m11.4 4-2.8 12"/>',

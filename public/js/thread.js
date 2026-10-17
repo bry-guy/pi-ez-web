@@ -1,9 +1,10 @@
 import { api, openTranscript, refreshState } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { setHTML, store } from "./store.js";
-import { closeConversation, esc, mobile, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
+import { closeConversation, esc, icon, mobile, newChat, newProjectSession, selectChat, selectSession } from "./shell.js";
 
 let pendingMessageSequence = 0;
+const copyButton = side => `<div class="msg-actions ${side}"><button class="msg-action" type="button" data-copy aria-label="Copy message" title="Copy">${icon("copy")}</button></div>`;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIVE_AGENT_STATUSES = new Set(["running", "queued"]);
 const HISTORY_PAGE_SIZE = 500;
@@ -153,6 +154,15 @@ class PiThread extends HTMLElement {
   }
 
   async onClick(e) {
+    const copy = e.target.closest("[data-copy]");
+    if (copy) { void this.copyMessage(copy); return; }
+    // Touch has no hover: tapping your own message reveals its copy button.
+    const reveal = e.target.closest("[data-copy-reveal]");
+    if (reveal && !e.target.closest("a, button")) {
+      const row = reveal.closest(".msg");
+      this.querySelectorAll(".msg.show-actions").forEach(el => { if (el !== row) el.classList.remove("show-actions"); });
+      row?.classList.toggle("show-actions");
+    }
     const stepsOpen = e.target.closest("[data-steps-open]");
     if (stepsOpen) { this.openSteps(stepsOpen.dataset.stepsOpen); return; }
     if (e.target.closest("[data-steps-back]")) { this.closeSteps(); return; }
@@ -559,6 +569,23 @@ class PiThread extends HTMLElement {
     return `<section class="command-notice" role="status"><strong>${esc(notice.title || "Pi")}</strong><span>${esc(message)}</span></section>`;
   }
 
+  /** Copies the message's source text (markdown for replies), then shows a check for a moment. */
+  async copyMessage(button) {
+    const id = button.closest("[data-rec]")?.dataset.rec;
+    const record = store.transcript().records.find(r => r.id === id);
+    const text = record?.text ?? "";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      store.setError("Clipboard access is unavailable in this browser.");
+      return;
+    }
+    button.classList.add("copied");
+    button.innerHTML = icon("check");
+    button.setAttribute("aria-label", "Copied");
+    setTimeout(() => { button.classList.remove("copied"); button.innerHTML = icon("copy"); button.setAttribute("aria-label", "Copy message"); }, 1500);
+  }
+
   renderRecordCached(m) {
     const open = m.role === "tool" || m.role === "diff"
       ? this.isOpen(m.id)
@@ -593,7 +620,7 @@ class PiThread extends HTMLElement {
       const delivery = m.deliveryError ? "ERROR: Unable to send." : "";
       return `<div class="msg ${m.deliveryError ? "delivery-failed" : ""}">
         <div class="msg-user-row">
-          <div class="user-message-content"><div class="bubble">${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}</div>
+          <div class="user-message-content"><div class="bubble" data-copy-reveal>${(m.images || []).map(image => `<img class="message-image" src="data:${esc(image.mimeType)};base64,${esc(image.data)}" alt="Attached image">`).join("")}${m.text ? `<div>${esc(m.text)}</div>` : ""}</div>${delivery ? `<div class="delivery-status">${esc(delivery)}</div>` : ""}${m.text ? copyButton("user") : ""}</div>
         </div></div>`;
     }
     if (m.role === "error") {
@@ -602,7 +629,7 @@ class PiThread extends HTMLElement {
     if (m.role === "assistant") {
       // Thinking-only and tool-only messages have no chat text; the busy line and steps cover them.
       if (!m.text) return "";
-      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${m.streaming ? `<span class="caret-bar"></span>` : ""}</div></div>`;
+      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${m.streaming ? `<span class="caret-bar"></span>` : ""}</div>${m.streaming ? "" : copyButton("assistant")}</div>`;
     }
     // Tool calls, diffs, and summaries belong to the turn's steps view, not the chat.
     if (m.role === "tool" || m.role === "diff" || m.role === "summary") return "";
