@@ -300,6 +300,8 @@ export function register(api, deps) {
       }
       await assertRepositoryIdentity(identity, found.project.repoPath);
       await assertRepositoryIdentity(identity, cwd);
+      // The merge lands in the primary checkout, where the session returns.
+      reporter.bind(found.project.repoPath);
       const branch = await ws.currentBranchAsync(cwd);
       const mainBranch = await ws.defaultBranchAsync(found.project.repoPath);
       if (!branch || branch === mainBranch) {

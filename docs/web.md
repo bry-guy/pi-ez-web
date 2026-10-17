@@ -21,7 +21,7 @@ Everything else (default model, Pi profile and packages, repository source) is i
 
 ## Chat header
 
-The whole header of a conversation opens the session panel (below); its Git line and sync label keep their own taps. The header's left button toggles the sidebar (a panel glyph; a hamburger on a phone) and the right button toggles the file tree (a `</>` code glyph). The sidebar's footer row is the settings button.
+The whole header row of a project conversation opens the session panel (below), wherever you tap it; the sidebar and Files buttons and the sync label keep their own taps. The header's left button toggles the sidebar (a panel glyph; a hamburger on a phone) and the right button toggles the file tree (a `</>` code glyph). The sidebar's footer row is the settings button.
 
 Async results (fetch, pull, a hook finishing) are announced as a short toast at the bottom of the screen, and disappear after a few seconds.
 
@@ -43,13 +43,15 @@ The viewer follows the theme: a light code palette in light mode, a dark one in 
 
 ## Session panel
 
-Tap the chat header (or the Git line) to open the session panel; it is a modal with a `×`. It has three sections:
+Tap the chat header to open the session panel; it is a modal with a `×` (full screen on a phone). It has three sections:
 
-- **Session**: the name, the branch (choosing another moves the session onto it), sync facts when the conversation is shared, **Fork to new branch** (copies the conversation to a new branch in its own worktree; this session stays where it is), and the project's hook buttons such as the setup script.
-- **Git**: branch, commit, workspace and status, then **Fetch**, **Pull** and **Push**, and **Merge to main** (primary, asks first) and **Delete** (caution, asks first) for a non-primary branch.
-- **History**: what ran in this workspace, newest first: hooks, pulls, pushes, merges, forks and switches, each with its time, status and output (tap an entry to expand it). The log is append-only JSON lines in the app state dir, one file per workspace path, capped at 16 KB of output per entry. Removing the state dir removes the log. It records operations run by the process that serves the request.
+- **Session**: **Fork…** and **Setup**, each with a line saying what it does, plus any other project hooks. **Fork…** opens a step asking for a name and a branch; left empty, the name is the session's name plus the first free `(fork)`, `(fork 2)`, … among the project's sessions, and the branch is derived from that name (made unique). The copy gets its own worktree and opens; this session stays where it is. **Setup** runs the project's setup script (for example `npm ci`) in this worktree. Sync facts appear here when the conversation is shared.
+- **Git**: branch, commit, workspace and status, then **Fetch**, **Pull**, **Push** and **Switch…** on the right, and **Delete** (caution, asks first) and **Merge to main** (primary, asks first) for a non-primary branch. **Switch…** opens a step listing the branches (the current one is marked) and a field for a new branch; choosing one moves this session onto it.
+- **History**: what ran in this workspace, newest first: setup and other hooks, fetches, pulls, pushes, merges, forks and switches, each with its time, status and output (tap an entry to expand it). An operation still running is listed at the top until it finishes; results are also announced as a toast. A switch or merge is logged both where the session was and where it lands, a fork in both the source and the copy. The log is append-only JSON lines in the app state dir, one file per workspace path, capped at 16 KB of output per entry. Removing the state dir removes the log. It records operations run by the process that serves the request.
 
-Starting a new session still uses the same panel without the Git and History sections, and lists earlier sessions under **Sessions**.
+Steps show a `<` that returns to the panel's main screen. The panel keeps its frame while its contents update, so it does not flash or re-animate.
+
+Starting a new session uses the same panel with name and branch fields instead of the Session and History sections, and lists earlier sessions under **Sessions**.
 
 ## Settings
 

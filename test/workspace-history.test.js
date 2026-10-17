@@ -45,3 +45,16 @@ test("a bound operation is recorded with its output when it finishes", () => {
   unbound.finish({ status: "success" });
   assert.equal(readHistory(ws).length, 1, "unbound operations are not recorded");
 });
+
+test("an operation bound to two workspaces is recorded in both", () => {
+  const from = "/work/switch-from";
+  const to = "/work/switch-to";
+  const reporter = createOperationReporter({ kind: "switch", title: "Switch session" });
+  reporter.bind(from);
+  reporter.bind(to);
+  reporter.bind(from);
+  reporter.finish({ status: "success", message: "Switched session s1 to feature/x." });
+  assert.equal(readHistory(from).length, 1);
+  assert.equal(readHistory(to).length, 1);
+  assert.match(readHistory(to)[0].output, /Switched session s1/);
+});

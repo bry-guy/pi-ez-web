@@ -419,9 +419,12 @@ class PiHeader extends HTMLElement {
   }
 
   async onClick(e) {
+    // The whole header row opens the session panel. A tap with no button under it
+    // counts too: the header may have re-rendered between press and release, which
+    // leaves the click on <pi-header> itself rather than inside the header.
     const t = e.target.closest("[data-act]");
-    if (!t) return;
-    const act = t.dataset.act;
+    const act = t ? t.dataset.act : store.inProject() && store.project() ? "session-panel" : null;
+    if (!act) return;
     if (act === "sidebar-toggle") {
       e.preventDefault();
       e.stopPropagation();
@@ -437,6 +440,7 @@ class PiHeader extends HTMLElement {
     } else if (act === "sync-detail") {
       store.set({ commandNotice: { sessionId: store.activeKey(), title: "Sync", message: t.dataset.detail } });
     } else if (act === "files") {
+      e.stopPropagation();
       this.dispatchEvent(new CustomEvent("toggle-files", { bubbles: true }));
     }
   }
@@ -509,7 +513,7 @@ class PiHeader extends HTMLElement {
       ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
       : icon("sidebar");
     // The whole header of a conversation opens its session panel; its buttons keep their own actions.
-    const panelAct = inProject && node ? ` data-act="session-panel"` : "";
+    const panelAct = inProject ? ` data-act="session-panel"` : "";
     setHTML(this, `<header class="bar${panelAct ? " bar-session" : ""}"${panelAct}>
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${subArea}${operationArea}</div>

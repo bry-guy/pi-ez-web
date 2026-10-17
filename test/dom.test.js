@@ -133,6 +133,7 @@ async function boot() {
       }
       if (url === "/api/projects/p1/fetch" && options.method === "POST") {
         dom.window.__fetchCalls = (dom.window.__fetchCalls || 0) + 1;
+        dom.window.__fetchBody = JSON.parse(options.body || "{}");
         const operationId = options.headers?.["x-pi-operation-id"] || options.headers?.get?.("x-pi-operation-id") || "test-fetch";
         return json({ ok: true, projectId: "p1", fetched: true, operation: { id: operationId, status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Fetched Git branches." }] } });
       }
@@ -180,6 +181,12 @@ async function boot() {
         dom.window.__writeRequests = [...(dom.window.__writeRequests || []), request];
         if (dom.window.__staleWrites && !request.body.text.startsWith("/sync")) return json({ error: "sync_snapshot_stale" }, false, 409);
         return json({ ok: true, action: request.body.text.startsWith("/sync") ? "notice" : "session_meta", message: "sync is available" });
+      }
+      if (url === "/api/sessions/s1/branch-context" && options.method === "POST" && JSON.parse(options.body || "{}").mode === "fork") {
+        const body = JSON.parse(options.body);
+        dom.window.__forkBody = body;
+        state.projects[0].sessions.push({ id: "s-fork", title: body.name, contextId: "ctx-feature", branch: body.branch, workspacePath: "/tmp/demo-feature", model: "mock/fast", when: "now", streaming: false, children: [] });
+        return json({ id: "s-fork", forkedFrom: "s1", branch: body.branch, contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", setupNeeded: false, operation: { id: options.headers?.["x-pi-operation-id"] || "test-fork", status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: `Forked session s-fork on ${body.branch}.` }] } });
       }
       if (url === "/api/sessions/s1/branch-context" && options.method === "POST") {
         const project = state.projects[0];
@@ -371,15 +378,20 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
-  assert.equal(root.querySelector("[data-act='fork-session']").disabled, false, "fork to a new branch is an enabled action, not a disabled one");
+  assert.equal(root.querySelector("[data-act='open-fork']").disabled, false, "Fork is an enabled action");
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
-  assert.equal(root.querySelector("[data-session-name]").value, "New session");
-  const nameInput = root.querySelector("[data-session-name]");
-  nameInput.focus();
+  assert.equal(root.querySelector(".session-picker [data-session-name]"), null, "the session panel no longer edits the name");
+  assert.equal(root.querySelector(".session-picker .branch-picker-trigger"), null, "the branch dropdown is replaced by Switch");
+  const forkOpener = root.querySelector("[data-act='open-fork']");
+  forkOpener.focus();
+  const dialog = root.querySelector(".session-picker");
   store.notify("state");
-  assert.equal(root.querySelector("[data-session-name]"), nameInput, "an unchanged picker keeps its input node");
-  assert.equal(root.ownerDocument.activeElement, nameInput, "an unchanged picker keeps focus");
+  assert.equal(root.querySelector("[data-act='open-fork']"), forkOpener, "an unchanged picker keeps its nodes");
+  assert.equal(root.ownerDocument.activeElement, forkOpener, "an unchanged picker keeps focus");
+  store.set({ sessionPickerError: "transient" });
+  store.set({ sessionPickerError: null });
+  assert.equal(root.querySelector(".session-picker"), dialog, "updates keep the dialog, so its entry animation does not replay");
   const sessionDetails = root.querySelector(".session-branch-actions");
   assert.ok(sessionDetails);
   assert.deepEqual([...sessionDetails.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
@@ -397,27 +409,30 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector(".session-picker [data-act='fetch-branches']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(dom.window.__fetchCalls, 1);
-  assert.match(root.querySelector("[data-operation-hint='fetch']").textContent, /Fetched Git branches/);
+  assert.equal(dom.window.__fetchBody.sessionId, "s1", "a fetch from the panel names its session, so it is logged in that workspace's History");
   assert.match(root.querySelector(".app-toast").textContent, /Fetched Git branches/, "an async result is announced as a toast");
+  assert.equal(root.querySelector(".session-picker .session-operation-feed"), null, "no duplicate status line beneath History");
   assert.equal(root.querySelector(".session-branch-actions [data-act='run-hook']"), null);
   const sessionButtons = root.querySelector(".session-picker-session-buttons");
   const checkButton = root.querySelector(".session-picker-actions [data-act='run-hook']");
-  const forkButton = root.querySelector(".session-picker-actions [data-act='fork-session']");
+  const forkButton = root.querySelector(".session-picker-actions [data-act='open-fork']");
   assert.equal(checkButton.textContent, "Check");
-  assert.equal(checkButton.parentElement, sessionButtons);
-  assert.equal(forkButton.textContent, "Fork to new branch");
+  assert.ok(sessionButtons.contains(checkButton));
+  assert.equal(forkButton.textContent, "Fork…");
   assert.equal(root.querySelector(".session-picker-actions [data-act='close-session-picker']"), null);
   const gitSection = root.querySelector(".session-branch-actions");
   const sessionSection = root.querySelector(".session-picker-actions");
-  const operationFeed = root.querySelector(".session-operation-feed");
   assert.ok(sessionSection.compareDocumentPosition(gitSection) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, "Session comes before Git");
-  assert.ok(sessionSection.compareDocumentPosition(operationFeed) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.deepEqual([...gitSection.querySelector(".session-action-row").querySelectorAll("button")].map(button => button.textContent), ["Fetch", "Pull", "Push", "Switch…"], "Switch sits with the other Git commands");
   const feedNow = Date.now() + 1000;
-  store.state.operations.unshift({ id: "feed-test", kind: "fetch", title: "Fetch Git branches", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older fetch event" }, { at: feedNow, type: "result", message: "Latest fetch event" }] });
+  store.state.operations.unshift({ id: "feed-test", kind: "fetch", title: "Fetch Git branches", sessionId: "s1", status: "running", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older fetch event" }, { at: feedNow, type: "result", message: "Latest fetch event" }] });
   store.notify("state");
-  let feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
-  assert.ok(feedEvents.length >= 2);
-  assert.equal(feedEvents.at(-1).textContent, "Latest fetch event");
+  const runningEntry = root.querySelector(".history-entry.running");
+  assert.match(runningEntry.textContent, /Fetch Git branches/, "a running operation is listed at the top of History");
+  runningEntry.querySelector(".history-entry-head").click();
+  assert.match(root.querySelector(".history-entry.running .history-output").textContent, /Latest fetch event/);
+  store.state.operations[0].status = "success";
+  store.notify("state");
   const currentProject = store.state.projects.find(item => item.id === "p1");
   const currentSession = store.findSession("s1", currentProject.sessions);
   Object.assign(currentSession, {
@@ -463,6 +478,18 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   Object.assign(store.state.projects[0].sessions.find(item => item.id === "s1"), { syncState: "available", leaseHolder: null });
   store.notify("state");
   root.querySelector("[data-act='close-session-picker']").click();
+  // The whole header row is the hit target; its own buttons keep their actions.
+  for (const [selector, why] of [["pi-header header.bar", "the header row"], ["pi-header .bar-sub", "blank space on the Git line"], ["pi-header", "a tap left on <pi-header> by a re-render"]]) {
+    root.querySelector(selector).dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    assert.ok(root.querySelector(".session-picker"), `${why} opens the session panel`);
+    root.querySelector("[data-act='close-session-picker']").click();
+  }
+  root.querySelector("pi-header [data-act='files']").click();
+  assert.equal(root.querySelector(".session-picker"), null, "the Files toggle does not open the panel");
+  root.querySelector("pi-header [data-act='files']").click();
+  root.querySelector("pi-header [data-act='sidebar-toggle']").click();
+  assert.equal(root.querySelector(".session-picker"), null, "the sidebar toggle does not open the panel");
+  root.querySelector("pi-header [data-act='sidebar-toggle']").click();
   root.querySelector("pi-header .bar-title").click();
   assert.ok(root.querySelector(".session-picker"), "the chat header opens the session panel");
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -617,8 +644,6 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   dom.window.__staleWrites = false;
 
   root.querySelector("pi-header [data-act='workspace-settings']").click();
-  feedEvents = [...root.querySelectorAll(".session-operation-feed .session-operation-event")];
-  assert.equal(feedEvents.at(-1).textContent, "Latest fetch event", "picker logs survive close and reopen");
   assert.equal(root.querySelector("[data-act='run-hook']").textContent, "Check");
   assert.doesNotMatch(root.querySelector(".session-picker").textContent, /Run check/);
   assert.ok(root.querySelector("[data-act='pull-branch']"));
@@ -638,16 +663,45 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-act='run-hook']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(root.querySelector(".operation-modal"), null, "hook output stays out of a terminal modal");
-  assert.match(root.querySelector("[data-operation-hint='hook']").textContent, /check ok/);
-  root.querySelector("[data-act='toggle-branch-menu']").click();
-  assert.equal(root.querySelectorAll(".branch-picker-scroll .branch-option").length, 8);
-  assert.deepEqual([...root.querySelectorAll(".branch-picker-scroll .branch-option")].map(button => button.dataset.branch), [
+  assert.match(root.querySelector(".app-toast:last-child").textContent, /Check finished/);
+
+  // Fork: a step asking for a name and a branch; empty fields use a unique "(fork)" name and its branch.
+  state.projects[0].sessions.push({ id: "old-fork", title: "New session (fork)", contextId: "ctx-main", branch: "main", workspacePath: "/tmp/demo", model: "mock/fast", when: "now", streaming: false, children: [] });
+  await refreshState();
+  root.querySelector("[data-act='open-fork']").click();
+  assert.equal(root.querySelector(".session-picker .modal-title").textContent, "Fork session");
+  assert.equal(root.querySelector("[data-fork-name]").placeholder, "New session (fork 2)", "the default name is unique among sessions");
+  assert.equal(root.querySelector("[data-fork-branch]").placeholder, "feature/new-session-fork-2");
+  root.querySelector("[data-act='back-session-picker']").click();
+  assert.ok(root.querySelector("[data-act='open-fork']"), "< returns to the main screen");
+  root.querySelector("[data-act='open-fork']").click();
+  root.querySelector("[data-act='fork-session']").click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([dom.window.__forkBody.name, dom.window.__forkBody.branch, dom.window.__forkBody.mode], ["New session (fork 2)", "feature/new-session-fork-2", "fork"]);
+  assert.equal(store.state.sessionId, "s-fork", "the copy opens");
+  state.projects[0].sessions = state.projects[0].sessions.filter(session => !["old-fork", "s-fork"].includes(session.id));
+  await refreshState();
+  selectSession("p1", "s1");
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  // Switch: a step listing branches; choosing one moves the session (the dropdown is gone).
+  root.querySelector("pi-header [data-act='workspace-settings']").click();
+  root.querySelector("[data-act='open-switch']").click();
+  assert.equal(root.querySelector(".session-picker .modal-title").textContent, "Switch branch");
+  assert.deepEqual([...root.querySelectorAll(".branch-list .branch-option")].map(button => button.dataset.branch), [
     "main", "develop", "feature/alpha", "feature/beta", "feature/delta", "feature/epsilon", "feature/gamma", "feature/viewer",
   ]);
-  assert.equal(root.querySelector(".branch-picker-pinned"), null);
-  assert.ok(root.querySelector("[data-act='select-session-branch'][data-branch='__new__']"));
-  root.querySelector("[data-act='select-session-branch'][data-branch='develop']").click();
+  assert.equal(root.querySelector(".branch-list [data-branch='main']").disabled, true, "the current branch is not a choice");
+  assert.equal(root.querySelector("[data-act='switch-new-branch']").disabled, true);
+  const switchBranchInput = root.querySelector("[data-session-new-branch]");
+  switchBranchInput.value = "feature/typed";
+  switchBranchInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(root.querySelector("[data-act='switch-new-branch']").disabled, false, "naming a new branch enables its switch");
+  switchBranchInput.value = "";
+  switchBranchInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  root.querySelector(".branch-list [data-branch='develop']").click();
   await new Promise(resolve => setTimeout(resolve, 20));
+  await refreshState();
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
   assert.equal(store.findSession("s1", store.state.projects[0].sessions).branch, "develop");
   assert.match(root.querySelector("pi-header .workspace-branch").textContent, /develop/);
@@ -724,7 +778,8 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".operation-modal"), null, "session creation stays non-blocking");
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.equal(root.querySelector(".bar-operation-hint"), null, "opening the picker removes the title hint space");
-  assert.ok(root.querySelector(".session-operation-feed"));
+  assert.match(root.querySelector(".history-entry.running")?.textContent || "", /Setup/, "running setup is listed in History until it finishes");
+  assert.equal(root.querySelector(".session-picker .session-operation-feed"), null);
   root.querySelector("[data-act='close-session-picker']").click();
   openSessionPicker("p1", { mode: "switch", sourceSessionId: "s1" });
   dom.window.__setupFails = true;

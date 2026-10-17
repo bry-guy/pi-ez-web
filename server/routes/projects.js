@@ -1,5 +1,5 @@
 export function register(api, deps) {
-  const { path, loadConfig, newId, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup, syncAdapter } = deps;
+  const { path, loadConfig, newId, sessionWorkspace, normalizeHooks, repositorySource, reposRoot, resolvePath, saveConfig, hub, ws, cloneRepository, projectHooks, createOperationReporter, operationRequestId, assertRepositoryIdentity, err, withRepositoryAdmission, projectContext, projectContextAsync, bindSessionToContext, branchContextAsync, ensureBranchContext, sessionBelongsToProject, github, sup, syncAdapter } = deps;
 
 
   api.post("/projects", async c => {
@@ -62,6 +62,8 @@ export function register(api, deps) {
     const body = (await c.req.json().catch(() => ({}))) || {};
     const reporter = createOperationReporter({ id: operationRequestId(c, body), kind: "fetch", title: "Fetch Git branches" });
     reporter.log({ type: "request", phase: "request", message: `POST /api/projects/${id}/fetch` });
+    // Fetched from a session panel: keep it in that session's workspace history.
+    if (typeof body.sessionId === "string" && body.sessionId) reporter.bind(await sessionWorkspace(body.sessionId, sup).catch(() => null));
     return withRepositoryAdmission(c, project.repoPath, async identity => {
       const currentProject = loadConfig().projects.find(item => item.id === id);
       if (!currentProject) return err(c, 404, "no_such_project");

@@ -77,6 +77,7 @@ export function register(api, deps) {
         const operation = reporter.finish({ status: "error", httpStatus: 409, message: "The session started streaming while preparing the branch." });
         return err(c, 409, "session_streaming", { operation });
       }
+      reporter.bind(context.path);
       if (body.mode === "fork") {
         const setupNeeded = !existed && context.kind !== "checkout" && !!projectHooks(loadConfig(), project).setup;
         reporter.log({ type: "phase", phase: "fork-session", message: `Forking session ${id} into ${context.path}.` });

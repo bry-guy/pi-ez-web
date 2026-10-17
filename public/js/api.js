@@ -72,7 +72,7 @@ export const api = {
   refreshSyncSession: requestSyncRefresh,
   checkSyncSession: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync/check`, { method: "POST", headers: JH, body: JSON.stringify({}) }).then(j),
   syncStatus: id => fetch(`/api/sessions/${encodeURIComponent(id)}/sync`).then(j),
-  fetchProject: (id, operationId = null) => fetch(`/api/projects/${encodeURIComponent(id)}/fetch`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify(operationId ? { operationId } : {}) }).then(j),
+  fetchProject: (id, operationId = null, sessionId = null) => fetch(`/api/projects/${encodeURIComponent(id)}/fetch`, { method: "POST", headers: { ...JH, ...(operationId ? { "x-pi-operation-id": operationId } : {}) }, body: JSON.stringify({ ...(operationId ? { operationId } : {}), ...(sessionId ? { sessionId } : {}) }) }).then(j),
   newChat: () => fetch("/api/chats", { method: "POST" }).then(j),
   newProject: value => {
     const body = typeof value === "string" ? { repoPath: value } : (value || {});

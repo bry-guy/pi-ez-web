@@ -77,8 +77,10 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     events: operation.events.slice(),
   });
 
-  // Operations bound to a workspace are also kept in that workspace's history.
-  const bind = workspace => { operation.workspace = workspace || null; };
+  // Operations bound to workspaces are also kept in each one's history (a switch
+  // or merge is recorded where the session was and where it lands).
+  const workspaces = new Set();
+  const bind = workspace => { if (workspace) workspaces.add(workspace); };
 
   const finish = ({ status = "success", httpStatus = null, exit = null, message = "" } = {}) => {
     operation.status = status;
@@ -87,7 +89,7 @@ export function createOperationReporter({ id = null, sessionId = null, kind = "o
     operation.exit = exit;
     if (message) log({ type: status === "success" ? "result" : "error", message });
     const result = snapshot();
-    if (operation.workspace) recordHistory(operation.workspace, result);
+    for (const workspace of workspaces) recordHistory(workspace, result);
     publish(operation.sessionId, "operation_complete", { operationId: operation.id, operation: result });
     return result;
   };

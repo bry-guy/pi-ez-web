@@ -1,8 +1,24 @@
 import { api, refreshState } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
 import { setHTML, store, toast } from "./store.js";
-import { esc, selectSession } from "./shell.js";
-import { gitErrorMessage, runningPickerOperation, pickerError, launchSetup, pickerOperationFeed, featureBranchForName } from "./panel-utils.js";
+import { esc, icon, selectSession } from "./shell.js";
+import { gitErrorMessage, runningPickerOperation, pickerError, launchSetup, pickerOperationFeed, pickerOperationKinds, featureBranchForName } from "./panel-utils.js";
+
+// A fork's default name: the session's name plus the first free "(fork)", "(fork 2)", … among the project's sessions.
+export function uniqueForkName(name, taken) {
+  const base = String(name || "Session").replace(/\s+\(fork(?: \d+)?\)$/, "").trim() || "Session";
+  const names = new Set(taken);
+  for (let n = 1; ; n++) {
+    const candidate = `${base} (fork${n === 1 ? "" : ` ${n}`})`;
+    if (!names.has(candidate)) return candidate;
+  }
+}
+
+function uniqueBranch(branch, taken) {
+  const names = new Set(taken);
+  if (!names.has(branch)) return branch;
+  for (let n = 2; ; n++) if (!names.has(`${branch}-${n}`)) return `${branch}-${n}`;
+}
 
 
 /* ---------------- branch/session picker ---------------- */
@@ -23,7 +39,12 @@ class PiSessionPicker extends HTMLElement {
           this.syncActionState();
         }
       }
-      if (e.target.matches("[data-session-fork-branch]")) picker.forkBranch = e.target.value;
+      if (e.target.matches("[data-fork-name]")) {
+        picker.forkName = e.target.value;
+        const branchInput = this.querySelector("[data-fork-branch]");
+        if (branchInput) branchInput.placeholder = this.forkDefaults().branch;
+      }
+      if (e.target.matches("[data-fork-branch]")) picker.forkBranch = e.target.value;
       if (e.target.matches("[data-session-new-branch]")) {
         picker.newBranch = e.target.value;
         picker.newBranchAuto = false;
@@ -47,6 +68,40 @@ class PiSessionPicker extends HTMLElement {
 
   close() { store.set({ sessionPicker: null, sessionPickerError: null }); }
 
+  // The panel's steps (Switch, Fork) replace its body; "<" returns to the main screen.
+  showScreen(screen) {
+    const picker = this.picker();
+    if (!picker || this.busy) return;
+    picker.screen = screen;
+    picker.branchMenuOpen = false;
+    if (screen === "switch") { picker.branch = picker.currentBranch; picker.newBranch = ""; picker.newBranchAuto = false; }
+    if (screen === "fork") { picker.forkName = ""; picker.forkBranch = ""; }
+    store.set({ sessionPickerError: null });
+    queueMicrotask(() => this.querySelector(screen === "fork" ? "[data-fork-name]" : "[data-act='back-session-picker']")?.focus());
+  }
+
+  allBranches(project) {
+    return [...new Set([...(project.branches || []), ...(project.remoteBranches || []).map(name => name.replace(/^origin\//, "")), ...(project.contexts || []).map(context => context.branch).filter(Boolean)])];
+  }
+
+  forkDefaults() {
+    const picker = this.picker();
+    const project = this.project();
+    if (!picker || !project) return { name: "", branch: "" };
+    const source = this.flatten(project.sessions).find(session => session.id === picker.sourceSessionId);
+    const taken = this.flatten(project.sessions).map(session => session.title || session.name).filter(Boolean);
+    const defaultName = uniqueForkName(source?.name || source?.title || picker.name, taken);
+    const name = String(picker.forkName || "").trim() || defaultName;
+    return { name, defaultName, branch: uniqueBranch(featureBranchForName(name) || "feature/fork", this.allBranches(project)) };
+  }
+
+  async submitFork() {
+    const picker = this.picker();
+    if (!picker) return;
+    const { name, branch } = this.forkDefaults();
+    await this.submit("fork", String(picker.forkBranch || "").trim() || branch, name);
+  }
+
   async selectBranch(branch) {
     const picker = this.picker();
     if (!picker) return;
@@ -61,7 +116,7 @@ class PiSessionPicker extends HTMLElement {
       queueMicrotask(() => this.querySelector("[data-session-new-branch]")?.focus());
       return;
     }
-    if (picker.mode === "switch" && picker.sourceSessionId && branch !== picker.currentBranch) await this.submit("switch");
+    if (picker.mode === "switch" && picker.sourceSessionId && branch !== picker.currentBranch) await this.submit("switch", null, null);
   }
 
   syncActionState() {
@@ -72,6 +127,7 @@ class PiSessionPicker extends HTMLElement {
     for (const button of this.querySelectorAll("[data-act='create-session-context'], [data-act='apply-session-branch']")) {
       button.disabled = !branch || (button.dataset.mode && branch === current);
     }
+    for (const button of this.querySelectorAll("[data-new-branch-action]")) button.disabled = !String(picker.newBranch || "").trim();
   }
 
   detailFileCount(count, label) {
@@ -137,7 +193,7 @@ class PiSessionPicker extends HTMLElement {
     store.set({ sessionPickerError: null });
     let result = null;
     try {
-      result = await api.fetchProject(project.id, operation.id);
+      result = await api.fetchProject(project.id, operation.id, sessionId);
       await refreshState();
       completeOperation(operation, result);
       toast("Fetched Git branches.");
@@ -175,6 +231,13 @@ class PiSessionPicker extends HTMLElement {
         store.state.openTree[project.id] = true;
         selectSession(project.id, id, { showOperation: true });
       }
+      return;
+    }
+    if (act === "open-switch" || act === "open-fork") { this.showScreen(act === "open-switch" ? "switch" : "fork"); return; }
+    if (act === "back-session-picker") { this.showScreen("main"); return; }
+    if (act === "switch-new-branch") {
+      const picker = this.picker();
+      if (picker) { picker.branch = "__new__"; await this.submit("switch", null, null); }
       return;
     }
     if (act === "toggle-branch-menu") {
@@ -216,7 +279,7 @@ class PiSessionPicker extends HTMLElement {
       store.set({ confirm: { type: "deleteBranch", projectId: project.id, id: picker.sourceSessionId, branch: picker.currentBranch, primaryBranch, label: picker.currentBranch, sessions: context?.sessions || [], closeSessions: false, force: false, dirty: context?.dirty ?? false, status: context?.status || "unknown", error: null } });
       return;
     }
-    if (act === "fork-session") { await this.submit("fork", String(this.picker()?.forkBranch ?? "").trim()); return; }
+    if (act === "fork-session") { await this.submitFork(); return; }
     if (act === "toggle-history") {
       const picker = this.picker();
       const id = e.target.closest("[data-act]").dataset.id;
@@ -263,11 +326,12 @@ class PiSessionPicker extends HTMLElement {
     } finally { this.busy = false; this.busyLabel = null; this.afterOperation(); }
   }
 
-  async submit(mode, forkBranch = null) {
+  async submit(mode, forkBranch = null, nameOverride = undefined) {
     const picker = this.picker(); const project = this.project();
     if (!picker || !project || this.busy) return;
     const primary = project.defaultBranch || project.primaryBranch || "main";
-    const enteredName = String(picker.name || "").trim();
+    // An existing session's panel no longer edits its name: a switch keeps it, a fork names the copy.
+    const enteredName = String(nameOverride === undefined ? picker.name || "" : nameOverride || "").trim();
     let branch = forkBranch ?? (picker.branch === "__new__" ? String(picker.newBranch || "").trim() : String(picker.branch || "").trim());
     if (!branch && enteredName && (mode === "fork" || picker.branch === "__new__" || !picker.branch)) {
       branch = featureBranchForName(enteredName);
@@ -326,7 +390,7 @@ class PiSessionPicker extends HTMLElement {
     if (!id || this.busy) return;
     this.busy = true;
     this.busyLabel = "Pulling…";
-    const operation = beginOperation("pull", "Pull", "", "Request started.");
+    const operation = beginOperation("pull", "Pull", "", "Request started.", id);
     let result = null;
     try {
       result = await api.pullBranch(id);
@@ -375,14 +439,81 @@ class PiSessionPicker extends HTMLElement {
     } finally { this.afterOperation(); }
   }
 
+  // Recent operations still running for this session, shown at the top of History until they are logged.
+  runningEntries(sessionId) {
+    return (store.state.operations || [])
+      .filter(operation => operation.status === "running" && operation.sessionId === sessionId && (pickerOperationKinds.has(operation.kind) || operation.kind === "pull"))
+      .map(operation => ({
+        id: operation.id, title: operation.title, status: "running", at: operation.startedAt,
+        output: (operation.events || []).map(event => event.output || event.message).filter(Boolean).join("\n"),
+      }));
+  }
+
+  historySection(picker) {
+    const entryRow = entry => {
+      const open = !!picker.openHistory?.includes(entry.id);
+      const when = new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      const outcome = entry.status === "success" ? "ok" : entry.status === "error" ? "failed" : entry.status;
+      return `<div class="history-entry ${esc(entry.status)}"><button type="button" class="history-entry-head" data-act="toggle-history" data-id="${esc(entry.id)}" aria-expanded="${open}"><span class="history-main"><strong>${esc(entry.title)}</strong><small>${esc(when)}${entry.exit != null ? ` · exit ${esc(entry.exit)}` : ""}</small></span><span class="history-status">${entry.status === "running" ? `<i class="operation-dot" aria-hidden="true"></i>` : ""}${esc(outcome)}</span></button>${open ? `<pre class="history-output">${esc(entry.output || "No output.")}</pre>` : ""}</div>`;
+    };
+    const running = this.runningEntries(picker.sourceSessionId);
+    const logged = picker.history || [];
+    const entries = [...running, ...logged.filter(entry => !running.some(item => item.id === entry.id))];
+    const body = picker.history == null && !running.length
+      ? `<div class="session-history-empty">Loading history…</div>`
+      : entries.length ? entries.map(entryRow).join("")
+        : `<div class="session-history-empty">${esc(picker.historyError || "Nothing has run in this workspace yet. Setup, fetches, pulls, pushes, merges, forks and switches appear here.")}</div>`;
+    return `<section class="session-history-log" aria-label="History">
+        <div class="session-context-heading"><span>History</span>${entries.length ? `<span>${entries.length}</span>` : ""}</div>
+        <div class="history-list">${body}</div>
+      </section>`;
+  }
+
+  // The Switch step: pick a branch to move this session onto, or name a new one.
+  switchBody(project, branches, primary, branchMeta) {
+    const picker = this.picker();
+    const current = picker.currentBranch || "";
+    const options = branches.map(branch => `<button type="button" class="branch-option" data-act="select-session-branch" data-branch="${esc(branch)}" role="option" aria-selected="${branch === current}" ${branch === current || this.busy ? "disabled" : ""}><span class="branch-option-name">${esc(branch)}</span><span class="branch-option-meta">${esc(branch === current ? "current" : branchMeta(branch))}</span></button>`).join("");
+    const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
+    const newBranch = String(picker.newBranch || "").trim();
+    return `<section class="session-switch" aria-label="Switch branch">
+        <p class="session-picker-help">Moves this session onto another branch. Branches other than ${esc(primary)} use their own worktree.</p>
+        <div class="session-context-heading"><span>Branches</span><span>${branches.length}</span></div>
+        <div class="branch-list" role="listbox" aria-label="Branches">${options}</div>
+        <div class="session-context-heading"><span>New branch</span></div>
+        <div class="session-form">
+          <label class="session-picker-source"><span>Name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label>
+          <label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label>
+        </div>
+        <div class="session-action-row"><button class="btn btn-ghost" data-act="back-session-picker">Cancel</button><button class="btn btn-primary" data-act="switch-new-branch" data-new-branch-action ${this.busy || !newBranch ? "disabled" : ""}>Switch to new branch</button></div>
+      </section>`;
+  }
+
+  // The Fork step: name the copy and its branch; empty fields use the shown defaults.
+  forkBody() {
+    const picker = this.picker();
+    const defaults = this.forkDefaults();
+    return `<section class="session-fork" aria-label="Fork session">
+        <p class="session-picker-help">Copies this conversation to a new branch in its own worktree and opens the copy. This session stays where it is.</p>
+        <div class="session-form">
+          <label class="session-picker-source"><span>Name</span><input class="session-name-input" data-fork-name value="${esc(picker.forkName || "")}" placeholder="${esc(defaults.defaultName)}" autocomplete="off"></label>
+          <label class="session-picker-source"><span>Branch</span><input class="session-branch-input" data-fork-branch value="${esc(picker.forkBranch || "")}" placeholder="${esc(defaults.branch)}" autocomplete="off"></label>
+        </div>
+        <div class="session-action-row"><button class="btn btn-ghost" data-act="back-session-picker">Cancel</button><button class="btn btn-primary" data-act="fork-session" ${this.busy ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Forking…") : "Fork"}</button></div>
+      </section>`;
+  }
+
   render() {
     const picker = this.picker();
-    if (!picker) { setHTML(this, ""); return; }
-    const project = this.project();
-    if (!project) { setHTML(this, ""); return; }
+    const project = picker ? this.project() : null;
+    if (!picker || !project) {
+      setHTML(this, "");
+      this.shownScreen = null;
+      return;
+    }
     const focused = document.activeElement;
     const focusKey = focused && this.contains(focused) && focused.matches("input, select")
-      ? [...focused.attributes].map(attribute => attribute.name).find(name => name.startsWith("data-session-"))
+      ? [...focused.attributes].map(attribute => attribute.name).find(name => name.startsWith("data-session-") || name.startsWith("data-fork-"))
       : null;
     const selectionStart = focused?.selectionStart;
     const selectionEnd = focused?.selectionEnd;
@@ -392,13 +523,14 @@ class PiSessionPicker extends HTMLElement {
     const branches = [...new Set([primary, ...(project.branches || []), ...contexts.map(context => context.branch).filter(Boolean)])]
       .sort((a, b) => (a === primary ? -1 : b === primary ? 1 : a.localeCompare(b)));
     const existing = picker.mode !== "new";
-    const selected = picker.branch || (existing ? picker.currentBranch || project.branch || primary : primary);
-    const isNew = selected === "__new__";
+    const screen = existing ? picker.screen || "main" : "main";
+    const current = picker.currentBranch || "";
+    const selected = existing ? current || project.branch || primary : picker.branch || primary;
+    const isNew = !existing && selected === "__new__";
     const effectiveBranch = isNew ? String(picker.newBranch || "").trim() : selected;
     const context = contextFor(effectiveBranch);
     const users = (context?.sessions || []).filter(user => user.id !== picker.sourceSessionId);
     const sourceSession = picker.sourceSessionId ? this.flatten(project.sessions).find(session => session.id === picker.sourceSessionId) : null;
-    const current = picker.currentBranch || "";
     const onCurrent = existing && !!current && effectiveBranch === current;
     const primarySelected = current === primary;
     const primaryReason = `Unavailable for ${primary}; ${primary} is the primary checkout.`;
@@ -408,88 +540,97 @@ class PiSessionPicker extends HTMLElement {
       if (!item) return "not checked out";
       return `${item.kind === "checkout" ? "CHECKOUT" : "WORKTREE"} · ${item.status || (item.dirty ? "dirty" : "clean")}`;
     };
-    const branchButton = branch => `<button type="button" class="branch-option" data-act="select-session-branch" data-branch="${esc(branch)}" role="option" aria-selected="${selected === branch}"><span class="branch-option-name">${esc(branch)}</span><span class="branch-option-meta">${esc(branchMeta(branch))}</span></button>`;
-    const selectedBranchLabel = isNew ? "＋ New branch…" : selected;
-    const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>${branches.length} available</span></div><div class="branch-picker-scroll" aria-label="Branches">${branches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button></div>` : "";
-    const branchField = `<div class="branch-picker"><button type="button" class="branch-picker-trigger" data-act="toggle-branch-menu" aria-expanded="${!!picker.branchMenuOpen}" aria-haspopup="listbox"><span>${esc(selectedBranchLabel)}</span><span class="branch-picker-caret">${picker.branchMenuOpen ? "⌃" : "⌄"}</span></button>${branchMenu}</div>`;
-    const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
     const detailList = rows => `<dl class="session-details-list">${rows.map(([key, value, title = ""]) => `<div class="session-detail-row"><dt>${esc(key)}</dt><dd${title ? ` title="${esc(title)}"` : ""}>${esc(value)}</dd></div>`).join("")}</dl>`;
-    const fetchRunning = !!runningPickerOperation("fetch", picker.sourceSessionId);
-    const fetchButton = `<button class="btn btn-secondary" data-act="fetch-branches" title="Fetch remote Git branches" aria-label="Fetch remote Git branches" ${this.busy || fetchRunning ? "disabled" : ""}>${this.busy && this.busyLabel === "Fetching…" ? "Fetching…" : "Fetch"}</button>`;
-    const hookNames = existing && picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name) : [];
-    const hookLabel = name => name ? `${name[0].toUpperCase()}${name.slice(1)}` : name;
-    const hookButtons = hookNames.map(name => {
-      const label = hookLabel(name);
-      const running = !!runningPickerOperation("hook", picker.sourceSessionId, label);
-      return `<button class="btn btn-secondary" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? `${label}ing…` : name === "setup" ? "Run project setup script" : label)}</button>`;
-    }).join("");
     this.loadSynced();
     this.loadHistory();
 
-    const forkBranch = picker.forkBranch ?? featureBranchForName(picker.name || "") ?? "";
-    const sessionSection = existing ? `<section class="session-picker-actions" aria-label="Session">
-        <div class="session-context-heading"><span>Session</span></div>
-        <label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label>
-        <label class="session-picker-source"><span>Branch</span>${branchField}</label>
-        <p class="session-picker-help">Choosing another branch moves this session onto it.</p>
-        ${this.syncRows(sourceSession).length ? detailList(this.syncRows(sourceSession)) : ""}
-        <div class="session-fork">
-          <label class="session-picker-source"><span>New branch for the copy</span><input class="session-branch-input" data-session-fork-branch value="${esc(forkBranch)}" placeholder="feature/my-change" autocomplete="off"></label>
-          <button class="btn btn-secondary session-fork-btn" data-act="fork-session" ${this.busy ? "disabled" : ""}>Fork to new branch</button>
-          <p class="session-picker-help">Copies this conversation to a new branch in its own worktree. This session stays where it is.</p>
-        </div>
-        ${hookButtons ? `<div class="workspace-actions session-picker-session-buttons">${hookButtons}</div>` : ""}
-        ${hookNames.includes("setup") ? `<p class="session-picker-help">Setup runs the project's setup hook in the new worktree.</p>` : ""}
-      </section>` : "";
-    const nameAndBranch = existing ? "" : `<label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>`;
-    const newBranchFields = !existing && isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : "";
-
-    const gitRows = this.gitRows(context);
-    const gitSection = `<section class="session-branch-actions" aria-label="Git">
+    let body;
+    if (existing && screen === "switch") body = this.switchBody(project, branches, primary, branchMeta);
+    else if (existing && screen === "fork") body = this.forkBody();
+    else {
+      const fetchRunning = !!runningPickerOperation("fetch", picker.sourceSessionId);
+      const fetchButton = `<button class="btn btn-secondary" data-act="fetch-branches" title="Fetch remote Git branches" aria-label="Fetch remote Git branches" ${this.busy || fetchRunning ? "disabled" : ""}>${this.busy && this.busyLabel === "Fetching…" ? "Fetching…" : "Fetch"}</button>`;
+      const gitRows = this.gitRows(context);
+      const gitButtons = existing
+        ? `${fetchButton}${onCurrent ? `<button class="btn btn-secondary" data-act="pull-branch" ${this.busy ? "disabled" : ""}>Pull</button><button class="btn btn-secondary" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button>` : ""}<button class="btn btn-secondary" data-act="open-switch" ${this.busy ? "disabled" : ""}>Switch…</button>`
+        : fetchButton;
+      const gitSection = `<section class="session-branch-actions" aria-label="Git">
         <div class="session-context-heading"><span>Git</span></div>
         ${gitRows.length ? detailList(gitRows) : `<p class="session-picker-help">Not checked out yet. ${esc(effectiveBranch ? `${effectiveBranch} will get a worktree when you create the session.` : "Choose a branch.")}</p>`}
         <div class="session-context-users branch-user-list">${userText}</div>
-        <div class="session-action-row">${fetchButton}${onCurrent ? `<button class="btn btn-secondary" data-act="pull-branch" ${this.busy ? "disabled" : ""}>Pull</button><button class="btn btn-secondary" data-act="push-branch" ${this.busy ? "disabled" : ""}>${this.busy && this.busyLabel === "Checking commits to push…" ? esc(this.busyLabel) : "Push"}</button>` : ""}</div>
-        ${onCurrent ? `<div class="session-action-row session-danger-row"><button class="btn btn-primary" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button><button class="btn btn-caution" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button></div>` : ""}
+        <div class="session-action-row">${gitButtons}</div>
+        ${onCurrent ? `<div class="session-action-row session-danger-row"><button class="btn btn-caution" data-act="delete-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : "Delete local branch"}">Delete</button><button class="btn btn-primary" data-act="merge-branch" ${primarySelected || this.busy ? "disabled" : ""} title="${primarySelected ? esc(primaryReason) : `Merge to ${esc(primary)}`}">Merge to ${esc(primary)}</button></div>` : ""}
       </section>`;
-
-    const entryRow = entry => {
-      const open = !!picker.openHistory?.includes(entry.id);
-      const when = new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-      const outcome = entry.status === "success" ? "ok" : entry.status === "error" ? "failed" : entry.status;
-      return `<div class="history-entry ${esc(entry.status)}"><button type="button" class="history-entry-head" data-act="toggle-history" data-id="${esc(entry.id)}" aria-expanded="${open}"><span class="history-main"><strong>${esc(entry.title)}</strong><small>${esc(when)}${entry.exit != null ? ` · exit ${esc(entry.exit)}` : ""}</small></span><span class="history-status">${esc(outcome)}</span></button>${open ? `<pre class="history-output">${esc(entry.output || "No output.")}</pre>` : ""}</div>`;
-    };
-    const historyBody = picker.history === undefined || picker.history === null
-      ? `<div class="session-history-empty">Loading history…</div>`
-      : picker.history.length ? picker.history.map(entryRow).join("")
-        : `<div class="session-history-empty">${esc(picker.historyError || "Nothing has run in this workspace yet. Hooks, pulls, pushes, merges, forks and switches appear here.")}</div>`;
-    const historySection = existing ? `<section class="session-history-log" aria-label="History">
-        <div class="session-context-heading"><span>History</span>${picker.history?.length ? `<span>${picker.history.length}</span>` : ""}</div>
-        <div class="history-list">${historyBody}</div>
-      </section>` : "";
-
-    const syncedRows = (picker.synced || []).map(item => `<button type="button" class="session-history-row" data-act="open-synced" data-sync-id="${esc(item.sessionId)}" data-branch="${esc(item.branch || "")}" aria-label="Open ${esc(item.title || "Untitled conversation")}"><span class="session-history-main"><strong>${esc(item.title || "Untitled conversation")}</strong><small>${esc(item.branch || primary)}${item.leaseHolder ? ` · running on ${esc(item.leaseHolder)}` : ""}</small></span><span class="session-history-resume">Open</span></button>`).join("");
-    const syncedSection = !existing && picker.synced?.length ? `<section class="session-history"><div class="session-context-heading session-history-heading"><span>From other devices</span><span>${picker.synced.length}</span></div><div class="session-history-scroll">${syncedRows}</div></section>` : "";
-    const sessionList = existing ? [] : this.flatten(project.sessions);
-    const sessionRows = sessionList.map(session => {
-      const sessionBranch = session.branch || contexts.find(item => item.id === session.contextId)?.branch || primary;
-      return `<button type="button" class="session-history-row" data-act="resume-session" data-id="${esc(session.id)}" aria-label="Resume ${esc(session.title || "Untitled session")}"><span class="session-history-main"><strong>${esc(session.title || "Untitled session")}</strong><small>${esc(sessionBranch)}${session.when ? ` · ${esc(session.when)}` : ""}</small></span><span class="session-history-resume">Resume</span></button>`;
-    }).join("");
-    const sessionsSection = existing ? "" : `<section class="session-history"><div class="session-context-heading session-history-heading"><span>Sessions</span><span>${sessionList.length} session${sessionList.length === 1 ? "" : "s"}</span></div><div class="session-history-scroll">${sessionRows || `<div class="session-history-empty">No previous sessions yet.</div>`}</div></section>`;
-    const createSection = existing ? "" : `<section class="session-picker-actions"><div class="workspace-actions"><button class="btn btn-primary" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button></div></section>`;
+      if (existing) {
+        const hookNames = picker.sourceSessionId ? Object.entries(project.hooks || {}).filter(([name, enabled]) => enabled && name).map(([name]) => name).sort((a, b) => (a === "setup" ? -1 : b === "setup" ? 1 : a.localeCompare(b))) : [];
+        const hookLabel = name => `${name[0].toUpperCase()}${name.slice(1)}`;
+        const actionRow = (title, hint, button) => `<div class="panel-row"><div class="panel-row-text"><strong>${esc(title)}</strong><small>${esc(hint)}</small></div>${button}</div>`;
+        const hookRows = hookNames.map(name => {
+          const label = hookLabel(name);
+          const running = !!runningPickerOperation("hook", picker.sourceSessionId, label);
+          const hint = name === "setup" ? "Runs the project's setup script (e.g. npm ci) in this worktree." : `Runs the project's ${name} hook in this worktree.`;
+          return actionRow(label, hint, `<button class="btn btn-secondary" data-act="run-hook" data-hook="${esc(name)}" ${running ? "disabled" : ""}>${esc(running ? "Running…" : label)}</button>`);
+        }).join("");
+        const syncRows = this.syncRows(sourceSession);
+        const sessionSection = `<section class="session-picker-actions" aria-label="Session">
+          <div class="session-context-heading"><span>Session</span></div>
+          ${syncRows.length ? detailList(syncRows) : ""}
+          <div class="panel-rows session-picker-session-buttons">
+            ${actionRow("Fork", "Copies this conversation to a new branch and worktree.", `<button class="btn btn-secondary" data-act="open-fork" ${this.busy ? "disabled" : ""}>Fork…</button>`)}
+            ${hookRows}
+          </div>
+        </section>`;
+        body = `${sessionSection}${gitSection}${this.historySection(picker)}`;
+      } else {
+        const selectedBranchLabel = isNew ? "＋ New branch…" : selected;
+        const branchButton = branch => `<button type="button" class="branch-option" data-act="select-session-branch" data-branch="${esc(branch)}" role="option" aria-selected="${selected === branch}"><span class="branch-option-name">${esc(branch)}</span><span class="branch-option-meta">${esc(branchMeta(branch))}</span></button>`;
+        const branchMenu = picker.branchMenuOpen ? `<div class="branch-picker-menu" role="listbox" aria-label="Branches"><div class="branch-picker-menu-head"><span>Branches</span><span>${branches.length} available</span></div><div class="branch-picker-scroll" aria-label="Branches">${branches.map(branchButton).join("")}</div><button type="button" class="branch-new-option" data-act="select-session-branch" data-branch="__new__">＋ New branch…</button></div>` : "";
+        const branchField = `<div class="branch-picker"><button type="button" class="branch-picker-trigger" data-act="toggle-branch-menu" aria-expanded="${!!picker.branchMenuOpen}" aria-haspopup="listbox"><span>${esc(selectedBranchLabel)}</span><span class="branch-picker-caret">${picker.branchMenuOpen ? "⌃" : "⌄"}</span></button>${branchMenu}</div>`;
+        const baseOptions = branches.map(branch => `<option value="${esc(branch)}" ${(picker.baseBranch || primary) === branch ? "selected" : ""}>${esc(branch)}</option>`).join("");
+        const nameAndBranch = `<label class="session-picker-source"><span>Name</span><input class="session-name-input" data-session-name value="${esc(picker.name || "")}" placeholder="Autonamed if empty" autocomplete="off"></label><label class="session-picker-source"><span>Branch</span>${branchField}</label>`;
+        const newBranchFields = isNew ? `<label class="session-picker-source"><span>New branch name</span><input class="session-branch-input" data-session-new-branch value="${esc(picker.newBranch || "")}" placeholder="feature/my-change" autocomplete="off"></label><label class="session-picker-source"><span>Based on</span><select data-session-base-branch>${baseOptions}</select></label><div class="session-picker-help">Non-${esc(primary)} branches use worktrees.</div>` : "";
+        const syncedRows = (picker.synced || []).map(item => `<button type="button" class="session-history-row" data-act="open-synced" data-sync-id="${esc(item.sessionId)}" data-branch="${esc(item.branch || "")}" aria-label="Open ${esc(item.title || "Untitled conversation")}"><span class="session-history-main"><strong>${esc(item.title || "Untitled conversation")}</strong><small>${esc(item.branch || primary)}${item.leaseHolder ? ` · running on ${esc(item.leaseHolder)}` : ""}</small></span><span class="session-history-resume">Open</span></button>`).join("");
+        const syncedSection = picker.synced?.length ? `<section class="session-history"><div class="session-context-heading session-history-heading"><span>From other devices</span><span>${picker.synced.length}</span></div><div class="session-history-scroll">${syncedRows}</div></section>` : "";
+        const sessionList = this.flatten(project.sessions);
+        const sessionRows = sessionList.map(session => {
+          const sessionBranch = session.branch || contexts.find(item => item.id === session.contextId)?.branch || primary;
+          return `<button type="button" class="session-history-row" data-act="resume-session" data-id="${esc(session.id)}" aria-label="Resume ${esc(session.title || "Untitled session")}"><span class="session-history-main"><strong>${esc(session.title || "Untitled session")}</strong><small>${esc(sessionBranch)}${session.when ? ` · ${esc(session.when)}` : ""}</small></span><span class="session-history-resume">Resume</span></button>`;
+        }).join("");
+        const sessionsSection = `<section class="session-history"><div class="session-context-heading session-history-heading"><span>Sessions</span><span>${sessionList.length} session${sessionList.length === 1 ? "" : "s"}</span></div><div class="session-history-scroll">${sessionRows || `<div class="session-history-empty">No previous sessions yet.</div>`}</div></section>`;
+        const createSection = `<section class="session-picker-actions"><div class="workspace-actions"><button class="btn btn-primary" data-act="create-session-context" ${this.busy || !effectiveBranch ? "disabled" : ""}>${this.busy ? esc(this.busyLabel || "Creating…") : "Create session"}</button></div></section>`;
+        // A new session has no History yet, so its progress is shown as a feed.
+        body = `${nameAndBranch}${newBranchFields}${gitSection}${syncedSection}${sessionsSection}${createSection}${pickerOperationFeed(picker)}`;
+      }
+    }
 
     const error = store.state.sessionPickerError ? `<div class="session-picker-error">${esc(store.state.sessionPickerError)}</div>` : "";
     const progress = this.busy ? `<div class="session-picker-progress" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(this.busyLabel || "Working…")}</span></div>` : "";
-    const operationProgress = pickerOperationFeed(picker);
-    const subtitle = existing ? `${esc(project.name)} · this conversation's branch, Git and history` : `${esc(project.name)} · choose a branch for this conversation`;
-    const body = existing
-      ? `${sessionSection}${gitSection}${historySection}`
-      : `${nameAndBranch}${newBranchFields}${gitSection}${syncedSection}${sessionsSection}${createSection}`;
-    // Re-rendering replaces the body; keep the reader's place (e.g. after expanding a history entry).
-    const scrolled = this.querySelector(".session-picker-body")?.scrollTop ?? 0;
-    setHTML(this, `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-label="${existing ? "Session" : "New session"}"><div class="session-picker-head"><div><div class="modal-title">${existing ? "Session" : "New session"}</div><div class="session-picker-subtitle">${subtitle}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button></div><div class="session-picker-body" aria-busy="${!!this.busy}">${progress}${error}${body}${operationProgress}</div></section></div>`);
+    const sessionName = sourceSession?.title || sourceSession?.name || picker.name || "";
+    const heads = {
+      main: existing ? ["Session", [project.name, sessionName].filter(Boolean).join(" · ")] : ["New session", `${project.name} · choose a branch for this conversation`],
+      switch: ["Switch branch", `${sessionName ? `${sessionName} · ` : ""}on ${current || "no branch"}`],
+      fork: ["Fork session", `Copy ${sessionName || "this conversation"} to a new branch`],
+    };
+    const [title, subtitle] = heads[screen];
+    const back = screen === "main" ? "" : `<button class="ghost-btn session-picker-back" data-act="back-session-picker" aria-label="Back">${icon("chevronLeft")}</button>`;
+    const head = `${back}<div><div class="modal-title">${esc(title)}</div><div class="session-picker-subtitle">${esc(subtitle)}</div></div><button class="ghost-btn" data-act="close-session-picker" aria-label="Close">×</button>`;
+    // The scrim and dialog are built once per opening: re-creating them on every
+    // update replayed their fade/pop entry animations, so the screen flashed and jumped.
+    let dialog = this.querySelector(".session-picker");
+    if (!dialog) {
+      this.innerHTML = `<div class="session-picker-scrim"><section class="session-picker" role="dialog" aria-modal="true"><div class="session-picker-head"></div><div class="session-picker-body"></div></section></div>`;
+      this.__html = null;
+      dialog = this.querySelector(".session-picker");
+    }
+    dialog.setAttribute("aria-label", title);
     const scroller = this.querySelector(".session-picker-body");
-    if (scroller) scroller.scrollTop = scrolled;
+    const scrolled = this.shownScreen === screen ? scroller.scrollTop : 0;
+    setHTML(this.querySelector(".session-picker-head"), head);
+    scroller.setAttribute("aria-busy", String(!!this.busy));
+    setHTML(scroller, `${progress}${error}${body}`);
+    // Re-rendering replaces the body; keep the reader's place (e.g. after expanding a history entry).
+    scroller.scrollTop = scrolled;
+    this.shownScreen = screen;
     const feed = this.querySelector(".session-operation-feed");
     if (feed) feed.scrollTop = feed.scrollHeight;
     if (focusKey) {

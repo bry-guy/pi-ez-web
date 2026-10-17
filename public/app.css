@@ -828,7 +828,7 @@ main.col.settings-open > pi-header { display: none; }
 .history-status { flex: 0 0 auto; color: var(--muted); font: 600 10px var(--mono); text-transform: uppercase; }
 .history-entry.success .history-status { color: var(--green); }
 .history-entry.error .history-status { color: var(--red); }
-.history-output { max-height: 240px; margin: 0; overflow: auto; padding: 9px 11px; border-top: 1px solid var(--border); background: oklch(0.17 0.015 258); color: #c9d1d9; font: 11px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-output { max-height: 240px; margin: 0; overflow: auto; padding: 9px 11px; border-top: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: 11px/1.5 var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
 .branch-picker { position: relative; }
 .branch-picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font: 11.5px var(--mono); text-align: left; cursor: pointer; box-shadow: inset 0 1px 0 oklch(1 0 0 / .025); }
 .branch-picker-trigger:hover, .branch-picker-trigger:focus-visible { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
@@ -1428,3 +1428,43 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
 .settings-switch[aria-checked="true"] { background: var(--accent); }
 .settings-switch[aria-checked="true"] span { transform: translateX(18px); }
 .settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- session panel: right-aligned actions, roomy rows, steps (Switch, Fork) ---- */
+.session-picker-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+.session-picker-head { padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5); align-items: center; }
+.session-picker-back { margin-left: calc(-1 * var(--space-2)); }
+.session-picker .session-action-row { justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
+.session-picker .session-danger-row { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--hairline); }
+.session-picker .session-details-list { gap: var(--space-2); }
+.session-picker .session-picker-actions, .session-picker .session-branch-actions, .session-picker .session-history-log { margin-top: var(--space-5); padding-top: 0; }
+.session-picker .session-picker-body > section:first-child { margin-top: 0; }
+.session-picker .session-context-heading { margin: var(--space-5) 2px var(--space-3); }
+.session-picker section > .session-context-heading:first-child { margin-top: 0; }
+.panel-rows { display: grid; border-radius: var(--radius-lg); background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline); }
+.panel-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.panel-row + .panel-row { box-shadow: 0 -1px 0 var(--hairline); }
+.panel-row-text { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.panel-row-text strong { font-size: var(--text-md); font-weight: 500; }
+.panel-row-text small { color: var(--muted); font-size: var(--text-sm); line-height: 1.4; }
+.panel-row .btn { flex: 0 0 auto; min-width: 84px; }
+.session-switch .branch-list { display: grid; gap: var(--space-1); }
+.session-switch .branch-option { padding: var(--space-3); border-radius: var(--radius-md); }
+.session-switch .branch-option:disabled { cursor: default; opacity: .7; }
+.session-form { display: grid; gap: var(--space-3); }
+.session-form .session-picker-source { margin-top: 0; }
+.session-switch > .session-picker-help, .session-fork > .session-picker-help { margin: 0 0 var(--space-4); font-size: var(--text-sm); }
+.session-fork { padding: 0; background: transparent; }
+.history-status { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 760px) {
+  /* Full-screen on a phone: no blur or scale-in, which made the whole screen flash and jump. */
+  .session-picker-scrim { backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+  .session-picker { padding-top: 0; animation: piFade var(--duration) ease both; box-shadow: none; }
+  .session-picker-head { padding-top: max(var(--space-4), env(safe-area-inset-top)); }
+  .session-picker-body { padding-bottom: max(var(--space-5), env(safe-area-inset-bottom)); }
+}
+.session-picker .session-context-users { margin-top: var(--space-2); }
+.session-picker .session-form input, .session-picker .session-form select {
+  min-height: 40px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--hairline); font: var(--text-md) var(--sans);
+}
+@media (max-width: 760px) { .session-picker .session-form input, .session-picker .session-form select { font-size: 16px; } }
