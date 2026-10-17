@@ -29,9 +29,10 @@ function agentStatusGlyph(status) {
 }
 
 /* ---------------- chat activity ---------------- */
-// Pi's braille spinner frames, drawn as the 2×4 dot grid a braille cell is made of.
+// Pi's braille spinner frames, drawn as a 2×3 dot grid. The frames use only
+// braille dots 1–6, so the cell's fourth row (dots 7 and 8) is not drawn.
 const BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
-const BRAILLE_CELLS = [0x01, 0x08, 0x02, 0x10, 0x04, 0x20, 0x40, 0x80]; // row-major, two columns
+const BRAILLE_CELLS = [0x01, 0x08, 0x02, 0x10, 0x04, 0x20]; // row-major, two columns
 const SPINNER_MS = 80;
 let spinnerFrame = 0;
 let spinnerTimer = null;

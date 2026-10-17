@@ -1433,7 +1433,13 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     store.state.transcripts.s1.records.push({ id: "t2", role: "tool", tool: "bash", arg: "npm test", meta: "", out: "", at: T + 43000, running: true });
     store.notify("transcript");
     assert.equal(thread.querySelector(".busy-text").textContent, "Running npm test…");
-    assert.equal(thread.querySelectorAll(".busy-dots i").length, 8, "the spinner is a 2×4 dot grid");
+    assert.equal(thread.querySelectorAll(".busy-dots i").length, 6, "the spinner is a 2×3 dot grid");
+    const litDots = new Set();
+    for (let sample = 0; sample < 14; sample++) {
+      thread.querySelectorAll(".busy-dots i").forEach((dot, index) => { if (dot.classList.contains("on")) litDots.add(index); });
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
+    assert.equal(litDots.size, 6, "every spinner dot lights in some frame");
     assert.equal(thread.querySelector(".turn-done-row"), null, "a running turn has no finished row");
 
     applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_working", message: "Summarizing the test run" });
