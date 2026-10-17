@@ -1,6 +1,6 @@
 import { api, refreshState, refreshWorkers } from "./api.js";
 import { beginOperation, completeOperation } from "./operations.js";
-import { setHTML, store } from "./store.js";
+import { SHOW_HIDDEN_FILES_KEY, setHTML, store } from "./store.js";
 import { esc, icon, workerStateLabel } from "./shell.js";
 import { operationFeedback, workerErrorMessage } from "./panel-utils.js";
 
@@ -183,6 +183,12 @@ class PiSettings extends HTMLElement {
       document.documentElement.dataset.theme = value;
       try { localStorage.setItem("pi-theme", value); } catch { /* storage is optional */ }
       for (const b of this.querySelectorAll("[data-theme-choice]")) b.setAttribute("aria-pressed", String(b === theme));
+      return;
+    }
+    if (e.target.closest("[data-act='toggle-hidden-files']")) {
+      const show = store.state.showHiddenFiles === false;
+      try { localStorage.setItem(SHOW_HIDDEN_FILES_KEY, String(show)); } catch { /* storage is optional */ }
+      store.set({ showHiddenFiles: show });
       return;
     }
     if (e.target.closest("[data-act='save-repos-root']")) return this.saveReposRoot();
@@ -472,6 +478,10 @@ class PiSettings extends HTMLElement {
         <div class="settings-card settings-card-spaced"><div class="settings-row">
           <div class="sr-main"><div class="sr-title">Theme</div><div class="sr-sub">Stored in this browser.</div></div>
           <div class="segmented" role="group" aria-label="Theme">${[["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) => `<button data-theme-choice="${value}" aria-pressed="${(document.documentElement.dataset.theme || "system") === value}">${label}</button>`).join("")}</div>
+        </div>
+        <div class="settings-row">
+          <div class="sr-main"><div class="sr-title">Show hidden files</div><div class="sr-sub">Lists files and folders whose names start with a dot (<span class="settings-mono">.github</span>, <span class="settings-mono">.env</span>) in Files. Stored in this browser.</div></div>
+          <button class="settings-switch" role="switch" data-act="toggle-hidden-files" aria-checked="${store.state.showHiddenFiles !== false}" aria-label="Show hidden files"><span aria-hidden="true"></span></button>
         </div></div>
       </section>`;
   }

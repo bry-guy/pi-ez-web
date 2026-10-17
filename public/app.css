@@ -701,17 +701,36 @@ aside.files {
 .file-row .fcaret { flex: 0 0 11px; color: var(--faint); font-size: 9px; }
 .file-row .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shell.file-open main.col > pi-header { display: none; }
-/* The file pane covers the chat (kept laid out, so its scroll survives); one dark surface in both themes. */
+/* The file pane covers the chat (kept laid out, so its scroll survives). Its code
+   palette follows the theme: dark tokens by default, light tokens in light mode. */
 main.col { position: relative; }
 .screen.covered { visibility: hidden; }
 .screen[data-screen="file"]:not(.hidden) { position: absolute; inset: 0; z-index: 5; }
 pi-file-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 .file-screen {
-  --code-bg: oklch(0.17 0.015 258); --bg: var(--code-bg); --surface: var(--code-bg);
-  --text: #c9d1d9; --muted: #aab3bf; --faint: #8b949e;
-  --add-bg: oklch(0.7 0.14 150 / 0.2); --del-bg: oklch(0.65 0.18 25 / 0.2);
+  --code-bg: oklch(0.17 0.015 258); --code-text: #c9d1d9; --code-muted: #aab3bf; --code-faint: #8b949e; --code-rule: oklch(1 0 0 / 0.08);
+  --hl-comment: #8b949e; --hl-keyword: #ff7b72; --hl-type: #79c0ff; --hl-string: #a5d6a7; --hl-attr: #ffa657; --hl-number: #e3b341;
+  --hl-title: #d2a8ff; --hl-variable: #ff9bce; --hl-meta: #7ee6dd; --hl-tag: #7ee787; --hl-deletion: #ffa198;
+  --code-add-bg: oklch(0.7 0.14 150 / 0.2); --code-del-bg: oklch(0.65 0.18 25 / 0.2);
+  --bg: var(--code-bg); --surface: var(--code-bg);
+  --text: var(--code-text); --muted: var(--code-muted); --faint: var(--code-faint);
+  --add-bg: var(--code-add-bg); --del-bg: var(--code-del-bg);
   flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
   background: var(--code-bg); color: var(--text);
+}
+:root[data-theme="light"] .file-screen {
+  --code-bg: oklch(0.99 0.002 250); --code-text: #1f2328; --code-muted: #424a53; --code-faint: #59636e; --code-rule: oklch(0.2 0.02 258 / 0.1);
+  --hl-comment: #59636e; --hl-keyword: #cf222e; --hl-type: #0550ae; --hl-string: #116329; --hl-attr: #953800; --hl-number: #0a6c74;
+  --hl-title: #8250df; --hl-variable: #bf3989; --hl-meta: #0a6c74; --hl-tag: #0550ae; --hl-deletion: #82071e;
+  --code-add-bg: oklch(0.86 0.1 150 / 0.4); --code-del-bg: oklch(0.86 0.09 25 / 0.45);
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] .file-screen {
+    --code-bg: oklch(0.99 0.002 250); --code-text: #1f2328; --code-muted: #424a53; --code-faint: #59636e; --code-rule: oklch(0.2 0.02 258 / 0.1);
+    --hl-comment: #59636e; --hl-keyword: #cf222e; --hl-type: #0550ae; --hl-string: #116329; --hl-attr: #953800; --hl-number: #0a6c74;
+    --hl-title: #8250df; --hl-variable: #bf3989; --hl-meta: #0a6c74; --hl-tag: #0550ae; --hl-deletion: #82071e;
+    --code-add-bg: oklch(0.86 0.1 150 / 0.4); --code-del-bg: oklch(0.86 0.09 25 / 0.45);
+  }
 }
 /* One header per view: the file and settings screens bring their own "<" bar. */
 main.col.settings-open > pi-header { display: none; }
@@ -719,7 +738,7 @@ main.col.settings-open > pi-header { display: none; }
 .app-toast { padding: 10px 14px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); box-shadow: var(--elevation-2); font-size: var(--text-sm); animation: piPop var(--duration) var(--ease) both; }
 .app-toast.error { color: var(--red); }
 .settings-intro { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-sm); line-height: 1.5; }
-.file-screen-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 10px 8px; border-bottom: 1px solid oklch(1 0 0 / 0.08); }
+.file-screen-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 10px 8px; border-bottom: 1px solid var(--code-rule); }
 .file-title-wrap { flex: 1; min-width: 0; }
 .file-path { overflow: hidden; color: var(--text); font: 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .file-view-scroll { flex: 1; min-width: 0; overflow: auto; padding-bottom: 18px; }
@@ -731,26 +750,27 @@ main.col.settings-open > pi-header { display: none; }
 .file-target { min-width: 88px; padding: 5px 7px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font: 11px var(--mono); outline: none; }
 .file-target:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
 .file-section { overflow: hidden; background: var(--code-bg); }
-.file-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 14px; color: var(--text); font: 500 11px var(--mono); border-bottom: 1px solid oklch(1 0 0 / 0.06); }
+.file-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 14px; color: var(--text); font: 500 11px var(--mono); border-bottom: 1px solid var(--code-rule); }
 .file-section-head span:last-child { color: var(--faint); font-size: 10px; font-weight: 400; }
-.file-code { margin: 0; overflow: auto; padding: 13px 14px; background: var(--code-bg); color: #c9d1d9; tab-size: 2; white-space: pre; }
+.file-code { margin: 0; overflow: auto; padding: 13px 14px; background: var(--code-bg); color: var(--code-text); tab-size: 2; white-space: pre; }
 .file-code code { font: 12px/1.65 var(--mono); }
-/* Every token colour clears 4.5:1 on --code-bg; comments stay muted but readable. */
-.file-code .hljs-comment, .file-code .hljs-quote, .file-code .hljs-doctag { color: #8b949e; font-style: italic; }
-.file-code .hljs-keyword, .file-code .hljs-selector-tag, .file-code .hljs-literal { color: #ff7b72; }
-.file-code .hljs-type, .file-code .hljs-built_in, .file-code .hljs-title.class_ { color: #79c0ff; }
-.file-code .hljs-string, .file-code .hljs-symbol, .file-code .hljs-bullet, .file-code .hljs-regexp { color: #a5d6a7; }
-.file-code .hljs-attr, .file-code .hljs-attribute, .file-code .hljs-property, .file-code .hljs-selector-attr, .file-code .hljs-selector-id { color: #ffa657; }
-.file-code .hljs-number { color: #e3b341; }
-.file-code .hljs-title, .file-code .hljs-title.function_, .file-code .hljs-section, .file-code .hljs-function { color: #d2a8ff; }
-.file-code .hljs-variable, .file-code .hljs-template-variable, .file-code .hljs-params { color: #ff9bce; }
-.file-code .hljs-meta, .file-code .hljs-meta-keyword, .file-code .hljs-meta-string { color: #7ee6dd; }
-.file-code .hljs-name, .file-code .hljs-tag { color: #7ee787; }
-.file-code .hljs-addition { color: #7ee787; background: oklch(0.7 0.14 150 / 0.12); }
-.file-code .hljs-deletion { color: #ffa198; background: oklch(0.65 0.18 25 / 0.12); }
-.file-code .hljs-link { color: #79c0ff; text-decoration: underline; }
-.file-code .hljs-strong { font-weight: 700; }
-.file-code .hljs-emphasis { font-style: italic; }
+/* Every token colour clears 4.5:1 on --code-bg in both palettes; comments stay muted but readable.
+   Tokens apply to the full file and to highlighted diff lines alike. */
+.file-screen .hljs-comment, .file-screen .hljs-quote, .file-screen .hljs-doctag { color: var(--hl-comment); font-style: italic; }
+.file-screen .hljs-keyword, .file-screen .hljs-selector-tag, .file-screen .hljs-literal { color: var(--hl-keyword); }
+.file-screen .hljs-type, .file-screen .hljs-built_in, .file-screen .hljs-title.class_ { color: var(--hl-type); }
+.file-screen .hljs-string, .file-screen .hljs-symbol, .file-screen .hljs-bullet, .file-screen .hljs-regexp { color: var(--hl-string); }
+.file-screen .hljs-attr, .file-screen .hljs-attribute, .file-screen .hljs-property, .file-screen .hljs-selector-attr, .file-screen .hljs-selector-id { color: var(--hl-attr); }
+.file-screen .hljs-number { color: var(--hl-number); }
+.file-screen .hljs-title, .file-screen .hljs-title.function_, .file-screen .hljs-section, .file-screen .hljs-function { color: var(--hl-title); }
+.file-screen .hljs-variable, .file-screen .hljs-template-variable, .file-screen .hljs-params { color: var(--hl-variable); }
+.file-screen .hljs-meta, .file-screen .hljs-meta-keyword, .file-screen .hljs-meta-string { color: var(--hl-meta); }
+.file-screen .hljs-name, .file-screen .hljs-tag { color: var(--hl-tag); }
+.file-screen .hljs-addition { color: var(--hl-string); background: var(--code-add-bg); }
+.file-screen .hljs-deletion { color: var(--hl-deletion); background: var(--code-del-bg); }
+.file-screen .hljs-link { color: var(--hl-type); text-decoration: underline; }
+.file-screen .hljs-strong { font-weight: 700; }
+.file-screen .hljs-emphasis { font-style: italic; }
 .file-diff-meta { padding: 0 11px 8px; color: var(--faint); font: 10px var(--mono); }
 .file-diff-body { overflow: auto; min-width: 100%; }
 .file-diff-body .diff-line { min-width: 100%; width: max-content; padding-right: 24px; }
@@ -968,10 +988,12 @@ main.col.settings-open > pi-header { display: none; }
   .session-picker-body { max-height: none; flex: 1 1 auto; overflow-y: auto; }
   .session-picker-actions { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }
+  /* On a phone Files covers the whole screen, header included; its own bar closes it. */
   aside.files {
-    position: absolute; inset: var(--header-height, 54px) 0 0 auto; width: 302px; max-width: 86%; z-index: 12;
-    box-shadow: var(--shadow);
+    position: fixed; inset: 0; width: 100%; max-width: none; z-index: 45; box-shadow: none;
+    padding-bottom: env(safe-area-inset-bottom);
   }
+  .files-head { padding-top: max(12px, env(safe-area-inset-top)); padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
   /* A file is full screen: the tree is hidden behind it and the chat header is replaced by the file's own "<" bar. */
   .shell.file-open aside.files { display: none; }
   .file-screen-head { padding-top: max(10px, env(safe-area-inset-top)); padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
@@ -1393,3 +1415,16 @@ aside.files { background: var(--rail-bg); box-shadow: inset 1px 0 0 var(--hairli
 .step-block .block-head { min-height: 40px; }
 .step-thinking { padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
 @media (prefers-reduced-motion: reduce) { .busy-dots i { transition: none; } }
+
+/* ---- on/off switch for boolean settings ---- */
+.settings-switch {
+  position: relative; flex: 0 0 auto; width: 44px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-pill);
+  background: var(--surface-3); cursor: pointer; transition: background var(--duration) var(--ease);
+}
+.settings-switch span {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+  background: oklch(1 0 0); box-shadow: var(--elevation-1); transition: transform var(--duration) var(--ease);
+}
+.settings-switch[aria-checked="true"] { background: var(--accent); }
+.settings-switch[aria-checked="true"] span { transform: translateX(18px); }
+.settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

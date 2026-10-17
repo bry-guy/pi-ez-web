@@ -896,9 +896,9 @@ export function findRepos(root, depth = 2) {
 // File tree for the panel: directories-first, alphabetical, with stable
 // relative paths for file selection. Git metadata and dependency trees stay
 // hidden; repository dotfiles remain visible because this is a full explorer.
-// Folders first; dot-folders (.github, .config) follow ordinary folders.
-export const compareTreeNodes = (a, b) => (!!b.c - !!a.c) || (dotDir(a) - dotDir(b)) || a.n.localeCompare(b.n);
-const dotDir = node => (Array.isArray(node.c) && node.n.startsWith(".") ? 1 : 0);
+// Folders first; within folders and within files, dot-names (.github, .env) come first.
+export const compareTreeNodes = (a, b) => (!!b.c - !!a.c) || (dotName(b) - dotName(a)) || a.n.localeCompare(b.n);
+const dotName = node => (node.n.startsWith(".") ? 1 : 0);
 
 export function fileTree(dir) {
   const walk = (d, prefix = "") => {

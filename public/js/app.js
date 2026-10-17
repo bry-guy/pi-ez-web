@@ -1,6 +1,7 @@
 import { api, refreshState } from "./api.js";
 import { setHTML, store } from "./store.js";
 import { esc, mobile } from "./shell.js";
+import { closeFileView } from "./files.js";
 
 
 /* ---------------- app root ---------------- */
@@ -63,6 +64,8 @@ class PiApp extends HTMLElement {
       const open = !store.state.filesOpen;
       const key = this.filesKey();
       const cached = key && store.state.filesLoadedKey === key;
+      // Leave the #file/<path> entry too, so the address and Back match what is shown.
+      closeFileView();
       store.set({ filesOpen: open, fileError: null, filePath: null, fileView: null, fileLoading: false, filesLoading: open && !cached });
       if (!open) return;
       this.ensureFiles(true);

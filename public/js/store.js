@@ -24,6 +24,12 @@ function sortSessionNodes(nodes, topLevel = true) {
   return (nodes || []).sort((a, b) => compareActivity(a, b, topLevel ? "activityAt" : "updatedAt"));
 }
 
+export const SHOW_HIDDEN_FILES_KEY = "pi-show-hidden-files";
+// A per-browser view preference, like the theme; hidden files are shown unless turned off.
+function showHiddenFilesFromStorage() {
+  try { return globalThis.localStorage?.getItem(SHOW_HIDDEN_FILES_KEY) !== "false"; } catch { return true; }
+}
+
 const UNREAD_STORAGE_KEY = "pi-ez-web:unread";
 function unreadFromStorage() {
   try {
@@ -81,6 +87,7 @@ export const store = {
     logsLoading: false,
     logsError: null,
     filesOpen: false,
+    showHiddenFiles: showHiddenFilesFromStorage(), // file tree shows names starting with "."
     repoPickerOpen: false,
     repoPickerSource: null,
     sessionPicker: null,       // { projectId, mode: "new"|"switch"|"fork", sourceSessionId, branch, name }

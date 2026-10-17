@@ -26,9 +26,9 @@ export const icon = name => {
   const paths = {
     settings: '<path d="M9.7 1.5h.6l.7 1.9 1.5.9 2-.5.4.4.3.5-.9 1.8.1 1.7 1.5 1.4-.2.6-.2.5-2 .1-1.2 1.2-.1 2-.5.2-.6.2-1.4-1.5-1.7-.1-1.8.9-.5-.3-.4-.4.5-2-1-1.5-1.8-.7v-.6-.6l1.8-.7 1-1.5-.5-2 .5-.4.4-.3 1.8.9 1.7-.1 1.4-1.5Z"/><circle cx="10" cy="10" r="2.2"/>',
     chevronLeft: '<path d="m12.5 4-6 6 6 6"/>',
-    // Distinct glyphs: the sidebar is a panel, the files column is a folder.
+    // Distinct glyphs: the sidebar is a panel, the files column is a code symbol (</>).
     sidebar: '<rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M8 4v12"/>',
-    folder: '<path d="M3 6.2A1.7 1.7 0 0 1 4.7 4.5h2.8l1.6 1.9h6.2a1.7 1.7 0 0 1 1.7 1.7v6.7a1.7 1.7 0 0 1-1.7 1.7H4.7A1.7 1.7 0 0 1 3 14.8z"/>',
+    code: '<path d="m6.5 6-4 4 4 4"/><path d="m13.5 6 4 4-4 4"/><path d="m11.4 4-2.8 12"/>',
     chevronRight: '<path d="m7.5 4 6 6-6 6"/>',
   };
   return `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
@@ -503,7 +503,7 @@ class PiHeader extends HTMLElement {
     const filesBtn = inProject ? `
       <button class="ghost-btn" data-act="files" title="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
         aria-pressed="${!!s.filesOpen}" aria-label="${s.filesOpen ? "Collapse file tree" : "Expand file tree"}"
-        style="${s.filesOpen ? "color:var(--text)" : ""}">${icon("folder")}</button>` : "";
+        style="${s.filesOpen ? "color:var(--text)" : ""}">${icon("code")}</button>` : "";
     const sidebarOpen = mobile() ? s.drawerOpen : s.railOpen;
     const sidebarControl = mobile()
       ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`

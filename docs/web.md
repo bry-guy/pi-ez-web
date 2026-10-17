@@ -21,7 +21,7 @@ Everything else (default model, Pi profile and packages, repository source) is i
 
 ## Chat header
 
-The whole header of a conversation opens the session panel (below); its Git line and sync label keep their own taps. The header's left button toggles the sidebar (a panel glyph; a hamburger on a phone) and the right button toggles the file tree (a folder glyph). The sidebar's footer row is the settings button.
+The whole header of a conversation opens the session panel (below); its Git line and sync label keep their own taps. The header's left button toggles the sidebar (a panel glyph; a hamburger on a phone) and the right button toggles the file tree (a `</>` code glyph). The sidebar's footer row is the settings button.
 
 Async results (fetch, pull, a hook finishing) are announced as a short toast at the bottom of the screen, and disappear after a few seconds.
 
@@ -37,7 +37,9 @@ Untitled chats are named by their first prompt. A chat that was never prompted o
 
 ## Files
 
-**Files** (the header's right chevron) lists the project's tree beside the chat; folders come first and dot-folders (`.github`, `.config`) after them. Tapping a file replaces the chat pane with the file, with a dark, highlighted view and a `<` that returns to the chat at the same scroll position; browser Back does the same (the address becomes `#file/<path>`). On a phone the file fills the screen and the tree is hidden until you return. Highlighting is server-side (highlight.js, including Dockerfiles). Escape also returns to the chat.
+**Files** (the header's `</>` button) lists the project's tree beside the chat; on a phone it covers the whole screen, and its `>` closes it. Folders come first; among folders and among files, dot-names (`.github`, `.env`) come first. **Settings → Appearance → Show hidden files** (on by default, stored in this browser) hides every name that starts with a dot. Tapping a file replaces the chat pane with the file and a `<` that returns to the chat at the same scroll position; browser Back does the same (the address becomes `#file/<path>`). On a phone the file fills the screen and the tree is hidden until you return. Escape also returns to the chat.
+
+The viewer follows the theme: a light code palette in light mode, a dark one in dark mode. Highlighting is server-side (highlight.js, including Dockerfiles). A file with changes against the diff target opens as its diff: added and removed lines keep their green and red backgrounds, and the code on every line is highlighted (removed lines from the base version, the rest from the working file).
 
 ## Session panel
 

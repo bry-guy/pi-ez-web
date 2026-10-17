@@ -99,6 +99,7 @@ class PiFiles extends HTMLElement {
       s.filesLoading,
       s.fileError,
       openDirs,
+      s.showHiddenFiles,
     ];
   }
 
@@ -160,8 +161,9 @@ class PiFiles extends HTMLElement {
   }
 
   rows(nodes, depth, prefix, out) {
-    // Folders first; dot-folders (.github, .config) sort after ordinary folders.
-    const sorted = nodes.slice().sort((a, b) => (!!b.c - !!a.c) || (dotDir(a) - dotDir(b)) || a.n.localeCompare(b.n));
+    // Folders first; within each, dot-names (.github, .env) first. Hidden names are dropped when the setting is off.
+    const showHidden = store.state.showHiddenFiles !== false;
+    const sorted = nodes.filter(n => showHidden || !hidden(n)).sort((a, b) => (!!b.c - !!a.c) || (hidden(b) - hidden(a)) || a.n.localeCompare(b.n));
     for (const n of sorted) {
       const filePath = n.p || (prefix ? `${prefix}/${n.n}` : n.n);
       const dir = Array.isArray(n.c);
@@ -186,8 +188,10 @@ class PiFiles extends HTMLElement {
     if (!force && this.sameRenderSignature(signature)) return;
     this.lastRenderSignature = signature;
     this.captureScroll();
+    // Clear through setHTML too: a direct innerHTML write leaves its cache holding the
+    // last tree, so reopening with identical markup would skip the write and stay empty.
     if (!(store.inProject() && store.state.filesOpen)) {
-      this.innerHTML = "";
+      setHTML(this, "");
       return;
     }
     const out = [];
@@ -210,7 +214,7 @@ class PiFiles extends HTMLElement {
   }
 }
 
-const dotDir = node => (Array.isArray(node.c) && node.n.startsWith(".") ? 1 : 0);
+const hidden = node => (node.n.startsWith(".") ? 1 : 0);
 
 /* ---------------- file view (replaces the chat pane) ---------------- */
 class PiFileView extends HTMLElement {
@@ -257,15 +261,16 @@ class PiFileView extends HTMLElement {
     return globalThis.DOMPurify?.sanitize(value) || esc(value);
   }
 
+  // Lines keep their diff colouring; code inside them uses the server's per-line highlighting when present.
   renderDiff(diff) {
     if (diff.binary) return `<div class="file-empty">Binary diff preview unavailable.</div>`;
-    const lines = (diff.lines || []).map(line => {
+    const lines = this.safeHighlighted((diff.lines || []).map(line => {
       const cls = line.hunk ? "hunk" : line.sign === "+" ? "add" : line.sign === "-" ? "del" : "";
-      return `<div class="diff-line ${cls}"><span class="sign">${esc(line.sign || "")}</span>${esc(line.text)}</div>`;
-    }).join("");
+      return `<div class="diff-line ${cls}"><span class="sign">${esc(line.sign || "")}</span>${line.html != null ? line.html : esc(line.text)}</div>`;
+    }).join(""));
     const stats = `${diff.adds ? `+${diff.adds}` : ""}${diff.dels ? ` −${diff.dels}` : ""}`;
     return `<div class="file-diff-meta">${esc(diff.label)} ${stats ? `· ${esc(stats)}` : "· textual metadata change"}</div>
-      <div class="diff-body file-diff-body">${lines || `<div class="file-empty">No textual changes.</div>`}</div>`;
+      <div class="diff-body file-diff-body hljs">${lines || `<div class="file-empty">No textual changes.</div>`}</div>`;
   }
 
   render() {
@@ -274,7 +279,7 @@ class PiFileView extends HTMLElement {
     this.lastRenderSignature = signature;
     const s = store.state;
     if (!s.filePath) {
-      this.innerHTML = "";
+      setHTML(this, "");
       this.shownPath = null;
       return;
     }

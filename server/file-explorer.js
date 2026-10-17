@@ -212,6 +212,7 @@ function untrackedDiff(content, target, binary = false) {
   };
 }
 
+// Each diff line keeps its old/new line number so it can borrow that line's highlighting.
 function parsePatch(patch, target) {
   const source = patch.split(/\r?\n/);
   if (source.at(-1) === "") source.pop();
@@ -219,28 +220,80 @@ function parsePatch(patch, target) {
   let inHunk = false;
   let adds = 0;
   let dels = 0;
+  let oldNo = 0;
+  let newNo = 0;
   for (const line of source) {
-    if (line.startsWith("@@")) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) {
       inHunk = true;
+      oldNo = Number(hunk[1]);
+      newNo = Number(hunk[2]);
       lines.push({ sign: "", hunk: true, text: line });
       continue;
     }
     if (!inHunk) continue;
-    if (line.startsWith("+")) { adds++; lines.push({ sign: "+", text: line.slice(1) }); }
-    else if (line.startsWith("-")) { dels++; lines.push({ sign: "-", text: line.slice(1) }); }
-    else if (line.startsWith(" ")) lines.push({ sign: " ", text: line.slice(1) });
+    if (line.startsWith("+")) { adds++; lines.push({ sign: "+", text: line.slice(1), newNo: newNo++ }); }
+    else if (line.startsWith("-")) { dels++; lines.push({ sign: "-", text: line.slice(1), oldNo: oldNo++ }); }
+    else if (line.startsWith(" ")) lines.push({ sign: " ", text: line.slice(1), oldNo: oldNo++, newNo: newNo++ });
     else if (line.startsWith("\\")) lines.push({ sign: "", text: line });
   }
   return { target, adds, dels, lines, binary: /Binary files/.test(patch), changed: !!patch };
 }
 
-function diffForFile({ workspace, relative, content, binary, target, base }) {
+function highlight(content, language) {
+  if (!language || content == null || Buffer.byteLength(content) > MAX_HIGHLIGHT_BYTES) return null;
+  try { return hljs.highlight(content.replace(/\r\n/g, "\n"), { language }).value; } catch { return null; }
+}
+
+// highlight.js spans can cross lines (block comments, template strings); close
+// them at each line end and reopen them on the next line so lines stand alone.
+export function highlightedLines(html) {
+  if (html == null) return null;
+  const lines = [];
+  const open = [];
+  let line = "";
+  for (const [, start, end, newline, text] of html.matchAll(/(<span[^>]*>)|(<\/span>)|(\n)|([^<\n]+)/g)) {
+    if (start) { open.push(start); line += start; }
+    else if (end) { open.pop(); line += end; }
+    else if (newline) { lines.push(line + "</span>".repeat(open.length)); line = open.join(""); }
+    else line += text;
+  }
+  lines.push(line + "</span>".repeat(open.length));
+  return lines;
+}
+
+const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#x27;": "'", "&#39;": "'" };
+const plainText = html => html.replace(/<[^>]*>/g, "").replace(/&(?:amp|lt|gt|quot|#x27|#39);/g, entity => ENTITIES[entity]);
+
+// Attach highlighted HTML to diff lines; a line whose text does not match is left plain.
+function highlightDiff(lines, oldLines, newLines) {
+  for (const line of lines) {
+    if (line.hunk) continue;
+    const source = line.sign === "-" ? oldLines?.[line.oldNo - 1] : line.newNo ? newLines?.[line.newNo - 1] : null;
+    if (source != null && plainText(source) === line.text) line.html = source;
+    delete line.oldNo;
+    delete line.newNo;
+  }
+  return lines;
+}
+
+function diffForFile({ workspace, relative, content, binary, target, base, language = null, highlighted = null }) {
   const label = base?.label || "working tree";
   const status = git(workspace, ["status", "--porcelain=v1", "--", relative], { fallback: "" });
-  if (status.split("\n").some(line => line.startsWith("?? "))) return { ...untrackedDiff(content, target, binary), label };
+  if (status.split("\n").some(line => line.startsWith("?? "))) {
+    const diff = untrackedDiff(content, target, binary);
+    const newLines = highlightedLines(highlighted);
+    if (newLines) diff.lines.forEach((line, index) => { if (index > 0 && plainText(newLines[index - 1] ?? "") === line.text) line.html = newLines[index - 1]; });
+    return { ...diff, label };
+  }
   if (!base) return null;
   const patch = git(workspace, ["diff", "--no-ext-diff", "--no-color", "--unified=3", base.base, "--", relative]);
-  return { ...parsePatch(patch, target), label };
+  const diff = parsePatch(patch, target);
+  if (language && diff.lines.length) {
+    const previous = git(workspace, ["show", `${base.base}:${relative}`], { fallback: null, maxBuffer: MAX_FILE_BYTES * 2 });
+    highlightDiff(diff.lines, highlightedLines(highlight(previous, language)), highlightedLines(highlighted));
+  } else highlightDiff(diff.lines, null, null);
+  return { ...diff, label };
 }
 
 export function readFileView({ workspace, repoPath, path: rawPath, target = DEFAULT_DIFF_TARGET }) {
@@ -262,12 +315,9 @@ export function readFileView({ workspace, repoPath, path: rawPath, target = DEFA
 
   const content = bytes.toString("utf8");
   const language = languageFor(file.relative);
-  let highlighted = null;
-  if (language && size <= MAX_HIGHLIGHT_BYTES) {
-    try { highlighted = hljs.highlight(content, { language }).value; } catch { highlighted = null; }
-  }
+  const highlighted = highlight(content, language);
   return {
     path: file.relative, size, binary: false, content, highlighted, language, target, targets: DIFF_TARGETS,
-    diff: diffForFile({ workspace, relative: file.relative, content, binary: false, target, base }),
+    diff: diffForFile({ workspace, relative: file.relative, content, binary: false, target, base, language, highlighted }),
   };
 }

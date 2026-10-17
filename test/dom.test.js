@@ -242,7 +242,9 @@ async function boot() {
         const targets = ["origin", "primary"];
         const tree = target === "origin" ? [
           { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }] },
+          { n: ".github", p: ".github", c: [{ n: "ci.yml", p: ".github/ci.yml" }] },
           { n: "README.md", p: "README.md" },
+          { n: ".env", p: ".env" },
           { n: "new.js", p: "new.js", s: "new" },
         ] : [
           { n: "src", p: "src", s: "modified", c: [{ n: "app.js", p: "src/app.js", s: "modified" }, { n: "untouched.js", p: "src/untouched.js" }] },
@@ -1034,6 +1036,52 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("[data-act='close-file']").click();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(store.state.filePath, null);
+  // Dot-names sort first among folders and among files.
+  assert.deepEqual([...root.querySelectorAll("pi-files .files-scroll > .file-row")].map(row => row.querySelector(".fname").textContent), [".github", "src", "app.js", ".env", "new.js", "README.md"]);
+  root.querySelector("pi-files [data-act='close']").click();
+
+  // Files opens, closes and opens again with the same tree: an identical reopen used to stay empty.
+  const filesToggle = () => root.querySelector("pi-header [data-act='files']");
+  filesToggle().click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector("pi-files [data-file='README.md']"), "Files opens");
+  filesToggle().click();
+  assert.equal(root.querySelector("pi-files .files"), null, "Files closes");
+  filesToggle().click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector("pi-files [data-file='README.md']"), "Files opens again");
+  root.querySelector("pi-files [data-file='src/app.js']").click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  filesToggle().click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(store.state.filePath, null);
+  assert.equal(dom.window.location.hash, "", "closing Files leaves the #file/ address");
+  filesToggle().click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector("pi-files [data-file='README.md']"), "Files opens after closing it over a file");
+  assert.equal(root.querySelector("pi-header [data-act='files'] svg path:last-child").getAttribute("d"), "m11.4 4-2.8 12", "the Files toggle is a </> code symbol");
+
+  // Settings → Appearance → Show hidden files (on by default) hides dot-names from the tree.
+  assert.equal(store.state.showHiddenFiles, true);
+  store.set({ view: "settings", settingsCategory: "appearance" });
+  const hiddenSwitch = root.querySelector("pi-settings [data-act='toggle-hidden-files']");
+  assert.equal(hiddenSwitch.getAttribute("aria-checked"), "true");
+  globalThis.localStorage = dom.window.localStorage;
+  hiddenSwitch.click();
+  delete globalThis.localStorage;
+  assert.equal(store.state.showHiddenFiles, false);
+  assert.equal(dom.window.localStorage.getItem("pi-show-hidden-files"), "false", "the choice is stored in this browser");
+  assert.equal(root.querySelector("pi-settings [data-act='toggle-hidden-files']").getAttribute("aria-checked"), "false");
+  store.set({ view: "chat", settingsCategory: null });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(root.querySelector("pi-files [data-dir='.github']"), null, "hidden folders are left out");
+  assert.equal(root.querySelector("pi-files [data-file='.env']"), null, "hidden files are left out");
+  assert.ok(root.querySelector("pi-files [data-file='README.md']"));
+  store.set({ view: "settings", settingsCategory: "appearance" });
+  root.querySelector("pi-settings [data-act='toggle-hidden-files']").click();
+  store.set({ view: "chat", settingsCategory: null });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(root.querySelector("pi-files [data-dir='.github']"), "turning the setting back on shows them again");
   root.querySelector("pi-files [data-act='close']").click();
 
   const sidebar = root.querySelector("pi-sidebar");
