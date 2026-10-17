@@ -27,6 +27,16 @@ The header's second line shows the project's Git context (branch · commit · cl
 
 **Files** (the header's right chevron) lists the project's tree beside the chat; folders come first and dot-folders (`.github`, `.config`) after them. Tapping a file replaces the chat pane with the file, with a dark, highlighted view and a `<` that returns to the chat at the same scroll position; browser Back does the same (the address becomes `#file/<path>`). On a phone the file fills the screen and the tree is hidden until you return. Highlighting is server-side (highlight.js, including Dockerfiles). Escape also returns to the chat.
 
+## Session panel
+
+Tap the chat header (or the Git line) to open the session panel; it is a modal with a `×`. It has three sections:
+
+- **Session**: the name, the branch (choosing another moves the session onto it), sync facts when the conversation is shared, **Fork to new branch** (copies the conversation to a new branch in its own worktree; this session stays where it is), and the project's hook buttons such as the setup script.
+- **Git**: branch, commit, workspace and status, then **Fetch**, **Pull** and **Push**, and **Merge to main** (primary, asks first) and **Delete** (caution, asks first) for a non-primary branch.
+- **History**: what ran in this workspace, newest first: hooks, pulls, pushes, merges, forks and switches, each with its time, status and output (tap an entry to expand it). The log is append-only JSON lines in the app state dir, one file per workspace path, capped at 16 KB of output per entry. Removing the state dir removes the log. It records operations run by the process that serves the request.
+
+Starting a new session still uses the same panel without the Git and History sections, and lists earlier sessions under **Sessions**.
+
 ## Settings
 
 **Settings** lists its categories on the left (on a phone, first): Providers, Pi, Workers, Sync, Repositories, Defaults, Appearance, Diagnostics. Each category has its own address (`#settings/workers`, `#settings/pi`, …), so reloading or using Back returns to it. `<` returns to the chat, and on a phone `<` on a category returns to the list.

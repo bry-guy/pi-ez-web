@@ -427,7 +427,7 @@ class PiHeader extends HTMLElement {
         : { railOpen: !store.state.railOpen });
     } else if (act === "settings") {
       store.set({ view: "settings" });
-    } else if (act === "workspace-settings") {
+    } else if (act === "workspace-settings" || act === "session-panel") {
       const p = store.project();
       if (p) openSessionPicker(p.id, { mode: "switch", sourceSessionId: store.state.sessionId });
       void refreshState().catch(() => {});
@@ -504,7 +504,9 @@ class PiHeader extends HTMLElement {
     const sidebarControl = mobile()
       ? `<svg width="17" height="15" viewBox="0 0 17 15" aria-hidden="true"><rect width="17" height="1.8" y="0" fill="currentColor"/><rect width="17" height="1.8" y="6.6" fill="currentColor"/><rect width="17" height="1.8" y="13.2" fill="currentColor"/></svg>`
       : icon(sidebarOpen ? "chevronLeft" : "chevronRight");
-    setHTML(this, `<header class="bar">
+    // The whole header of a conversation opens its session panel; its buttons keep their own actions.
+    const panelAct = inProject && node ? ` data-act="session-panel"` : "";
+    setHTML(this, `<header class="bar${panelAct ? " bar-session" : ""}"${panelAct}>
       <button class="hamburger" data-act="sidebar-toggle" title="${sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}" aria-expanded="${sidebarOpen}">${sidebarControl}</button>
       <div class="bar-main"><div class="bar-title">${esc(title)}</div>${subArea}${operationArea}</div>
       ${filesBtn}

@@ -759,14 +759,41 @@ pi-file-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-directi
 .session-picker-source:first-child { margin-top: 0; }
 .session-picker-source select, .session-picker-source input { width: 100%; padding: 8px 9px; border-radius: 8px; background: var(--surface); color: var(--text); font: 11.5px var(--mono); outline: 0; }
 .session-picker-source input:focus, .session-picker-source select:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
-.session-details {
-  margin-top: 14px; padding: 10px 11px; border-radius: 9px; background: var(--surface); overflow-x: auto;
-}
-.session-details-title { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
-.session-details-list { display: grid; width: max-content; min-width: 100%; gap: 5px; margin: 8px 0 0; }
-.session-detail-row { display: grid; grid-template-columns: 84px max-content; align-items: baseline; gap: 10px; font: 11.5px/1.4 var(--mono); }
+/* Session panel: Session, Git and History sections; facts wrap instead of clipping on a phone. */
+.session-details-list { display: grid; gap: 6px; margin: 10px 0 0; }
+.session-detail-row { display: grid; grid-template-columns: minmax(64px, 84px) minmax(0, 1fr); align-items: baseline; gap: 10px; font: 11.5px/1.45 var(--mono); }
 .session-detail-row dt { color: var(--faint); }
-.session-detail-row dd { margin: 0; color: var(--text); white-space: nowrap; }
+.session-detail-row dd { min-width: 0; margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.session-context-heading:first-child { margin-top: 0; }
+.session-fork { display: grid; gap: 6px; margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--surface-2); }
+.session-fork .session-picker-help { margin-top: 0; }
+.session-action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.session-danger-row { padding-top: 12px; border-top: 1px solid var(--hairline); }
+.bar-session { cursor: pointer; }
+/* One button hierarchy: primary (one per view), secondary, caution (destructive), ghost. */
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 7px 14px; border: 1px solid transparent; border-radius: 8px; font: 500 12.5px/1.2 var(--sans); cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:not(:disabled):hover { filter: brightness(1.08); }
+.btn-secondary { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+.btn-secondary:not(:disabled):hover { border-color: var(--accent); background: var(--accent-soft); }
+.btn-caution { background: transparent; border-color: var(--red); color: var(--red); }
+.btn-caution:not(:disabled):hover { background: var(--del-bg); }
+.btn-ghost { background: transparent; color: var(--muted); }
+.btn-ghost:not(:disabled):hover { color: var(--text); background: var(--surface-2); }
+.session-history-log { margin-top: 18px; padding-top: 13px; }
+.history-list { display: grid; gap: 6px; }
+.history-entry { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.history-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 11px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.history-entry-head:hover, .history-entry-head:focus-visible { background: var(--accent-soft); outline: 0; }
+.history-main { display: grid; gap: 2px; min-width: 0; }
+.history-main strong { font: 500 12px/1.35 var(--sans); overflow-wrap: anywhere; }
+.history-main small { color: var(--faint); font: 10.5px var(--mono); }
+.history-status { flex: 0 0 auto; color: var(--muted); font: 600 10px var(--mono); text-transform: uppercase; }
+.history-entry.success .history-status { color: var(--green); }
+.history-entry.error .history-status { color: var(--red); }
+.history-output { max-height: 240px; margin: 0; overflow: auto; padding: 9px 11px; border-top: 1px solid var(--border); background: oklch(0.17 0.015 258); color: #c9d1d9; font: 11px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .branch-picker { position: relative; }
 .branch-picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 11.5px var(--mono); text-align: left; cursor: pointer; box-shadow: inset 0 1px 0 oklch(1 0 0 / .025); }
 .branch-picker-trigger:hover, .branch-picker-trigger:focus-visible { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
@@ -921,8 +948,8 @@ pi-file-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-directi
   .subagent-title strong { display: block; }
   .subagent-title span { display: block; margin-top: 2px; }
   .modal { width: 100%; height: 80%; max-height: none; }
-  .session-picker-scrim { align-items: stretch; padding: max(10px, env(safe-area-inset-top)) 0 0; }
-  .session-picker { width: 100%; height: 100%; max-height: none; border-radius: 12px 12px 0 0; }
+  .session-picker-scrim { align-items: stretch; padding: 0; }
+  .session-picker { width: 100%; height: 100%; max-height: none; border-radius: 0; padding-top: env(safe-area-inset-top); }
   .session-picker-body { max-height: none; flex: 1 1 auto; overflow-y: auto; }
   .session-picker-actions { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   .settings-actions-row { align-items: flex-start; flex-direction: column; }

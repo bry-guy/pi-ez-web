@@ -221,6 +221,9 @@ async function boot() {
         return json({ id: "s2", projectId: "p1", branch: "feature/from-picker", contextId: "ctx-feature", workspacePath: "/tmp/demo-feature", setupNeeded: true, operation: { id: options.headers?.["x-pi-operation-id"] || "test-create", status: "success", httpStatus: 200, events: [{ at: Date.now(), type: "result", message: "Created session s2 on feature/from-picker." }] } });
       }
       if (url === "/api/projects") return json({ id: "p2", sessionId: "s2", setupNeeded: true });
+      if (url.startsWith("/api/sessions/") && url.endsWith("/history")) {
+        return json({ entries: [{ id: "op-1", kind: "hook", title: "Setup hook", status: "success", exit: 0, at: Date.now(), output: "installed dependencies\n" }] });
+      }
       if (url.includes("/api/projects/") && url.includes("/file?")) {
         const params = new URL(url, "http://pi-web.test").searchParams;
         const target = params.get("target") || "origin";
@@ -361,7 +364,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   root.querySelector("pi-header [data-act='workspace-settings']").click();
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='switch']"), null);
-  assert.equal(root.querySelector("[data-act='apply-session-branch'][data-mode='fork']").disabled, true);
+  assert.equal(root.querySelector("[data-act='fork-session']").disabled, false, "fork to a new branch is an enabled action, not a disabled one");
   assert.equal(root.querySelector("[data-act='merge-branch']").disabled, true);
   assert.equal(root.querySelector("[data-act='delete-branch']").disabled, true);
   assert.equal(root.querySelector("[data-session-name]").value, "New session");
@@ -370,7 +373,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   store.notify("state");
   assert.equal(root.querySelector("[data-session-name]"), nameInput, "an unchanged picker keeps its input node");
   assert.equal(root.ownerDocument.activeElement, nameInput, "an unchanged picker keeps focus");
-  const sessionDetails = root.querySelector(".session-details");
+  const sessionDetails = root.querySelector(".session-branch-actions");
   assert.ok(sessionDetails);
   assert.deepEqual([...sessionDetails.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
     ["Branch", "main"],
@@ -391,16 +394,15 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.equal(root.querySelector(".session-branch-actions [data-act='run-hook']"), null);
   const sessionButtons = root.querySelector(".session-picker-session-buttons");
   const checkButton = root.querySelector(".session-picker-actions [data-act='run-hook']");
-  const forkButton = root.querySelector(".session-picker-actions [data-mode='fork']");
+  const forkButton = root.querySelector(".session-picker-actions [data-act='fork-session']");
   assert.equal(checkButton.textContent, "Check");
   assert.equal(checkButton.parentElement, sessionButtons);
-  assert.equal(forkButton.parentElement, sessionButtons);
-  assert.equal(forkButton.textContent, "Copy conversation to new branch");
+  assert.equal(forkButton.textContent, "Fork to new branch");
   assert.equal(root.querySelector(".session-picker-actions [data-act='close-session-picker']"), null);
   const gitSection = root.querySelector(".session-branch-actions");
   const sessionSection = root.querySelector(".session-picker-actions");
   const operationFeed = root.querySelector(".session-operation-feed");
-  assert.ok(gitSection.compareDocumentPosition(sessionSection) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(sessionSection.compareDocumentPosition(gitSection) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, "Session comes before Git");
   assert.ok(sessionSection.compareDocumentPosition(operationFeed) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
   const feedNow = Date.now() + 1000;
   store.state.operations.unshift({ id: "feed-test", kind: "fetch", title: "Fetch Git branches", sessionId: "s1", status: "success", startedAt: feedNow - 2, events: [{ at: feedNow - 1, type: "phase", message: "Older fetch event" }, { at: feedNow, type: "result", message: "Latest fetch event" }] });
@@ -423,15 +425,16 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   });
   Object.assign(state.projects[0].contexts[0].sessions[0], { synchronized: true, syncState: "available" });
   store.notify("state");
-  assert.deepEqual([...root.querySelectorAll(".session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
+  assert.deepEqual([...root.querySelectorAll(".session-picker-actions .session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
+    ["Sync", "Available"],
+    ["Conversation", "Canonical session"],
+    ["Upstream", "main@01234567"],
+  ]);
+  assert.deepEqual([...root.querySelectorAll(".session-branch-actions .session-detail-row")].map(row => [row.querySelector("dt").textContent, row.querySelector("dd").textContent]), [
     ["Branch", "main"],
     ["Commit", "abcdef12 Initial project commit"],
     ["Workspace", "checkout · /tmp/demo"],
     ["Status", "1 file staged, 2 files unstaged, 1 file untracked"],
-    ["Sync", "Available"],
-    ["Conversation", "Canonical session"],
-    ["Sync ID", "sync-1"],
-    ["Upstream", "main@01234567"],
   ]);
   const syncLabel = root.querySelector("pi-header .bar-sub .sync-label");
   assert.equal(syncLabel.textContent, "Synced: available", "one compact sync label, on the git line");
@@ -451,6 +454,14 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   assert.ok(root.querySelector("pi-header .sync-label.busy"));
   Object.assign(store.state.projects[0].sessions.find(item => item.id === "s1"), { syncState: "available", leaseHolder: null });
   store.notify("state");
+  root.querySelector("[data-act='close-session-picker']").click();
+  root.querySelector("pi-header .bar-title").click();
+  assert.ok(root.querySelector(".session-picker"), "the chat header opens the session panel");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(root.querySelector(".session-picker .history-entry-head").textContent, /Setup hook/);
+  root.querySelector(".session-picker .history-entry-head").click();
+  assert.match(root.querySelector(".history-output").textContent, /installed dependencies/, "a history entry expands in place");
+  assert.equal(root.querySelector(".history-entry-head").getAttribute("aria-expanded"), "true");
   root.querySelector("[data-act='close-session-picker']").click();
   assert.equal(root.querySelector("pi-header [data-act='refresh-sync']"), null, "Sync refresh is available through slash commands only");
   dom.window.__transcriptResponse = { ...transcript, snapshotToken: "snapshot-1" };
@@ -676,7 +687,7 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.ok(root.querySelector(".session-picker"));
   assert.equal(root.querySelectorAll(".session-history-row").length, 2);
-  assert.match(root.querySelector(".session-history").textContent, /History/);
+  assert.match(root.querySelector(".session-history").textContent, /Sessions/);
   assert.match(root.querySelector(".branch-picker-trigger").textContent, /main/);
   const newSessionName = root.querySelector("[data-session-name]");
   newSessionName.value = "Chat Name";
