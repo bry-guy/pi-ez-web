@@ -28,6 +28,67 @@ function agentStatusGlyph(status) {
   return status === "queued" ? "○" : "◐";
 }
 
+/* ---------------- chat activity ---------------- */
+// Pi's braille spinner frames, drawn as the 2×4 dot grid a braille cell is made of.
+const BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const BRAILLE_CELLS = [0x01, 0x08, 0x02, 0x10, 0x04, 0x20, 0x40, 0x80]; // row-major, two columns
+const SPINNER_MS = 80;
+let spinnerFrame = 0;
+let spinnerTimer = null;
+const reducedMotion = () => !!globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+function dotGrid(frame) {
+  const bits = BRAILLE_FRAMES.charCodeAt(frame) - 0x2800;
+  return BRAILLE_CELLS.map(bit => `<i${bits & bit ? ' class="on"' : ""}></i>`).join("");
+}
+function startSpinners() {
+  if (spinnerTimer || reducedMotion()) return;
+  spinnerTimer = setInterval(() => {
+    const grids = globalThis.document?.querySelectorAll("[data-busy-dots]") || [];
+    if (!grids.length) { clearInterval(spinnerTimer); spinnerTimer = null; return; }
+    spinnerFrame = (spinnerFrame + 1) % BRAILLE_FRAMES.length;
+    for (const grid of grids) grid.innerHTML = dotGrid(spinnerFrame);
+  }, SPINNER_MS);
+  spinnerTimer.unref?.();
+}
+const clip = (text, max = 60) => {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+};
+function toolActivity(record) {
+  const arg = String(record.arg || "");
+  const file = arg.split("/").pop() || arg;
+  switch (String(record.tool || "").toLowerCase()) {
+    case "read": return `Reading ${clip(file) || "files"}…`;
+    case "edit": case "write": case "multiedit": return `Editing ${clip(file) || "files"}…`;
+    case "bash": return `Running ${clip(arg) || "a command"}…`;
+    case "grep": case "find": return `Searching ${clip(arg) || "files"}…`;
+    case "ls": return `Listing ${clip(arg) || "files"}…`;
+    default: return `Running ${clip(record.tool) || "a tool"}…`;
+  }
+}
+const workedFor = ms => {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+};
+const stepsHash = turnId => `#steps=${encodeURIComponent(turnId)}`;
+
+/* ---------------- turns ---------------- */
+// A turn is a user record and everything recorded until the next user record.
+function turnsOf(records) {
+  const turns = [];
+  for (const record of records) {
+    if (record.role === "user") turns.push({ user: record, records: [] });
+    else turns.at(-1)?.records.push(record);
+  }
+  return turns;
+}
+const turnKey = turn => turn.user.id ?? turn.user.pendingId ?? "";
+function turnStats(turn) {
+  const start = Number(turn.user.at) || 0;
+  const end = Math.max(start, ...turn.records.map(record => Number(record.at) || 0));
+  return { steps: turn.records.filter(record => record.role === "tool").length, duration: start && end > start ? end - start : 0 };
+}
+
 function syncFailureText(error) {
   const details = error?.details || {};
   return {
@@ -54,14 +115,18 @@ class PiThread extends HTMLElement {
     this.onScroll = () => {
       const scroller = this.scroller;
       if (!scroller) return;
+      if (this.inSteps) return;
       if (!this.scrollSaveFrame) this.scrollSaveFrame = requestAnimationFrame(() => { this.scrollSaveFrame = 0; this.saveScroll(); });
       if (scroller.scrollTop > 360) return;
       this.loadEarlier();
     };
     this.bindScroller();
+    this.onPopState = () => this.syncSteps();
+    window.addEventListener("popstate", this.onPopState);
     this.unsub = store.subscribe(w => {
       if (w === "state" || w === "transcript") this.render();
       else if (w === "delta:" + store.activeKey()) this.applyDelta();
+      else if (w === "thinking:" + store.activeKey() && this.inSteps) this.render();
     });
     this.addEventListener("click", e => this.onClick(e));
     this.addEventListener("keydown", e => {
@@ -73,6 +138,7 @@ class PiThread extends HTMLElement {
   }
   disconnectedCallback() {
     this.unsub?.();
+    window.removeEventListener("popstate", this.onPopState);
     this.scroller?.removeEventListener("scroll", this.onScroll);
   }
 
@@ -85,6 +151,9 @@ class PiThread extends HTMLElement {
   }
 
   async onClick(e) {
+    const stepsOpen = e.target.closest("[data-steps-open]");
+    if (stepsOpen) { this.openSteps(stepsOpen.dataset.stepsOpen); return; }
+    if (e.target.closest("[data-steps-back]")) { this.closeSteps(); return; }
     const activityToggle = e.target.closest("[data-activity-toggle]");
     if (activityToggle) {
       const key = activityToggle.dataset.activityToggle;
@@ -125,8 +194,6 @@ class PiThread extends HTMLElement {
     if (!body) return this.render();
     body.innerHTML = renderMarkdown(last.text);
     this.__html = null; // streamed text changed the DOM outside render()
-    const think = this.querySelector(".pi-think");
-    if (think && last.text) this.render(); // thinking -> streaming transition
     this.autoscroll();
   }
 
@@ -229,13 +296,18 @@ class PiThread extends HTMLElement {
       this.scrollOnNextRender = !background;
     }
     if (!activeKey) { setHTML(this, EMPTY_STATE); return; }
+    const stepsId = store.state.stepsTurn?.sessionId === activeKey ? store.state.stepsTurn.turnId : null;
+    const openTurn = stepsId ? turnsOf(t.records).find(turn => turnKey(turn) === stepsId) : null;
+    if (openTurn) {
+      const entering = !this.inSteps;
+      if (entering) { this.chatScrollTop = this.scroller?.scrollTop ?? 0; this.inSteps = true; }
+      setHTML(this, this.renderSteps(openTurn));
+      if (entering && this.scroller) this.scroller.scrollTop = 0;
+      return;
+    }
+    if (this.inSteps) { this.inSteps = false; this.pendingScroll = this.chatScrollTop; }
     const visibleRecords = this.visibleRecords(t.records);
-    const liveAssistant = [...visibleRecords].reverse().find(record => record.role === "assistant" && record.streaming);
-    // There can be a real gap between turn_start and message_start, and again
-    // between an assistant message/tool call and the next assistant message.
-    // Keep the thinking indicator tied to the turn rather than to the presence
-    // of an empty assistant record so those gaps remain visible.
-    const thinking = t.streaming && !liveAssistant;
+    const busy = t.streaming ? this.renderBusy(t.records, activeKey) : "";
     const activity = this.renderActivity(t.records);
     const notice = this.renderCommandNotice();
     const restore = this.scrollOnNextRender && visibleRecords.length ? savedScroll(activeKey) : anchor;
@@ -244,19 +316,24 @@ class PiThread extends HTMLElement {
       if (index >= 0) this.historyLimit = Math.max(this.historyLimit || HISTORY_PAGE_SIZE, visibleRecords.length - index + 1);
     }
     const history = this.historyRecords(visibleRecords);
-    if (visibleRecords.length === 0 && !activity && !notice && !thinking) {
+    if (visibleRecords.length === 0 && !activity && !notice && !busy) {
       setHTML(this, EMPTY_STATE);
       return;
     }
+    const doneRows = this.doneRows(turnsOf(visibleRecords), t.streaming);
     const records = history.records.map(m => {
       const html = this.renderRecordCached(m);
-      return m.id && html.startsWith("<div ") ? `<div data-rec="${esc(m.id)}" ${html.slice(5)}` : html;
+      const row = m.id ? doneRows.get(m.id) || "" : "";
+      return (m.id && html.startsWith("<div ") ? `<div data-rec="${esc(m.id)}" ${html.slice(5)}` : html) + row;
     }).join("");
-    const earlier = "";
-    const indicator = thinking
-      ? `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`
-      : "";
-    setHTML(this, earlier + records + indicator + activity + notice);
+    setHTML(this, records + busy + activity + notice);
+    if (this.pendingScroll != null) {
+      // Back from the steps view: return to where the chat was, not the bottom.
+      const top = this.pendingScroll;
+      this.pendingScroll = null;
+      if (this.scroller) this.scroller.scrollTop = top;
+      return;
+    }
     if (anchor) {
       if (!(anchor.rec && this.restoreScroll(anchor))) this.autoscroll(!!anchor.bottom);
       delete t.scrollToLatest;
@@ -271,6 +348,135 @@ class PiThread extends HTMLElement {
     this.autoscroll(forceScroll);
     delete t.scrollToLatest;
     this.scrollOnNextRender = false;
+  }
+
+  /** The live line while a turn runs: the extension's message, else the current tool, else "Thinking…". */
+  renderBusy(records, sessionId) {
+    const working = store.state.workingMessages?.[sessionId];
+    const running = [...records].reverse().find(record => record.role === "tool" && record.running);
+    const text = working || (running ? toolActivity(running) : "Thinking…");
+    startSpinners();
+    return `<div class="msg busy-row" role="status" aria-live="polite"><span class="busy-dots" data-busy-dots aria-hidden="true">${dotGrid(spinnerFrame)}</span><span class="busy-text">${esc(text)}</span></div>`;
+  }
+
+  /** One quiet row per finished turn that did work; it opens that turn's steps. */
+  doneRows(turns, streaming) {
+    const rows = new Map();
+    turns.forEach((turn, index) => {
+      const last = turn.records.at(-1);
+      if (!last || (streaming && index === turns.length - 1)) return;
+      const { steps, duration } = turnStats(turn);
+      if (!steps && !turn.records.some(record => record.thinking || record.role === "summary")) return;
+      const label = [duration ? `Worked ${workedFor(duration)}` : "Worked", steps ? `${steps} step${steps === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+      rows.set(last.id, `<div class="msg turn-done"><button class="turn-done-row" type="button" data-steps-open="${esc(turnKey(turn))}" aria-label="${esc(`${label}. Show steps`)}">${esc(label)}<span aria-hidden="true">›</span></button></div>`);
+    });
+    return rows;
+  }
+
+  openSteps(turnId) {
+    history.pushState({ piSteps: true }, "", stepsHash(turnId));
+    store.set({ stepsTurn: { sessionId: store.activeKey(), turnId } });
+  }
+
+  closeSteps() {
+    if (history.state?.piSteps) history.back();
+    else {
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      store.set({ stepsTurn: null });
+    }
+  }
+
+  /** Browser back and forward move between the chat and the steps view. */
+  syncSteps() {
+    const match = /^#steps=(.+)$/.exec(location.hash);
+    const current = store.state.stepsTurn;
+    if (!match) { if (current) store.set({ stepsTurn: null }); return; }
+    const turnId = decodeURIComponent(match[1]);
+    if (current?.turnId !== turnId) store.set({ stepsTurn: { sessionId: store.activeKey(), turnId } });
+  }
+
+  renderSteps(turn) {
+    const { steps, duration } = turnStats(turn);
+    const summaries = turn.records.filter(record => record.role === "summary");
+    const claimed = new Set();
+    const groups = summaries.map(summary => {
+      const ids = new Set(summary.toolCallIds || []);
+      const members = turn.records.filter(record => (record.role === "tool" && ids.has(record.id))
+        || (record.role === "assistant" && record.thinking && (record.toolIds || []).some(id => ids.has(id))));
+      members.forEach(record => claimed.add(record));
+      const key = `summary:${summary.id}`;
+      const open = this.isOpen(key);
+      const count = members.filter(record => record.role === "tool").length;
+      return `<section class="step-group">
+        <button class="step-summary" type="button" aria-expanded="${open}" data-toggle="${esc(key)}">
+          <span class="bh-caret">${open ? "▾" : "▸"}</span><span class="step-summary-text">${esc(summary.text)}</span><span class="bh-meta">${count} step${count === 1 ? "" : "s"}</span>
+        </button>${open ? `<div class="step-group-body">${this.stepRows(members, turn.records)}</div>` : ""}
+      </section>`;
+    }).join("");
+    const loose = turn.records.filter(record => !claimed.has(record)
+      && (record.role === "tool" || (record.role === "assistant" && record.thinking)));
+    const looseRows = loose.length
+      ? `${summaries.length ? `<h2 class="steps-subhead">Other steps</h2>` : ""}<div class="step-list">${this.stepRows(loose, turn.records)}</div>`
+      : "";
+    const empty = !groups && !looseRows ? `<p class="steps-empty">No steps were recorded for this turn.</p>` : "";
+    const meta = [duration ? `Worked ${workedFor(duration)}` : "", steps ? `${steps} step${steps === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+    return `<div class="steps-view">
+      <header class="steps-head">
+        <button class="steps-back" type="button" data-steps-back aria-label="Back to chat">&lt;</button>
+        <div class="steps-title"><strong>Steps</strong><span>${esc(clip(turn.user.text, 70))}${meta ? ` · ${esc(meta)}` : ""}</span></div>
+      </header>
+      <div class="steps-body">${groups}${looseRows}${empty}</div>
+    </div>`;
+  }
+
+  stepRows(records, lookup) {
+    return records.map(record => {
+      if (record.role === "assistant") return this.thinkingBlock(record);
+      const diff = lookup.find(item => item.role === "diff" && item.id === `${record.id}:d`);
+      return this.toolBlock(record) + (diff ? this.diffBlock(diff) : "");
+    }).join("");
+  }
+
+  thinkingBlock(m) {
+    const key = `think:${m.id}`;
+    const open = this.isOpen(key);
+    return `<div class="block step-block">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(key)}">
+          <span class="bh-caret">${open ? "▾" : "▸"}</span><span class="bh-name">Thinking</span><span class="bh-arg">${esc(clip(m.thinking, 90))}</span>
+        </div>
+        ${open ? `<div class="step-thinking">${esc(m.thinking)}</div>` : ""}
+      </div>`;
+  }
+
+  toolBlock(m) {
+    const open = this.isOpen(m.id);
+    return `<div class="block step-block">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
+          <span class="bh-caret">${open ? "▾" : "▸"}</span>
+          <span class="bh-name">${esc(m.tool)}</span>
+          <span class="bh-arg">${esc(m.arg)}</span>
+          <span class="bh-meta">${esc(m.meta)}</span>
+        </div>
+        ${open ? `<pre>${esc(m.out)}</pre>` : ""}
+      </div>`;
+  }
+
+  diffBlock(m) {
+    const open = this.isOpen(m.id);
+    const lines = open ? (m.lines || []).map(l => {
+      const cls = l.sign === "+" ? "add" : l.sign === "-" ? "del" : l.sign === "" ? "hunk" : "";
+      return `<div class="diff-line ${cls}"><span class="sign">${esc(l.sign)}</span>${esc(l.text)}</div>`;
+    }).join("") : "";
+    return `<div class="block step-block">
+        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
+          <span class="bh-caret">${open ? "▾" : "▸"}</span>
+          <span class="bh-name">edit</span>
+          <span class="bh-arg rtl">${esc(m.file)}</span>
+          <span class="bh-add">${esc(m.add)}</span>
+          <span class="bh-del">${esc(m.del)}</span>
+        </div>
+        ${open ? `<div class="diff-body">${lines}</div>` : ""}
+      </div>`;
   }
 
   renderActivity(records) {
@@ -388,42 +594,12 @@ class PiThread extends HTMLElement {
       return `<div class="msg"><div class="turn-error" role="alert">ERROR: ${esc(m.text || "Service unavailable.")}</div></div>`;
     }
     if (m.role === "assistant") {
-      const thinking = m.streaming && !m.text;
-      const caret = m.streaming && m.text;
-      if (thinking) {
-        return `<div class="msg"><div class="pi-think" role="status" aria-label="Thinking"><span></span><span></span><span></span></div></div>`;
-      }
-      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${caret ? `<span class="caret-bar"></span>` : ""}</div></div>`;
+      // Thinking-only and tool-only messages have no chat text; the busy line and steps cover them.
+      if (!m.text) return "";
+      return `<div class="msg"><div class="assist" ${m.streaming ? "data-live-text" : ""}><div class="markdown-content">${renderMarkdown(m.text)}</div>${m.streaming ? `<span class="caret-bar"></span>` : ""}</div></div>`;
     }
-    if (m.role === "tool") {
-      const open = this.isOpen(m.id);
-      return `<div class="msg"><div class="block">
-        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
-          <span class="bh-caret">${open ? "▾" : "▸"}</span>
-          <span class="bh-name">${esc(m.tool)}</span>
-          <span class="bh-arg">${esc(m.arg)}</span>
-          <span class="bh-meta">${esc(m.meta)}</span>
-        </div>
-        ${open ? `<pre>${esc(m.out)}</pre>` : ""}
-      </div></div>`;
-    }
-    if (m.role === "diff") {
-      const open = this.isOpen(m.id);
-      const lines = open ? (m.lines || []).map(l => {
-        const cls = l.sign === "+" ? "add" : l.sign === "-" ? "del" : l.sign === "" ? "hunk" : "";
-        return `<div class="diff-line ${cls}"><span class="sign">${esc(l.sign)}</span>${esc(l.text)}</div>`;
-      }).join("") : "";
-      return `<div class="msg"><div class="block">
-        <div class="block-head" role="button" tabindex="0" aria-expanded="${open}" data-toggle="${esc(m.id)}">
-          <span class="bh-caret">${open ? "▾" : "▸"}</span>
-          <span class="bh-name">edit</span>
-          <span class="bh-arg rtl">${esc(m.file)}</span>
-          <span class="bh-add">${esc(m.add)}</span>
-          <span class="bh-del">${esc(m.del)}</span>
-        </div>
-        ${open ? `<div class="diff-body">${lines}</div>` : ""}
-      </div></div>`;
-    }
+    // Tool calls, diffs, and summaries belong to the turn's steps view, not the chat.
+    if (m.role === "tool" || m.role === "diff" || m.role === "summary") return "";
     if (m.role === "bang") {
       return `<div class="msg"><div class="block bang">
         <div class="block-head">

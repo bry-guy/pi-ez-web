@@ -1392,5 +1392,57 @@ test("DOM gate: actions, focus, models, and keyboard paths work", async () => {
     modelUnavailable: false,
   }, "fallback navigation replaces all active model metadata");
 
+
+  // Chat activity: custom-element registration is per process, so this runs inside the gate's window.
+  {
+    store.set({ view: "chat", projectId: "p1", sessionId: "s1", chatId: null });
+    const T = 1_000_000;
+    store.state.transcripts.s1 = { streaming: false, seq: 0, records: [
+      { id: "u1", role: "user", text: "fix files.js", at: T },
+      { id: "a:u1", role: "assistant", text: "Done.", thinking: "Read the file first.", toolIds: ["t1"], at: T + 1000 },
+      { id: "t1", role: "tool", tool: "read", arg: "src/files.js", meta: "2ms", out: "contents", at: T + 1000 },
+      { id: "sum1", role: "summary", text: "Read files.js", toolCallIds: ["t1"], at: T + 42000 },
+    ] };
+    store.notify("transcript");
+    const thread = root.querySelector("pi-thread");
+
+    assert.match(thread.textContent, /Done\./);
+    assert.doesNotMatch(thread.textContent, /Read the file first/, "thinking is never shown inline");
+    assert.equal(thread.querySelector(".block"), null, "tool calls are not inline");
+    assert.equal(thread.querySelector(".busy-row"), null, "an idle chat has no busy line");
+    assert.equal(thread.querySelector(".turn-done-row").textContent.trim(), "Worked 42s · 1 step›");
+
+    store.state.transcripts.s1.streaming = true;
+    store.state.transcripts.s1.records.push({ id: "t2", role: "tool", tool: "bash", arg: "npm test", meta: "", out: "", at: T + 43000, running: true });
+    store.notify("transcript");
+    assert.equal(thread.querySelector(".busy-text").textContent, "Running npm test…");
+    assert.equal(thread.querySelectorAll(".busy-dots i").length, 8, "the spinner is a 2×4 dot grid");
+    assert.equal(thread.querySelector(".turn-done-row"), null, "a running turn has no finished row");
+
+    applyEvent({ v: 1, seq: 1, sessionId: "s1", type: "extension_ui_working", message: "Summarizing the test run" });
+    assert.equal(thread.querySelector(".busy-text").textContent, "Summarizing the test run", "the extension's live line wins");
+
+    applyEvent({ v: 1, seq: 2, sessionId: "s1", type: "turn_end", reason: "done" }, true);
+    assert.equal(thread.querySelector(".busy-row"), null);
+    assert.equal(thread.querySelector(".turn-done-row").textContent.trim(), "Worked 43s · 2 steps›");
+
+    thread.querySelector(".turn-done-row").click();
+    assert.equal(location.hash, "#steps=u1");
+    assert.ok(thread.querySelector(".steps-view"), "steps replace the chat in place");
+    assert.equal(thread.querySelector(".turn-done-row"), null);
+    assert.match(thread.querySelector(".step-summary").textContent, /Read files\.js/);
+    assert.equal(thread.querySelector(".step-group-body"), null, "summaries start collapsed");
+    thread.querySelector(".step-summary").click();
+    assert.match(thread.querySelector(".step-group-body").textContent, /src\/files\.js/);
+    thread.querySelector('[data-toggle="think:a:u1"]').click();
+    assert.match(thread.querySelector(".step-thinking").textContent, /Read the file first\./);
+
+    thread.querySelector("[data-steps-back]").click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(thread.querySelector(".steps-view"), null);
+    assert.ok(thread.querySelector(".turn-done-row"), "the chat returns with its turn row");
+    assert.equal(location.hash, "");
+  }
+
   dom.window.close();
 });

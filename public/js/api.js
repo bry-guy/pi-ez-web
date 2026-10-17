@@ -531,6 +531,11 @@ function applyUiEvent(evt) {
     } }));
     return true;
   }
+  if (evt.type === "extension_ui_working" && "message" in evt) {
+    // pi-summarize's live line for a busy turn; null clears it.
+    store.set(state => ({ workingMessages: { ...(state.workingMessages || {}), [evt.sessionId]: evt.message || null } }));
+    return true;
+  }
   if (evt.type === "extension_ui_title") {
     if (evt.sessionId === store.activeKey() && typeof document !== "undefined") document.title = evt.title || "pi";
     return true;
@@ -591,12 +596,25 @@ function applyTranscriptEvent(evt, t, replay) {
       store.state.queued[evt.sessionId] = evt.followUp || 0;
       break;
     case "message_start":
-      if (!byId(recs, evt.messageId)) recs.push({ id: evt.messageId, role: "assistant", text: "", streaming: true });
+      if (!byId(recs, evt.messageId)) recs.push({ id: evt.messageId, role: "assistant", text: "", streaming: true, at: Date.now() });
+      break;
+    case "thinking_delta": {
+      // Thinking is kept on the message for the steps view; the chat never shows it inline.
+      let r = byId(recs, evt.messageId);
+      if (!r) {
+        r = { id: evt.messageId, role: "assistant", text: "", streaming: true, at: Date.now() };
+        recs.push(r);
+      }
+      r.thinking = (r.thinking || "") + evt.delta;
+      break;
+    }
+    case "summary":
+      if (evt.record && !byId(recs, evt.record.id)) recs.splice(lastStreamingIndex(recs), 0, evt.record);
       break;
     case "text_delta": {
       let r = byId(recs, evt.messageId);
       if (!r) {
-        r = { id: evt.messageId, role: "assistant", text: "", streaming: true };
+        r = { id: evt.messageId, role: "assistant", text: "", streaming: true, at: Date.now() };
         recs.push(r);
       }
       // The snapshot sequence barrier makes replay ordering explicit; do not
@@ -613,7 +631,7 @@ function applyTranscriptEvent(evt, t, replay) {
     case "tool_start":
       if (!byId(recs, evt.toolId)) {
         const at = lastStreamingIndex(recs);
-        recs.splice(at, 0, { id: evt.toolId, role: "tool", tool: evt.name, arg: evt.argsSummary || "", meta: "", out: "" });
+        recs.splice(at, 0, { id: evt.toolId, role: "tool", tool: evt.name, arg: evt.argsSummary || "", meta: "", out: "", at: Date.now(), running: true });
       }
       break;
     case "activity":
@@ -640,6 +658,7 @@ function applyTranscriptEvent(evt, t, replay) {
       if (r) {
         r.out = evt.output || "";
         r.meta = [evt.meta, evt.durationMs != null ? formatDuration(evt.durationMs) : ""].filter(Boolean).join(" · ");
+        delete r.running;
       }
       break;
     }
@@ -665,12 +684,13 @@ function applyTranscriptEvent(evt, t, replay) {
     case "turn_end": {
       t.streaming = false;
       delete store.state.queued[evt.sessionId];
+      store.set(state => { const working = { ...(state.workingMessages || {}) }; delete working[evt.sessionId]; return { workingMessages: working }; });
       store.state.openActivity.todo = false;
       const lastAssistant = [...recs].reverse().find(record => record.role === "assistant");
       const hasAssistantText = !!lastAssistant?.text;
       if (evt.reason !== "stopped" || hasAssistantText) store.markUnread(evt.sessionId);
       if (evt.reason === "stopped") {
-        const empty = [...recs].reverse().find(r => r.role === "assistant" && r.streaming && !r.text);
+        const empty = [...recs].reverse().find(r => r.role === "assistant" && r.streaming && !r.text && !r.thinking);
         if (empty) recs.splice(recs.indexOf(empty), 1);
       }
       for (const r of recs) if (r.role === "assistant" && r.streaming) delete r.streaming;
@@ -740,7 +760,9 @@ export function applyEvent(evt, replay = false) {
     && findSessionInState({ projects: store.state.projects, chats: [] }, evt.sessionId)) {
     refreshState().catch(err => store.setError(`Could not refresh workspace state: ${err.message || err}`));
   }
-  store.notify(evt.type === "text_delta" ? "delta:" + evt.sessionId : "transcript");
+  if (evt.type === "text_delta") store.notify("delta:" + evt.sessionId);
+  else if (evt.type === "thinking_delta") store.notify("thinking:" + evt.sessionId); // not chat-visible; only the steps view reads it
+  else store.notify("transcript");
 }
 
 function updateFirstTitle(id, text) {
